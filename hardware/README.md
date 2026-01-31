@@ -9,7 +9,7 @@ The footprint for the SSD1306 has reversed SDA/SCL. The latest gerber fixes this
 
 ## BOM
 
-- Arduino Nano Pro
+- Arduino Nano
 - EC11 rotary encoder (e.g. PEC11R-4215F-S0024)
 - SSD1306 display
 - MCP2515 CAN bus module (will be mounted flipped so boards with already soldered pins can be used)
