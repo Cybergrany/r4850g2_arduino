@@ -1,0 +1,21 @@
+#pragma once
+#include "CanTransport.h"
+#include "../config/BoardConfig.h"
+
+namespace psu {
+// Adapts arduino-CAN's singleton MCP2515. All business logic stays outside this driver.
+class Mcp2515Transport : public CanTransport {
+ public:
+  bool begin() override;
+  bool send(const CanFrame& frame) override;
+  bool receive(CanFrame& frame) override;
+  uint8_t droppedFrames() const override { return dropped_; }
+ private:
+  static void onReceive(int length);
+  static Mcp2515Transport* instance_;
+  CanFrame queue_[board::canReceiveSlots];
+  volatile uint8_t head_ = 0;
+  volatile uint8_t tail_ = 0;
+  volatile uint8_t dropped_ = 0;
+};
+}
