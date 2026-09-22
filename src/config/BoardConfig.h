@@ -18,6 +18,5 @@ constexpr uint8_t displayAddress = 0x3c;
 constexpr uint32_t displayBusHz = 400000UL;
 constexpr uint32_t displayWireTimeoutUs = 25000UL;
 constexpr uint32_t serialBaud = 115200UL;
-constexpr uint16_t menuTimeoutMs = 10000;
 constexpr uint16_t eepromBudget = 512;
 } }

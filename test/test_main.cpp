@@ -1,5 +1,6 @@
 #include "config/ChargerConfig.h"
 #include "config/ConsoleConfig.h"
+#include "config/Deployment.h"
 #include "can/Mcp2515Transmit.h"
 #include "psu/PsuController.h"
 #include "storage/MemoryManager.h"
@@ -7,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <deque>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -141,392 +143,556 @@ void boundedCanTransmit() {
     CHECK(io.reads == 0 && io.writes == 0);
   }
 }
-void serialEditing() {
-  FakeCan can; PsuController c(can); CHECK(c.begin());
-  FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io; SerialConsole console(io, c, memory);
-  console.begin(StorageResult::NoValidRecord); console.finishStartup();
-  CHECK(io.output.find("Startup complete;") != std::string::npos);
-  CHECK(io.output.substr(io.output.size() - 2) == "> ");
-  auto input = [&](const std::string& text) {
-    io.output.clear(); io.feed(text); console.tick(0);
-  };
-  input("set 1 current 4"); CHECK(io.output == "set 1 current 4");
-  CHECK(c.unit(0).config().current == 100); // No execution before Enter.
-  input("\b3"); CHECK(io.output == "\b \b3");
-  input("\r"); CHECK(io.output == "\r\nOK\r\n> ");
-  CHECK(c.unit(0).config().current == 300);
-  input("\n"); CHECK(io.output.empty()); // CRLF split across ticks.
-  input("\n"); CHECK(io.output == "\r\n> "); // Bare Enter is visible.
-  input("echo off\r\n"); CHECK(io.output == "echo off\r\nOK\r\n> ");
-  input("set\t1 current 4"); CHECK(io.output.empty());
-  input("\x7f" "2\n"); CHECK(io.output == "\r\nOK\r\n> ");
-  CHECK(c.unit(0).config().current == 200);
-  input("echo on\n"); CHECK(io.output == "\r\nOK\r\n> ");
-  input("\b\x7f"); CHECK(io.output.empty());
-  input(std::string(40, 'x')); CHECK(io.available() == 8 && io.output.size() == 32);
-  io.output.clear(); console.tick(0); CHECK(io.available() == 0 && io.output.size() == 8);
-  input(std::string(40, 'x'));
-  console.tick(0); input("\n"); CHECK(io.output.find("discarded") != std::string::npos);
-  input("count 2\n"); CHECK(c.count() == 2); // Drained and ready after overflow.
+Identity identity(uint8_t n) { return {{0x11, 0x22, 0x33, 0x44, 0x55, n}}; }
+CanFrame info(uint8_t address, Identity id) {
+  auto f = protocol::request(address, protocol::infoCommand); f.id &= ~0x80UL;
+  f.data[1] = 2; std::memcpy(f.data + 2, id.bytes, 6); return f;
 }
-void protocolAndConfig() {
-  CHECK(protocol::request(0).id == 0x108040fe);
+CanFrame broadcast(uint8_t address, bool ready = true, uint16_t raw = 20) {
+  CanFrame f = {}; f.extended = true; f.length = 8;
+  f.id = 0x1000117eUL | uint32_t(address) << 16;
+  f.data[1] = 1; f.data[3] = ready ? 0 : 1;
+  f.data[6] = raw >> 8; f.data[7] = raw; return f;
+}
+Configuration installation(uint8_t count = 2) {
+  auto c = defaultConfiguration(); c.count = count;
+  std::strcpy(c.groups[0].name, "GROUP1"); c.groups[0].members = membersMask(count);
+  c.groups[0].current = 5500;
+  for (uint8_t i = 0; i < count; ++i) c.units[i].identity = identity(i + 1);
+  CHECK(validConfig(c)); return c;
+}
+// Drives actual controller state machines with independent replies/identity and
+// telemetry. Each test can withhold ACKs, drop a member, or change an identity.
+struct Rig {
+  FakeCan can;
+  PsuController c;
+  uint32_t now = 100;
+  uint8_t live;
+  uint8_t addresses[PSU_MAX_UNITS] = {};
+  bool answerIdentityQueries = true;
+  size_t acknowledged = 0;
+  explicit Rig(Configuration config = installation(), bool bootResume = false) : c(can), live(membersMask(config.count)) {
+    for (uint8_t i = 0; i < config.count; ++i) addresses[i] = i + 1;
+    CHECK(c.configure(config, bootResume) == Result::Ok); CHECK(c.begin());
+    heartbeat(); c.tick(now);
+    now += 200; heartbeat(); c.tick(now);
+  }
+  void heartbeat() {
+    for (uint8_t i = 0; i < c.count(); ++i) if (live & (1U << i)) {
+      can.incoming.push_back(info(addresses[i], identity(i + 1)));
+      can.incoming.push_back(data(addresses[i], 0x75, 54 * 1024));
+      can.incoming.push_back(broadcast(addresses[i]));
+    }
+  }
+  void step(uint32_t ms = 250, bool acknowledge = true, bool refresh = true) {
+    if (ms > 1000) {
+      while (ms > 1000) { step(1000, acknowledge, refresh); ms -= 1000; }
+      step(ms, acknowledge, refresh); return;
+    }
+    for (; acknowledged < can.sent.size(); ++acknowledged) {
+      const auto& f = can.sent[acknowledged];
+      if (acknowledge && protocol::command(f.id) == protocol::setCommand) can.incoming.push_back(ack(f));
+    }
+    now += ms;
+    if (refresh) heartbeat();
+    const size_t before = can.sent.size();
+    c.tick(now);
+    // INFO queries have their own immediate replies, independently of setting
+    // ACKs. This also exercises the fresh identity guard before every write.
+    if (answerIdentityQueries) {
+      const size_t after = can.sent.size();
+      for (size_t n = before; n < after; ++n) if (protocol::command(can.sent[n].id) == protocol::infoCommand)
+        for (uint8_t i = 0; i < c.count(); ++i)
+          if ((live & (1U << i)) && protocol::address(can.sent[n].id) == addresses[i])
+            can.incoming.push_back(info(addresses[i], identity(i + 1)));
+      c.tick(now);
+    }
+  }
+  void finish() {
+    for (uint8_t tries = 0; c.busy() && tries < 50; ++tries) step();
+    CHECK(!c.busy());
+  }
+  void apply(Operation operation = Operation::All, int8_t group = -1) {
+    const auto p = c.preview(operation, group, now);
+    CHECK(p.blocker == Issue::None); CHECK(c.queue(p, false, now) == Result::Ok); finish();
+    CHECK(c.report().failed == 0 && c.report().succeeded == p.recipients);
+  }
+};
+void protocolAndConfiguration() {
   CHECK(protocol::request(1).id == 0x108140fe);
   CHECK(protocol::request(127).id == 0x10ff40fe);
+  CHECK(protocol::request(1, protocol::infoCommand).id == 0x108150fe);
   CHECK(protocol::request(2, protocol::descriptionCommand).id == 0x1082d2fe);
   CHECK(!protocol::request(1).rtr);
-  CHECK(protocol::setting(2, 3, 512).id == 0x108280fe);
   const auto command = protocol::setting(2, 3, 512);
-  CHECK(command.data[0] == 1 && command.data[1] == 3 && command.data[6] == 2 && command.data[7] == 0);
+  CHECK(command.id == 0x108280fe && command.data[6] == 2 && command.data[7] == 0);
   CHECK(protocol::encodeVoltage(5350) == 0xd600);
   CHECK(protocol::encodeCurrent(2500, 5000) == 512);
   CHECK(protocol::encodeCurrent(2500, 7500) == 341);
   CHECK(protocol::encodeCurrent(6000, 5000) == 1228);
-  CHECK(protocol::encodeCurrent(100, 5000) == 20);
-  CHECK(protocol::isReply(ack(command)));
-  CHECK(!protocol::isReply(command));
-  auto frame = data(1, 0x70, 100); frame.length = 7;
-  CHECK(!protocol::isReply(frame)); frame.length = 8; frame.rtr = true;
-  CHECK(!protocol::isReply(frame)); frame.rtr = false; frame.extended = false;
-  CHECK(!protocol::isReply(frame));
+  CHECK(protocol::isReply(ack(command)) && !protocol::isReply(command));
+  auto invalid = data(1, 0x75, 1024); invalid.length = 7; CHECK(!protocol::isReply(invalid));
+  invalid.length = 8; invalid.rtr = true; CHECK(!protocol::isReply(invalid));
+  invalid.rtr = false; invalid.extended = false; CHECK(!protocol::isReply(invalid));
   auto c = defaultConfiguration(); CHECK(validConfig(c));
-  CHECK(c.count == 1 && !c.applyOnBoot && c.units[0].voltage == 5520);
-  CHECK(!changeParameter(c.units[0], Parameter::Voltage, NAN));
-  CHECK(!changeParameter(c.units[0], Parameter::Current, INFINITY));
-  CHECK(!changeParameter(c.units[0], Parameter::Current, -1));
-  CHECK(!changeParameter(c.units[0], Parameter::OfflineVoltage, 45));
-  CHECK(!changeParameter(c.units[0], Parameter::Address, 0));
-  CHECK(!changeParameter(c.units[0], Parameter::Address, 1.5));
-  CHECK(!changeParameter(c.units[0], Parameter::Enabled, 2));
-  CHECK(!changeParameter(c.units[0], Parameter::RatedCurrent, 0));
-  CHECK(!changeParameter(c.units[0], Parameter::RatedCurrent, 0.01f));
-  CHECK(changeParameter(c.units[0], Parameter::Voltage, 48.1f));
-  CHECK(c.units[0].voltage == 4810);
+  CHECK(!c.autoResume && !c.operating.voltageAuthorized && !identified(c.units[0].identity));
+  CHECK(!groupName("all") && !groupName("VOLtage") && !groupName("1group") && !groupName("TOOLONG99"));
+  CHECK(groupName("Group_1") && sameName("Group_1", "GROUP_1"));
+  GroupConfig g = {}; std::strcpy(g.name, "TEST"); g.members = 0x85; g.current = 5501;
+  CHECK(allocation(g, 0) == 1834 && allocation(g, 2) == 1834 && allocation(g, 7) == 1833);
+  CHECK(allocation(g, 1) == 0);
+  Rig r;
+  CHECK(r.c.groupIndex("group1") == 0);
+  CHECK(r.c.setGroup("GROUP2", 2) == Result::Invalid); // Membership must be disjoint.
+  CHECK(r.c.setCount(1) == Result::Invalid);
+  CHECK(r.c.setCurrent(0, 12001) == Result::Invalid);
+  CHECK(r.c.configuration().groups[0].current == 5500); // Atomic, never clamp.
+  const auto check = r.c.checkCurrent(0, 12001);
+  CHECK(check.issue == Issue::Capacity && check.slot == 0 && check.share == 6001 && check.maximum == 6000);
+  CHECK(r.c.setVoltage(6000) == Result::Invalid && r.c.setVoltage(4700, true) == Result::Invalid);
+  CHECK(r.c.setVoltage(5600) == Result::Ok);
+  CHECK(r.can.writes().empty()); // All configuration edits remain staged.
+  Rig retired(installation(4));
+  CHECK(retired.c.setGroup("GROUP1", 3) == Result::Ok && retired.c.setCount(2) == Result::Ok);
+  CHECK(retired.c.bind(0, identity(3), 5000, retired.now) == Result::Invalid);
+  CHECK(retired.c.unbind(2) == Result::Ok); // Release the retained inactive binding explicitly.
+  CHECK(retired.c.bind(0, identity(3), 5000, retired.now) == Result::Ok);
+  CHECK(retired.c.report().units[0].state == CommandState::Idle && retired.can.writes().empty());
 }
-void independentTelemetry() {
-  FakeCan can; PsuController controller(can); CHECK(controller.begin()); CHECK(controller.setCount(2) == Result::Ok);
-  CHECK(controller.modifySingle(1, Parameter::RatedCurrent, 75) == Result::Ok);
-  can.incoming.push_back(data(1, 0x75, 51200));
-  can.incoming.push_back(data(2, 0x75, 56320));
-  can.incoming.push_back(data(1, 0x76, 512));
-  can.incoming.push_back(data(2, 0x76, 512));
-  can.incoming.push_back(data(2, 0x7f, uint32_t(-5120)));
-  can.incoming.push_back(data(1, 0x81, 1024));
-  can.incoming.push_back(data(1, 0x82, 2048));
-  controller.tick(100);
-  close(controller.unit(0).metric(protocol::OutputVoltage), 50);
-  close(controller.unit(1).metric(protocol::OutputVoltage), 55);
-  close(controller.unit(0).metric(protocol::CurrentCapacity), 25);
-  close(controller.unit(1).metric(protocol::CurrentCapacity), 37.5f);
-  close(controller.unit(1).metric(protocol::OutputTemperature), -5);
-  close(controller.unit(0).metric(protocol::OutputCurrent), 1);
-  close(controller.unit(0).metric(protocol::FilteredOutputCurrent), 2);
-  CHECK(!controller.unit(0).hasMetric(protocol::InputVoltage));
-  CHECK(!controller.unit(0).stale(100, 3000)); CHECK(controller.unit(0).stale(3200, 3000));
-  CanFrame malformed = data(1, 0x75, 1024); malformed.length = 7;
-  can.incoming.push_back(malformed);
-  can.incoming.push_back(data(3, 0x75, 12345));
-  can.incoming.push_back(protocol::setting(1, 0, 100));
-  controller.tick(150); close(controller.unit(0).metric(protocol::OutputVoltage), 50);
-  CHECK(controller.unknownFrames() == 3);
-  CanFrame current = {}; current.id = 0x1002117e; current.extended = true; current.length = 8;
-  current.data[1] = 1; current.data[6] = 0; current.data[7] = 200;
-  can.incoming.push_back(current); controller.tick(200);
-  close(controller.unit(1).telemetry().ampHours, 10 * .377f / 3600, .000001f);
-  CHECK(controller.unit(0).telemetry().ampHours == 0);
-  CHECK(controller.resetAmpHours(1, 2) == Result::Ok);
-  CHECK(controller.unit(1).telemetry().ampHours == 0);
-  CHECK(controller.modifySingle(1, Parameter::Address, 127) == Result::Ok);
-  CHECK(!controller.unit(1).hasMetric(protocol::OutputVoltage));
-  CHECK(controller.unit(1).stale(200, 3000));
-}
-void rangesAndAcknowledgements() {
-  FakeCan can; PsuController c(can); CHECK(c.begin()); CHECK(c.setCount(3) == Result::Ok);
-  CHECK(c.modifyRange(0, 3, Parameter::Voltage, 54) == Result::Ok);
-  CHECK(c.modifySingle(1, Parameter::Voltage, 53) == Result::Ok);
-  CHECK(c.unit(0).config().voltage == 5400 && c.unit(1).config().voltage == 5300);
-  CHECK(c.modifyRange(0, 3, Parameter::Address, 2) == Result::Invalid);
-  CHECK(c.unit(0).config().address == 1 && c.unit(1).config().address == 2);
-  CHECK(c.modifyRange(1, 1, Parameter::Current, 3) == Result::Invalid);
-  CHECK(c.modifyRange(0, 4, Parameter::Current, 3) == Result::Invalid);
-  CHECK(c.modifySingle(1, Parameter::RatedCurrent, 10) == Result::Ok);
-  CHECK(c.modifyRange(0, 3, Parameter::Current, 30) == Result::Invalid);
-  CHECK(c.unit(0).config().current == 100); // Earlier valid target wasn't changed.
-  CHECK(can.sent.empty());
-  CHECK(c.modifySingle(2, Parameter::Enabled, 0) == Result::Ok);
-  CHECK(c.applyRange(0, 3) == Result::Ok);
-  CHECK(c.modifySingle(0, Parameter::Current, 5) == Result::Busy);
-  CHECK(c.configure(defaultConfiguration()) == Result::Busy);
-  CHECK(c.setCount(1) == Result::Busy);
-  c.tick(250); CHECK(can.writes().size() == 1);
-  CHECK(can.writes()[0].id == 0x108180fe);
-  auto wrong = ack(can.writes()[0]); wrong.id = 0x1082807e;
-  can.incoming.push_back(wrong); c.tick(251);
-  CHECK(c.unit(0).commandStatus().state == CommandState::Waiting);
-  wrong = ack(can.writes()[0]); ++wrong.data[7]; can.incoming.push_back(wrong); c.tick(252);
-  CHECK(c.unit(0).commandStatus().state == CommandState::Waiting);
-  can.incoming.push_back(ack(can.writes()[0])); c.tick(253);
-  c.tick(500); CHECK(can.writes().size() == 2); CHECK(can.writes()[1].data[1] == 3);
-  can.incoming.push_back(ack(can.writes()[1])); c.tick(501);
-  CHECK(c.unit(0).commandStatus().state == CommandState::Success);
-  c.tick(750); CHECK(can.writes().size() == 3 && can.writes()[2].id == 0x108280fe);
-  can.incoming.push_back(ack(can.writes()[2], true)); c.tick(751);
-  CHECK(!c.busy()); CHECK(c.unit(1).commandStatus().state == CommandState::Rejected);
-  CHECK(c.unit(2).commandStatus().state == CommandState::Idle);
-  CHECK(c.applySingle(2) == Result::Disabled);
-  CHECK(c.applySingle(0) == Result::Ok); c.tick(1000); c.tick(1750);
-  CHECK(!c.busy() && c.unit(0).commandStatus().state == CommandState::Timeout);
-  can.sendOk = false; CHECK(c.applySingle(0) == Result::Ok); c.tick(2000);
-  CHECK(!c.busy() && c.unit(0).commandStatus().state == CommandState::TransportError);
-  CHECK(c.txFailures() > 0);
-}
-void persistenceCommandsAndRollover() {
-  FakeCan can; PsuController c(can); CHECK(c.begin());
-  CHECK(c.modifySingle(0, Parameter::Voltage, 52) == Result::Ok);
-  CHECK(c.modifySingle(0, Parameter::OfflineVoltage, 54) == Result::Ok);
-  CHECK(c.applySingle(0, ApplyMode::OnlineAndOffline) == Result::Ok);
-  const uint8_t regs[] = {0, 3, 1, 4};
-  for (uint8_t i = 0; i < 4; ++i) {
-    c.tick((i + 1) * 250);
-    const auto sent = can.writes(); CHECK(sent.size() == size_t(i + 1));
-    CHECK(sent.back().data[1] == regs[i]);
-    can.incoming.push_back(ack(sent.back())); c.tick((i + 1) * 250 + 1);
+void discoveryAndTelemetry() {
+  Rig r;
+  CHECK(r.c.issue(0, r.now) == Issue::None && r.c.issue(1, r.now) == Issue::None);
+  const auto* first = r.c.deviceForSlot(0, r.now);
+  CHECK(first && first->verified(r.now));
+  for (uint8_t m = 0; m < protocol::MetricCount; ++m) {
+    const uint8_t registers[] = {0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x78, 0x7f, 0x80, 0x81, 0x82};
+    r.can.incoming.push_back(data(1, registers[m], m == protocol::InputTemperature ? uint32_t(-5120) : 512));
   }
-  CHECK(!c.busy());
-  CHECK(protocol::readBigEndian(can.writes()[0].data + 4) == protocol::encodeVoltage(5200));
-  CHECK(protocol::readBigEndian(can.writes()[2].data + 4) == protocol::encodeVoltage(5400));
-  CHECK(c.applySingle(0) == Result::Ok);
-  c.tick(UINT32_MAX - 100); c.tick(649); // 750 ms across millis() rollover.
-  CHECK(!c.busy() && c.unit(0).commandStatus().state == CommandState::Timeout);
-  FakeCan failed; failed.initOk = false; PsuController offline(failed);
-  CHECK(!offline.begin()); CHECK(offline.applySingle(0) == Result::TransportError);
-  CHECK(offline.modifySingle(0, Parameter::Voltage, 50) == Result::Ok);
-  offline.tick(10000); CHECK(failed.sent.empty());
+  r.can.incoming.push_back(data(1, 0x83, 0x10000000)); r.c.tick(r.now);
+  float v = 0;
+  CHECK(r.c.metric(0, protocol::CurrentCapacity, v, r.now)); close(v, 25);
+  CHECK(r.c.metric(0, protocol::InputTemperature, v, r.now)); close(v, -5);
+  CHECK(r.c.metric(0, protocol::Efficiency, v, r.now)); close(v, .5);
+  CHECK(first->telemetry.alarmBits == 0x10000000 && r.c.issue(0, r.now) == Issue::None);
+  CHECK(first->telemetry.ampHours > 0); r.c.resetAmpHours(); close(first->telemetry.ampHours, 0);
+  r.can.incoming.push_back(broadcast(1, false)); r.c.tick(r.now);
+  CHECK(r.c.issue(0, r.now) == Issue::NotReady);
+  r.can.incoming.push_back(broadcast(1)); r.c.tick(r.now);
+  // An unbound live unit is diagnostic-only: no setting writes.
+  r.can.incoming.push_back(info(13, identity(13))); r.c.tick(r.now);
+  r.now += 200; r.can.incoming.push_back(info(13, identity(13))); r.c.tick(r.now);
+  CHECK(r.can.writes().empty());
+  // Duplicate stable identity at two recently live addresses blocks routing.
+  r.can.incoming.push_back(info(14, identity(1))); r.c.tick(r.now);
+  CHECK(r.c.issue(0, r.now) == Issue::Conflict && !r.c.deviceForSlot(0, r.now));
+  CHECK(r.c.preview(Operation::All, -1, r.now).blocker == Issue::Conflict);
+  auto partial = r.c.preview(Operation::GroupCurrent, 0, r.now, true);
+  CHECK(partial.issues[0] == Issue::Conflict);
+
+  Discovery d;
+  d.receive(info(1, identity(1)), 100); d.tick(100, 5000);
+  CHECK(!d.address(1)->verified(100));
+  d.receive(info(1, identity(1)), 150); CHECK(!d.address(1)->verified(150));
+  d.receive(info(1, identity(1)), 300); CHECK(d.address(1)->verified(300));
+  d.receive(info(1, Identity{}), 400); CHECK(!d.address(1)->verified(400));
+  auto malformed = info(2, identity(2)); malformed.rtr = true; d.receive(malformed, 500);
+  CHECK(d.address(2) == nullptr);
+  d.tick(20000, 5000); CHECK(!d.address(1)->live);
+  d.receive(info(7, identity(1)), 20000); d.tick(20000, 5000);
+  d.receive(info(7, identity(1)), 20200); d.tick(20200, 5000);
+  CHECK(d.identity(identity(1), 20200)->address == 7);
 }
-void eepromJournal() {
+void orderedApplyAndDraftIsolation() {
+  Rig r;
+  CHECK(r.c.preview(Operation::GroupCurrent, 0, r.now).blocker == Issue::VoltageUnsynced);
+  r.apply();
+  const auto w = r.can.writes(); CHECK(w.size() == 4);
+  CHECK(w[0].data[1] == protocol::OnlineVoltage && w[1].data[1] == protocol::OnlineVoltage);
+  CHECK(w[2].data[1] == protocol::OnlineCurrent && w[3].data[1] == protocol::OnlineCurrent);
+  CHECK(protocol::readBigEndian(w[2].data + 4) == protocol::encodeCurrent(2750, 5000));
+  CHECK(r.c.configuration().operating.current[0] == 2750 && r.c.configuration().operating.currentMask == 3);
+  CHECK(r.c.voltageSynchronized(0) && r.c.voltageSynchronized(1));
+  CHECK(r.c.setVoltage(5650) == Result::Ok && r.c.setCurrent(0, 6000) == Result::Ok);
+  const auto p = r.c.preview(Operation::GroupCurrent, 0, r.now);
+  CHECK(p.voltage == 5400 && p.current[0] == 3000); // Unapplied voltage remains a draft.
+  r.apply(Operation::GroupCurrent, 0);
+  CHECK(r.can.writes().size() == 6 && r.can.writes()[4].data[1] == protocol::OnlineCurrent);
+  CHECK(r.c.configuration().voltage == 5650 && r.c.configuration().operating.voltage == 5400);
+  CHECK(r.c.setCurrent(0, 2000, true) == Result::Ok);
+  r.apply(Operation::Offline);
+  const auto offline = r.can.writes(); CHECK(offline.size() == 10);
+  CHECK(offline[6].data[1] == protocol::OfflineVoltage && offline[8].data[1] == protocol::OfflineCurrent);
+  CHECK(r.c.configuration().operating.current[0] == 3000); // Offline defaults never replace online authorization.
+}
+void missingMembersAndConfirmations() {
+  Rig r; r.apply(); r.live = 1; r.step(6000);
+  CHECK(r.c.issue(1, r.now) == Issue::Missing);
+  const auto written = r.can.writes().size();
+  auto p = r.c.preview(Operation::GroupCurrent, 0, r.now);
+  CHECK(p.blocker == Issue::Missing && r.c.queue(p, false, r.now) == Result::Blocked);
+  CHECK(r.can.writes().size() == written);
+  p = r.c.preview(Operation::GroupCurrent, 0, r.now, true);
+  CHECK(p.blocker == Issue::None && p.recipients == 1 && p.missing == 2);
+  CHECK(p.current[0] == 2750 && p.current[1] == 2750);
+  CHECK(r.c.queue(p, false, r.now) == Result::ConfirmRequired);
+  CHECK(r.c.queue(p, true, r.now + limits::confirmationMs + 1) == Result::Changed);
+  CHECK(r.c.setCurrent(0, 6000) == Result::Ok);
+  CHECK(r.c.queue(p, true, r.now) == Result::Changed); // Stale confirmation cannot apply new drafts.
+  p = r.c.preview(Operation::GroupCurrent, 0, r.now, true);
+  CHECK(r.c.queue(p, true, r.now) == Result::Ok); r.finish();
+  CHECK(r.c.report().succeeded == 1 && r.c.report().skipped == 2);
+  CHECK(r.can.writes().size() == written + 1);
+  CHECK(protocol::address(r.can.writes().back().id) == 1);
+  CHECK(protocol::readBigEndian(r.can.writes().back().data + 4) == protocol::encodeCurrent(3000, 5000));
+  CHECK(r.c.configuration().operating.current[1] == 2750); // Missing unit not silently reauthorized.
+  p = r.c.preview(Operation::Voltage, -1, r.now, true);
+  CHECK(p.blocker != Issue::None && r.c.queue(p, true, r.now) == Result::Blocked);
+  r.live = 0; r.step(6000);
+  CHECK(r.c.preview(Operation::GroupCurrent, 0, r.now, true).blocker == Issue::Missing);
+
+  Rig returned; returned.apply(); returned.live = 1; returned.step(6000);
+  p = returned.c.preview(Operation::GroupCurrent, 0, returned.now, true);
+  returned.live = 3; returned.step(200); returned.step(200);
+  CHECK(returned.c.queue(p, true, returned.now) != Result::Ok); // Topology changed; recovery may be busy.
+
+  Rig blocked; blocked.apply();
+  blocked.can.incoming.push_back(broadcast(2, false)); blocked.c.tick(blocked.now);
+  p = blocked.c.preview(Operation::GroupCurrent, 0, blocked.now, true);
+  CHECK(p.blocker == Issue::NotReady && blocked.c.queue(p, true, blocked.now) == Result::Blocked);
+}
+void acknowledgementsAndFailures() {
+  // Losing an already-ACKed voltage recipient before the phase boundary must
+  // block every current write. Its genuine return permits one recovery attempt.
+  Rig phase;
+  CHECK(phase.c.queue(phase.c.preview(Operation::All, -1, phase.now), false, phase.now) == Result::Ok);
+  phase.step(); phase.step(); CHECK(phase.can.writes().size() == 2);
+  phase.can.incoming.push_back(broadcast(1, false));
+  phase.can.incoming.push_back(ack(phase.can.writes().back())); phase.c.tick(phase.now + 1);
+  CHECK(!phase.c.busy() && phase.c.report().failed == 1 && phase.c.report().skipped == 2);
+  CHECK(phase.c.report().units[1].state == CommandState::Incomplete && phase.can.writes().size() == 2);
+  phase.acknowledged = phase.can.sent.size(); phase.step(); CHECK(phase.c.busy()); phase.finish();
+  CHECK(phase.c.report().operation == Operation::Restore && phase.c.report().succeeded == 1);
+  Rig r;
+  CHECK(r.c.queue(r.c.preview(Operation::All, -1, r.now), false, r.now) == Result::Ok);
+  r.step(250, false); CHECK(r.can.writes().size() == 1);
+  const auto sent = r.can.writes().front();
+  auto wrong = ack(sent); wrong.data[1] = protocol::OnlineCurrent; r.can.incoming.push_back(wrong);
+  wrong = ack(sent); wrong.id ^= 3UL << 16; r.can.incoming.push_back(wrong);
+  wrong = ack(sent); wrong.data[7] ^= 1; r.can.incoming.push_back(wrong);
+  r.c.tick(r.now + 1); CHECK(r.c.report().units[0].state == CommandState::Waiting);
+  r.can.incoming.push_back(ack(sent, true)); r.c.tick(r.now + 2);
+  CHECK(r.c.report().units[0].state == CommandState::Rejected);
+  r.acknowledged = r.can.sent.size(); r.finish();
+  CHECK(r.c.report().failed == 1 && r.c.report().skipped == 2);
+  CHECK(r.can.writes().size() == 2); // No current writes after a failed global voltage phase.
+  r.step(1000); r.step(1000); CHECK(r.can.writes().size() == 2); // No repeated automatic fault clearing.
+  CHECK(r.c.preview(Operation::GroupCurrent, 0, r.now).blocker == Issue::VoltageUnsynced);
+
+  auto config = installation(); config.groups[0].members = 1;
+  std::strcpy(config.groups[1].name, "GROUP2"); config.groups[1].members = 2;
+  Rig groups(config); groups.apply();
+  CHECK(groups.c.queue(groups.c.preview(Operation::GroupCurrent, 0, groups.now), false, groups.now) == Result::Ok);
+  groups.step(250, false);
+  groups.can.incoming.push_back(ack(groups.can.writes().back(), true)); groups.c.tick(groups.now + 1);
+  groups.acknowledged = groups.can.sent.size(); groups.finish();
+  groups.apply(Operation::GroupCurrent, 1);
+  CHECK(groups.c.report().units[0].state == CommandState::Rejected); // Another group cannot erase the error.
+
+  Rig timeout;
+  CHECK(timeout.c.queue(timeout.c.preview(Operation::Voltage, -1, timeout.now), false, timeout.now) == Result::Ok);
+  timeout.step(250, false); timeout.step(750, false);
+  CHECK(timeout.c.report().units[0].state == CommandState::Timeout);
+  timeout.finish(); CHECK(timeout.c.report().failed == 1 && timeout.c.report().succeeded == 2);
+
+  Rig replaced;
+  CHECK(replaced.c.queue(replaced.c.preview(Operation::All, -1, replaced.now), false, replaced.now) == Result::Ok);
+  replaced.step(250, false);
+  replaced.can.incoming.push_back(info(1, identity(99)));
+  replaced.can.incoming.push_back(ack(replaced.can.writes().front())); replaced.c.tick(replaced.now + 1);
+  CHECK(replaced.c.report().units[0].state == CommandState::Changed);
+  CHECK(replaced.c.issue(0, replaced.now + 1) == Issue::Missing);
+
+  Rig transport;
+  CHECK(transport.c.queue(transport.c.preview(Operation::Voltage, -1, transport.now), false, transport.now) == Result::Ok);
+  transport.can.sendOk = false; transport.step(); transport.step(); transport.step();
+  CHECK(!transport.c.busy() && transport.c.report().failed == 3 && transport.c.txFailures() > 0);
+}
+void restorationAndDeployment() {
+  Rig r; r.apply();
+  CHECK(r.c.setCurrent(0, 2000) == Result::Ok && r.c.setVoltage(5800) == Result::Ok);
+  const auto written = r.can.writes().size();
+  r.live = 1; r.step(16000); CHECK(r.c.issue(1, r.now) == Issue::Missing);
+  r.addresses[1] = 17; r.live = 3; r.step(250); // One identity sample cannot restore.
+  CHECK(r.can.writes().size() == written);
+  r.step(250); r.finish();
+  const auto restored = r.can.writes(); CHECK(restored.size() == written + 2);
+  CHECK(protocol::address(restored[written].id) == 17);
+  CHECK(protocol::readBigEndian(restored[written].data + 4) == protocol::encodeVoltage(5400));
+  CHECK(protocol::readBigEndian(restored[written + 1].data + 4) == protocol::encodeCurrent(2750, 5000));
+  CHECK(r.c.configuration().groups[0].current == 2000 && r.c.configuration().voltage == 5800);
+  auto saved = r.c.configuration();
+  Rig noResume(saved, true); noResume.step(); CHECK(noResume.can.writes().empty());
+  saved.autoResume = true;
+  Rig reboot(saved, true); reboot.finish();
+  const auto rebootWrites = reboot.can.writes(); CHECK(rebootWrites.size() == 4);
+  CHECK(rebootWrites[0].data[1] == protocol::OnlineVoltage && rebootWrites[1].data[1] == protocol::OnlineVoltage);
+  CHECK(rebootWrites[2].data[1] == protocol::OnlineCurrent);
+  CHECK(protocol::readBigEndian(rebootWrites[2].data + 4) == protocol::encodeCurrent(2750, 5000));
+  Rig loaded(saved, false); loaded.step(); CHECK(loaded.can.writes().empty());
+  // Rebinding and saving cannot inherit the old slot's boot authorization,
+  // even if all identities are currently present and verified.
+  Rig rebound(saved); CHECK(rebound.c.bind(1, identity(2), 5000, rebound.now) == Result::Ok);
+  CHECK(rebound.c.configuration().operating.voltageMask == 1 && rebound.c.configuration().operating.currentMask == 1);
+  FakeEeprom reboundBytes; MemoryManager reboundMemory(reboundBytes); Configuration reboundSaved;
+  CHECK(reboundMemory.save(rebound.c.configuration()) == StorageResult::Ok);
+  CHECK(reboundMemory.load(reboundSaved) == StorageResult::Ok);
+  Rig pending(reboundSaved, true); pending.step(); pending.step();
+  CHECK(pending.c.issue(0, pending.now) == Issue::None && pending.c.issue(1, pending.now) == Issue::None);
+  CHECK(pending.can.writes().empty());
+  saved.deploymentId = deployment::id + 1;
+  Rig foreign(saved, true); foreign.step();
+  CHECK(foreign.can.writes().empty() && foreign.c.issue(0, foreign.now) == Issue::DeploymentMismatch);
+  CHECK(foreign.c.queue(foreign.c.preview(Operation::All, -1, foreign.now), false, foreign.now) == Result::Blocked);
+
+  // Reassignment preserves requested total but requires an explicit new apply.
+  Rig groups; groups.apply(); CHECK(groups.c.setGroup("GROUP1", 1) == Result::Ok);
+  CHECK(groups.c.configuration().operating.currentMask == 0);
+  CHECK(groups.c.configuration().groups[0].current == 5500);
+  CHECK(groups.c.setGroup("GROUP2", 2) == Result::Ok);
+  groups.live = 0; groups.step(16000); groups.live = 3; groups.step(200); groups.step(200);
+  CHECK(groups.can.writes().size() == 4); // No automatic redistribution after membership edits.
+}
+void schedulerAndBounds() {
+  Rig full(installation(PSU_MAX_UNITS)); full.apply();
+  CHECK(full.can.writes().size() == PSU_MAX_UNITS * 2);
+  // Cached identity/telemetry alone cannot authorize a setting at a reused address.
+  Rig guarded; guarded.answerIdentityQueries = false;
+  CHECK(guarded.c.queue(guarded.c.preview(Operation::Voltage, -1, guarded.now), false, guarded.now) == Result::Ok);
+  guarded.step(250, false, false);
+  CHECK(guarded.c.report().units[0].state == CommandState::VerifyingIdentity && guarded.can.writes().empty());
+  guarded.step(750, false, false);
+  CHECK(guarded.c.report().units[0].state == CommandState::IdentityTimeout && guarded.can.writes().empty());
+  Rig swapped; swapped.answerIdentityQueries = false;
+  CHECK(swapped.c.queue(swapped.c.preview(Operation::Voltage, -1, swapped.now), false, swapped.now) == Result::Ok);
+  swapped.step(250, false, false);
+  swapped.can.incoming.push_back(info(1, identity(99))); swapped.c.tick(swapped.now + 1);
+  CHECK(swapped.c.report().units[0].state == CommandState::Changed && swapped.can.writes().empty());
+  Rig r; CHECK(r.c.setPollInterval(10000) == Result::Ok);
+  for (unsigned i = 0; i < 120; ++i) r.step(100);
+  unsigned infoRequests = 0, dataRequests = 0;
+  for (const auto& f : r.can.sent) if (protocol::address(f.id) <= 2) {
+    if (protocol::command(f.id) == protocol::infoCommand) ++infoRequests;
+    if (protocol::command(f.id) == protocol::dataCommand) ++dataRequests;
+  }
+  CHECK(infoRequests >= 4 && dataRequests >= 2 && r.can.writes().empty());
+  Discovery d;
+  for (uint8_t a = 1; a <= Discovery::capacity + 1; ++a) d.receive(info(a, identity(a)), 200);
+  CHECK(d.overflow() == 1);
+  d.receive(info(127, identity(127)), 40000); CHECK(d.address(127)); // Stale capacity can be reused.
+  // Unsigned freshness and command timing survive the millis() rollover.
+  Psu unit = {}; unit.occupied = true; unit.lastSeen = 0xfffffff0U;
+  CHECK(unit.fresh(20, 100) && !unit.fresh(200, 100));
+}
+void put16(uint8_t* p, uint16_t n) { p[0] = n; p[1] = n >> 8; }
+void recordCrc(uint8_t* bytes, uint16_t size) {
+  uint16_t crc = 0xffff;
+  for (uint16_t i = 1; i < size; ++i) if (i != 8 && i != 9) {
+    crc ^= uint16_t(bytes[i]) << 8;
+    for (uint8_t n = 0; n < 8; ++n) crc = crc & 0x8000 ? uint16_t(crc << 1) ^ 0x1021 : uint16_t(crc << 1);
+  }
+  put16(bytes + 8, crc);
+}
+FakeEeprom legacyRecord(bool mixed = false) {
+  FakeEeprom bytes;
+  const uint16_t size = 20 + 12 * PSU_MAX_UNITS;
+  auto* b = bytes.bytes.data(); std::memset(b, 0, size);
+  b[0] = 0xa5; b[1] = 1; put16(b + 2, size); b[4] = 42;
+  std::memcpy(b + 10, "R48C", 4); b[16] = 2; b[17] = 1; put16(b + 18, 1000);
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
+    auto* unit = b + 20 + i * 12; unit[0] = i + 1; unit[1] = 1;
+    put16(unit + 2, mixed && i == 1 ? 5500 : 5400); put16(unit + 4, 2750);
+    put16(unit + 6, 5300); put16(unit + 8, 1000); put16(unit + 10, 5000);
+  }
+  recordCrc(b, size); return bytes;
+}
+void eepromAndMigration() {
+  CHECK(MemoryManager::recordSize <= 256 && MemoryManager::budget == 512);
   FakeEeprom bytes; MemoryManager memory(bytes);
-  Configuration one = defaultConfiguration(), out = one;
-  CHECK(memory.load(out) == StorageResult::NoValidRecord);
-  CHECK(out.units[0].voltage == one.units[0].voltage);
+  auto one = installation(PSU_MAX_UNITS), out = defaultConfiguration();
+  one.autoResume = true; one.operating.voltageAuthorized = true; one.operating.voltage = 5300;
+  one.operating.currentMask = membersMask(PSU_MAX_UNITS);
+  one.operating.voltageMask = membersMask(PSU_MAX_UNITS);
+  one.groups[0] = {};
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
+    one.groups[i].name[0] = 'G'; one.groups[i].name[1] = '1' + i;
+    one.groups[i].members = 1U << i; one.groups[i].current = 2000 + i;
+    one.groups[i].offlineCurrent = 1000 + i;
+    one.operating.current[i] = 500 + i; one.units[i].ratedCurrent = 5000 + 100 * i;
+  }
+  CHECK(validConfig(one) && memory.load(out) == StorageResult::NoValidRecord);
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     bytes.bytes.fill(0xff); bytes.stopAfter = cut; bytes.calls = 0;
     try { memory.save(one); } catch (const PowerCut&) {}
     bytes.stopAfter = -1;
-    CHECK(memory.load(out) == (cut <= MemoryManager::recordSize
-        ? StorageResult::NoValidRecord : StorageResult::Ok));
+    CHECK(memory.load(out) == (cut <= MemoryManager::recordSize ? StorageResult::NoValidRecord : StorageResult::Ok));
   }
-  bytes.bytes.fill(0xff);
-  one.count = PSU_MAX_UNITS; one.applyOnBoot = true; one.pollMs = 3000;
+  bytes.bytes.fill(0xff); CHECK(memory.save(one) == StorageResult::Ok && memory.load(out) == StorageResult::Ok);
+  CHECK(out.deploymentId == one.deploymentId && out.count == PSU_MAX_UNITS && out.autoResume);
+  CHECK(out.operating.voltage == 5300 && out.operating.voltageAuthorized && out.operating.currentMask == one.operating.currentMask);
+  CHECK(out.operating.voltageMask == one.operating.voltageMask);
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    one.units[i] = {uint8_t(10 + i), bool(i % 2), uint16_t(5200 + 10 * i),
-                    uint16_t(100 + 20 * i), uint16_t(5500 + i),
-                    uint16_t(200 + 30 * i), uint16_t(3000 + 100 * i)};
-  }
-  CHECK(memory.save(one) == StorageResult::Ok);
-  CHECK(memory.load(out) == StorageResult::Ok);
-  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    CHECK(out.units[i].address == one.units[i].address);
-    CHECK(out.units[i].enabled == one.units[i].enabled);
-    CHECK(out.units[i].voltage == one.units[i].voltage);
-    CHECK(out.units[i].current == one.units[i].current);
-    CHECK(out.units[i].offlineVoltage == one.units[i].offlineVoltage);
-    CHECK(out.units[i].offlineCurrent == one.units[i].offlineCurrent);
+    CHECK(sameIdentity(out.units[i].identity, one.units[i].identity));
     CHECK(out.units[i].ratedCurrent == one.units[i].ratedCurrent);
+    CHECK(sameName(out.groups[i].name, one.groups[i].name) && out.groups[i].members == one.groups[i].members);
+    CHECK(out.groups[i].current == one.groups[i].current && out.groups[i].offlineCurrent == one.groups[i].offlineCurrent);
+    CHECK(out.operating.current[i] == one.operating.current[i]);
   }
-  Configuration two = one; two.units[0].voltage = 5300;
-  CHECK(memory.save(two) == StorageResult::Ok);
-  CHECK(memory.load(out) == StorageResult::Ok && out.units[0].voltage == 5300);
-  CHECK(out.count == PSU_MAX_UNITS && out.applyOnBoot && out.pollMs == 3000);
+  auto two = one; two.voltage = 5500; CHECK(memory.save(two) == StorageResult::Ok);
   CHECK(bytes.bytes[255] == 0xff && bytes.bytes[511] == 0xff);
-  // Interrupt every update in the third save, including invalidation and final commit.
   const auto original = bytes.bytes;
-  Configuration three = two; three.units[0].voltage = 5400;
+  auto three = two; three.voltage = 5600;
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     bytes.bytes = original; bytes.calls = 0; bytes.stopAfter = cut;
     try { memory.save(three); } catch (const PowerCut&) {}
     bytes.stopAfter = -1;
     CHECK(memory.load(out) == StorageResult::Ok);
-    CHECK(out.units[0].voltage == (cut <= MemoryManager::recordSize ? 5300 : 5400));
+    CHECK(out.voltage == (cut <= MemoryManager::recordSize ? 5500 : 5600));
   }
-  bytes.bytes = original;
-  bytes.bytes[256 + 30] ^= 0x10; // Newest corrupt: recover older complete record.
-  CHECK(memory.load(out) == StorageResult::Ok && out.units[0].voltage == one.units[0].voltage);
-  bytes.bytes[1] = 9;
-  out.units[0].voltage = 5000;
-  CHECK(memory.load(out) == StorageResult::NoValidRecord && out.units[0].voltage == 5000);
-  bytes.bytes = original;
-  // Simulate an EEPROM cell that refuses the changed low byte of voltage.
-  bytes.ignoredAddress = 22;
-  CHECK(memory.save(three) == StorageResult::WriteFailed);
-  CHECK(memory.load(out) == StorageResult::Ok && out.units[0].voltage == 5300);
-  bytes.ignoredAddress = -1;
-  auto invalid = one; invalid.units[1].address = invalid.units[0].address;
-  const auto before = bytes.bytes;
-  CHECK(memory.save(invalid) == StorageResult::InvalidConfig && bytes.bytes == before);
-  bytes.capacity = 511;
-  CHECK(memory.load(out) == StorageResult::TooSmall);
-  CHECK(memory.save(one) == StorageResult::TooSmall);
+  bytes.bytes = original; bytes.bytes[256 + 30] ^= 1;
+  CHECK(memory.load(out) == StorageResult::Ok && out.voltage == one.voltage);
+  bytes.bytes = original; bytes.ignoredAddress = 20;
+  CHECK(memory.save(three) == StorageResult::WriteFailed && memory.load(out) == StorageResult::Ok && out.voltage == 5500);
+  bytes.ignoredAddress = -1; bytes.bytes = original;
+  // A CRC-valid record belonging to another deployment remains inspectable.
+  bytes.bytes[256 + 16] ^= 0x40;
+  recordCrc(bytes.bytes.data() + 256, MemoryManager::recordSize);
+  CHECK(memory.load(out) == StorageResult::WrongDeployment);
+  CHECK(out.deploymentId != deployment::id && memory.save(out) == StorageResult::WrongDeployment);
+  const auto untouched = bytes.bytes;
+  auto bad = one; bad.units[1].identity = bad.units[0].identity;
+  CHECK(memory.save(bad) == StorageResult::InvalidConfig && bytes.bytes == untouched);
+  bytes.capacity = 511; CHECK(memory.save(one) == StorageResult::TooSmall && memory.load(out) == StorageResult::TooSmall);
+
+  auto legacy = legacyRecord(); MemoryManager old(legacy);
+  const auto preserved = legacy.bytes;
+  CHECK(old.load(out) == StorageResult::Migrated);
+  CHECK(out.voltage == 5400 && out.groups[0].current == 5500 && out.groups[0].offlineCurrent == 2000);
+  CHECK(out.groups[0].members == 3 && !out.autoResume && !out.operating.voltageAuthorized);
+  CHECK(!identified(out.units[0].identity) && legacy.bytes == preserved);
+  LegacyConfiguration details; CHECK(old.legacy(details) && details.units[1].address == 2 && details.applyOnBoot);
+  const auto migrated = out;
+  for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
+    legacy.bytes = preserved; legacy.calls = 0; legacy.stopAfter = cut;
+    try { old.save(migrated); } catch (const PowerCut&) {}
+    legacy.stopAfter = -1;
+    CHECK(old.load(out) == (cut <= MemoryManager::recordSize ? StorageResult::Migrated : StorageResult::Ok));
+  }
+  legacy = legacyRecord(true); const auto mixed = legacy.bytes;
+  out = installation(); out.voltage = 5700;
+  CHECK(old.load(out) == StorageResult::LegacyNeedsReview && out.voltage == 5700 && legacy.bytes == mixed);
+  CHECK(old.legacy(details) && details.units[1].voltage == 5500);
 }
+struct Terminal {
+  Rig& rig;
+  FakeEeprom bytes;
+  MemoryManager memory;
+  FakeSerial io;
+  SerialConsole console;
+  explicit Terminal(Rig& r) : rig(r), memory(bytes), console(io, r.c, memory) {
+    console.begin(StorageResult::NoValidRecord); console.finishStartup();
+  }
+  std::string input(const std::string& text, bool drain = true) {
+    io.output.clear(); io.feed(text);
+    do { console.tick(rig.now); } while (io.available());
+    if (drain) for (unsigned i = 0; i < 130; ++i) console.tick(rig.now);
+    return io.output;
+  }
+};
 void serialWorkflow() {
-  FakeCan can; PsuController c(can); CHECK(c.begin());
-  FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io; SerialConsole console(io, c, memory);
-  console.begin(StorageResult::NoValidRecord);
-  uint32_t now = 0;
-  auto command = [&](const std::string& text) {
-    io.output.clear(); io.feed(text);
-    do { c.tick(now); console.tick(now++); } while (io.available());
-  };
-  command("count 3\r\n"); CHECK(c.count() == 3);
-  command("set 1-3 current 5\n"); CHECK(c.unit(2).config().current == 500);
-  command("set 2 current 2.5\n"); CHECK(c.unit(1).config().current == 250);
-  command("set all voltage 54.2\n"); CHECK(c.unit(0).config().voltage == 5420);
-  const std::vector<std::string> invalid = {
-    "set all current nan\n", "set all current inf\n", "set all current -1\n",
-    "set 3-1 current 1\n", "set 0 current 1\n", "set 9999999999 current 1\n",
-    "set 2 current 1oops\n", "set 2 enabled 2\n", "set all address 1\n",
-    "set 1 current 1 extra\n", "count 256\n", "interval 0\n", "bootapply -1\n"};
-  for (const auto& text : invalid) {
-    command(text); CHECK(io.output.find("ERR") != std::string::npos);
-    CHECK(c.unit(1).config().current == 250);
-  }
-  command(std::string(90, 'x') + "set all current 60\n");
-  CHECK(io.output.find("discarded") != std::string::npos); CHECK(c.unit(0).config().current == 500);
-  command("set 2 current 4\b3\n"); CHECK(c.unit(1).config().current == 300);
-  command("bootapply 1\nsave\n"); CHECK(can.writes().empty());
-  command("defaults\n"); CHECK(c.count() == 1 && !c.applyOnBoot());
-  command("load\n"); CHECK(c.count() == 3 && c.applyOnBoot() && c.unit(1).config().current == 300);
-  CHECK(can.writes().empty()); // load never silently writes hardware.
-  command("set 1 current "); const auto polls = can.sent.size();
-  c.tick(1000); console.tick(1000); CHECK(can.sent.size() > polls); // Partial input cannot stop CAN polling.
-  command("2\n"); CHECK(c.unit(0).config().current == 200);
-  command("apply 1-2\n"); CHECK(c.busy());
-  command("defaults\n"); CHECK(c.count() == 3 && io.output.find("progress") != std::string::npos);
-  command("help\n");
-  for (int i = 0; i < 20; ++i) { c.tick(1100 + i); console.tick(1100 + i); }
-  CHECK(io.output.find("Targets:") != std::string::npos);
-  CHECK(io.output.find("save / load") != std::string::npos);
+  Rig r; Terminal t(r);
+  CHECK(t.input("help diagnostics\n").find("BUS / GROUP DIAGNOSTICS") != std::string::npos);
+  CHECK(t.input("diag bus\n").find("responding addresses=2 verified identities=2 broadcasting=2") != std::string::npos);
+  CHECK(t.input("diag group GROUP1\n").find("members=1,2 responding=1,2 ready=1,2 missing=-") != std::string::npos);
+  CHECK(t.input("set voltage GROUP1 56\n").find("voltage is global") != std::string::npos);
+  CHECK(t.input("set current GROUP1 55\n").find("STAGED total A=55.00") != std::string::npos);
+  CHECK(t.input("preview all\n").find("share A=27.50") != std::string::npos && r.can.writes().empty());
+  CHECK(t.input("apply all\n").find("QUEUED;") != std::string::npos); r.finish(); t.console.tick(r.now);
+  CHECK(r.c.report().succeeded == 3);
+  CHECK(t.input("set current GROUP1 20\nsave\n").find("EEPROM OK") != std::string::npos);
+  Configuration stored; CHECK(t.memory.load(stored) == StorageResult::Ok);
+  CHECK(stored.groups[0].current == 2000 && stored.operating.current[0] == 2750);
+  CHECK(t.input("telemetry GROUP1\n").find("filtered-current A=N/A") != std::string::npos);
+  CHECK(t.input("set current GROUP1 121\n").find("PSU 1 share A=60.50 exceeds configured maximum A=60.00") != std::string::npos);
+  for (const auto& command : {"set current GROUP1 nan\n", "set current GROUP1 inf\n", "set current GROUP1 -2\n", "set current GROUP1 2junk\n", "group set BAD 1-99\n", "count 0\n"})
+    CHECK(t.input(command).find("ERR") != std::string::npos);
+  CHECK(r.c.configuration().groups[0].current == 2000);
+  r.live = 1; r.step(6000);
+  CHECK(t.input("apply GROUP1\n").find("missing; output state unknown") != std::string::npos);
+  CHECK(t.input("apply GROUP1 partial\n").find("ARE YOU SURE?") != std::string::npos);
+  CHECK(t.input("\x18" "confirm yes\n").find("no valid confirmation") != std::string::npos);
+  CHECK(!r.c.busy());
+  t.input("apply GROUP1 partial\n"); t.input("confirm yes\n"); CHECK(r.c.busy()); r.finish();
+  CHECK(r.c.report().recipients == 1 && r.c.report().skipped == 2);
+
+  // Commission fresh slots entirely through public serial commands.
+  Rig fresh; Terminal setup(fresh); setup.input("defaults\ncount 2\n");
+  setup.input("bind 1 112233445501 50\n"); setup.input("bind 2 112233445502 50\n");
+  CHECK(identified(fresh.c.configuration().units[1].identity));
+  CHECK(setup.input("group set SOURCE_A 1-2\n").find("OK") != std::string::npos);
+  setup.input("set current SOURCE_A 55\nset voltage 54\n");
+  CHECK(setup.input("apply all\n").find("QUEUED") != std::string::npos); fresh.finish();
+  setup.input("autoresume on\nsave\n"); CHECK(setup.memory.load(stored) == StorageResult::Ok && stored.autoResume);
+  CHECK(setup.input("bind 1 112233445502 50\n").find("different identity") != std::string::npos);
 }
-void serialSessionLifecycle() {
-  FakeCan can; PsuController c(can); CHECK(c.begin());
-  FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io;
-  io.observing = false;
-  SerialConsole terminal(io, c, memory);
-  terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
-  // Boot with no terminal, then run through repeated polls without incoming input.
-  for (uint32_t now = 0; now <= 5000; now += 100) { terminal.tick(now); c.tick(now); }
-  CHECK(io.output.empty() && can.sent.size() >= 5);
-  CHECK(can.writes().empty() && !c.applyOnBoot());
-  uint32_t now = 5001;
-  auto input = [&](const std::string& text) {
-    io.output.clear(); io.feed(text);
-    do { terminal.tick(now++); } while (io.available());
-  };
-  io.observing = true;
-  input("hello\r\n");
-  CHECK(io.output == "hello\r\nR4850 console ready; help for commands; Ctrl-X resets console\r\n> ");
-  CHECK(can.writes().empty());
-  input("set 1 voltage 54\n");
-  const auto saved = bytes.bytes;
-  input("raw on\nwatch on\n");
-  input("apply 1"); // Fully formed but unsubmitted command abandoned by client.
-  io.observing = false;
-  now += console::inputIdleTimeoutMs;
-  terminal.tick(now); c.tick(now);
-  io.observing = true;
-  input("\n"); CHECK(io.output.find("discarded") != std::string::npos);
-  CHECK(!c.busy() && can.writes().empty());
-  // Reset also works on a quick reconnect before the idle timeout.
-  input("apply 1"); input("\x18\r\n");
-  CHECK(!c.busy() && can.writes().empty());
-  CHECK(io.output.find("Console reset;") != std::string::npos);
-  CHECK(c.unit(0).config().voltage == 5400 && bytes.bytes == saved);
-  io.output.clear(); can.incoming.push_back(data(1, 0x75, 55296)); c.tick(now);
-  terminal.tick(now + 1000); CHECK(io.output.empty()); // raw/watch stopped.
-  close(c.unit(0).metric(protocol::OutputVoltage), 54);
-  // Ctrl-U recovers an invalid line; Ctrl-C recovers an overlong one.
-  input(std::string("apply 1") + char(1)); input("\x15" "config 1\n");
-  CHECK(!c.busy()); CHECK(io.output.find("PSU 1 addr=") != std::string::npos);
-  input(std::string(100, 'x')); input("\x03");
-  CHECK(io.output.find("Console reset;") != std::string::npos);
-  input("set 1 current 3\n"); CHECK(c.unit(0).config().current == 300);
-  // Console reset must not cancel or alter an already queued PSU job.
-  input("apply 1\n"); CHECK(c.busy()); input("\x18"); CHECK(c.busy());
-  io.observing = false;
-  c.tick(now + 1000); CHECK(can.writes().size() == 1);
-  can.incoming.push_back(ack(can.writes().back())); c.tick(now + 1001);
-  c.tick(now + 1300); CHECK(can.writes().size() == 2);
-  can.incoming.push_back(ack(can.writes().back())); c.tick(now + 1301);
-  CHECK(!c.busy() && c.unit(0).commandStatus().state == CommandState::Success);
-  io.observing = true;
-  input("hello\n"); CHECK(io.output.find("R4850 console ready;") != std::string::npos);
-  CHECK(c.unit(0).config().current == 300 && bytes.bytes == saved);
-  // A genuine MCU reboot restores EEPROM/defaults, not an old console session.
-  FakeCan rebootCan; PsuController rebootController(rebootCan); CHECK(rebootController.begin());
-  FakeSerial rebootIo; SerialConsole reboot(rebootIo, rebootController, memory);
-  reboot.begin(StorageResult::NoValidRecord); reboot.finishStartup();
-  rebootIo.output.clear(); rebootIo.feed("\n"); reboot.tick(0);
-  CHECK(rebootIo.output == "\r\n> "); CHECK(rebootCan.writes().empty());
-}
-void serialIdleAndBackgroundOutput() {
-  for (uint32_t start : {0U, 0xfffffff0U}) {
-    FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes;
-    MemoryManager memory(bytes); FakeSerial io; SerialConsole terminal(io, c, memory);
-    terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
-    io.feed("apply 1"); terminal.tick(start);
-    // New bytes are already waiting when the timeout is first serviced.
-    io.feed("\r\n"); terminal.tick(start + console::inputIdleTimeoutMs);
-    CHECK(!c.busy() && can.writes().empty());
-    CHECK(io.output.find("Input expired;") != std::string::npos);
-    io.output.clear(); terminal.tick(start + console::inputIdleTimeoutMs + 1);
-    CHECK(io.output.empty()); // No repeated warnings or CRLF duplicate prompt.
-    io.feed("count 2\n"); terminal.tick(start + console::inputIdleTimeoutMs + 2);
-    CHECK(c.count() == 2);
-    io.feed("count 3"); terminal.tick(start + console::inputIdleTimeoutMs + 3);
-    io.feed("\n"); terminal.tick(start + 2 * console::inputIdleTimeoutMs + 2);
-    CHECK(c.count() == 3); // A pause shorter than the timeout remains editable.
-  }
-  FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes;
-  MemoryManager memory(bytes); FakeSerial io; SerialConsole terminal(io, c, memory);
-  terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
-  io.feed("raw on\n"); terminal.tick(0);
-  io.feed("set 1 current 4"); terminal.tick(1); io.output.clear();
-  can.incoming.push_back(data(1, 0x75, 55296)); c.tick(2);
-  CHECK(io.output.find("\r\n1081407F ") == 0);
-  CHECK(io.output.substr(io.output.size() - 17) == "> set 1 current 4");
-  io.output.clear(); can.incoming.push_back(ack(protocol::setting(1, 3, 512))); c.tick(3);
-  CHECK(io.output.find("\r\nACK 1 reg=3 accepted 25.00A\r\n") == 0);
-  io.feed("\b3\n"); terminal.tick(4); CHECK(c.unit(0).config().current == 300);
-  io.feed("hello\n"); terminal.tick(5); io.output.clear();
-  can.incoming.push_back(data(1, 0x75, 55296)); c.tick(6); CHECK(io.output.empty());
-  // Untrusted device description characters cannot move the terminal cursor.
-  io.feed("describe 1\n"); terminal.tick(7); io.output.clear();
-  auto description = protocol::request(1, protocol::descriptionCommand); description.id = 0x1081d27e;
-  description.data[2] = 'A'; description.data[3] = 27; description.data[4] = '\r';
-  description.data[5] = 0; description.data[6] = 'B'; description.data[7] = 127;
-  can.incoming.push_back(description); c.tick(8);
-  CHECK(io.output == "\r\nA??B?\r\n> ");
-}
-void descriptionAndAckOutput() {
-  FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes; MemoryManager m(bytes);
-  FakeSerial io; SerialConsole console(io, c, m); console.begin(StorageResult::NoValidRecord);
-  io.feed("describe 1\n"); console.tick(0);
-  CHECK(can.sent.back().id == 0x1081d2fe);
+void serialLifecycleAndParity() {
+  Rig r; Terminal t(r);
+  CHECK(t.input("set current GROUP1 4", false) == "set current GROUP1 4");
+  CHECK(r.c.configuration().groups[0].current == 5500);
+  CHECK(t.input("\b3", false) == "\b \b3");
+  CHECK(t.input("\r").find("OK") != std::string::npos && r.c.configuration().groups[0].current == 300);
+  CHECK(t.input("\n").empty()); CHECK(t.input("\n") == "\r\n> ");
+  t.input("echo off\r\n"); CHECK(t.input("set\tcurrent GROUP1 4", false).empty());
+  t.input("\x7f" "2\n"); CHECK(r.c.configuration().groups[0].current == 200); t.input("echo on\n");
+  t.input(std::string(100, 'x')); CHECK(t.input("\n").find("discarded") != std::string::npos);
+  CHECK(t.input("hello\n").find("console ready") != std::string::npos);
+  t.io.observing = false; t.input("apply all", false);
+  r.step(console::inputIdleTimeoutMs); t.console.tick(r.now);
+  t.io.observing = true; CHECK(t.input("\n").find("discarded") != std::string::npos && r.can.writes().empty());
+  t.input("apply all", false); t.input("\x18\r\n"); CHECK(!r.c.busy());
+  t.input("raw on\n"); t.input("set current GROUP1 4", false); t.io.output.clear();
+  r.can.incoming.push_back(data(1, 0x75, 55296)); r.c.tick(r.now);
+  CHECK(t.io.output.find("\r\n1081407F ") == 0);
+  CHECK(t.io.output.find("> set current GROUP1 4") != std::string::npos);
+  t.input("\x15" "hello\n");
+  t.input("describe 1\n"); t.io.output.clear();
   auto first = protocol::request(1, protocol::descriptionCommand); first.id = 0x1081d27f;
-  const char* text = "Huawei"; for (int i = 0; i < 6; ++i) first.data[2 + i] = text[i];
-  auto last = first; last.id = 0x1081d27e; text = "R4850!";
-  for (int i = 0; i < 6; ++i) last.data[2 + i] = text[i];
-  io.output.clear(); can.incoming.push_back(first); can.incoming.push_back(last); c.tick(1);
-  CHECK(io.output == "\r\nHuaweiR4850!\r\n> ");
-  can.incoming.push_back(ack(protocol::setting(1, 3, 512))); c.tick(2);
-  CHECK(io.output.find("25.00A") != std::string::npos);
-  can.incoming.push_back(ack(protocol::setting(1, 2, 60 * 1024), true)); c.tick(3);
-  CHECK(io.output.find("rejected 60.00V") != std::string::npos);
+  std::memcpy(first.data + 2, "Huawei", 6); auto last = first; last.id = 0x1081d27e;
+  std::memcpy(last.data + 2, "R4850!", 6); r.can.incoming.push_back(first); r.can.incoming.push_back(last); r.c.tick(r.now);
+  CHECK(t.io.output == "\r\nHuaweiR4850!\r\n> ");
+  t.input("describe 1\n"); t.io.output.clear(); last.data[2] = 27; r.can.incoming.push_back(last); r.c.tick(r.now);
+  CHECK(t.io.output.find('?') != std::string::npos && t.io.output.find(char(27)) == std::string::npos);
+  t.io.output.clear(); r.can.incoming.push_back(ack(protocol::setting(1, 3, 512))); r.c.tick(r.now);
+  CHECK(t.io.output.find("accepted raw=512 A=25.00") != std::string::npos);
+  r.can.incoming.push_back(ack(protocol::setting(1, 2, 60 * 1024), true)); r.c.tick(r.now);
+  CHECK(t.io.output.find("rejected raw=61440 V=60.00") != std::string::npos);
+  // Console reset does not cancel a command already submitted to the backend.
+  t.input("apply all\n"); CHECK(r.c.busy()); t.input("\x18"); CHECK(r.c.busy());
+  t.io.observing = false; r.finish(); t.console.tick(r.now); t.io.observing = true;
+  CHECK(t.input("hello\n").find("console ready") != std::string::npos);
+  CHECK(r.c.report().succeeded == 3);
+  // Timeouts are wrap-safe, and characters already waiting cannot complete an expired line.
+  for (uint32_t start : {0U, 0xfffffff0U}) {
+    Rig idle; Terminal terminal(idle); idle.now = start;
+    terminal.input("apply all", false); idle.now += console::inputIdleTimeoutMs;
+    CHECK(terminal.input("\r\n").find("Input expired") != std::string::npos && idle.can.writes().empty());
+  }
 }
 }
 int main() {
   try {
-    boundedCanTransmit(); serialEditing(); protocolAndConfig(); independentTelemetry(); rangesAndAcknowledgements();
-    persistenceCommandsAndRollover(); eepromJournal(); serialWorkflow(); serialSessionLifecycle(); serialIdleAndBackgroundOutput(); descriptionAndAckOutput();
-    std::cout << "PASS: " << checks << " checks (including every EEPROM write interruption)\n";
-  } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+    boundedCanTransmit(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
+    missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
+    eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity();
+    std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
+  } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

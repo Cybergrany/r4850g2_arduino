@@ -3,6 +3,7 @@
 
 namespace psu { namespace protocol {
 constexpr uint8_t dataCommand = 0x40;
+constexpr uint8_t infoCommand = 0x50;
 constexpr uint8_t setCommand = 0x80;
 constexpr uint8_t descriptionCommand = 0xd2;
 constexpr uint8_t currentCommand = 0x11;

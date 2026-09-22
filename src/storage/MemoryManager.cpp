@@ -1,84 +1,125 @@
 #include "MemoryManager.h"
-
+#include "../config/Deployment.h"
+#include <string.h>
 namespace psu {
 namespace {
-constexpr uint8_t committed = 0xa5;
-constexpr uint8_t version = 1;
-uint16_t get16(const uint8_t* b) { return uint16_t(b[0]) | (uint16_t(b[1]) << 8); }
-void put16(uint8_t* b, uint16_t v) { b[0] = uint8_t(v); b[1] = uint8_t(v >> 8); }
-uint32_t get32(const uint8_t* b) { return get16(b) | (uint32_t(get16(b + 2)) << 16); }
-void put32(uint8_t* b, uint32_t v) { put16(b, uint16_t(v)); put16(b + 2, uint16_t(v >> 16)); }
-uint16_t crc(const uint8_t* b) {
-  uint16_t result = 0xffff;
-  for (uint16_t i = 1; i < MemoryManager::recordSize; ++i) {
-    if (i == 8 || i == 9) continue; // Exclude checksum and commit marker only.
-    result ^= uint16_t(b[i]) << 8;
-    for (uint8_t bit = 0; bit < 8; ++bit)
-      result = result & 0x8000 ? (result << 1) ^ 0x1021 : result << 1;
+uint16_t get16(const uint8_t* p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
+uint32_t get32(const uint8_t* p) { return get16(p) | uint32_t(get16(p + 2)) << 16; }
+void put16(uint8_t* p, uint16_t v) { p[0] = uint8_t(v); p[1] = uint8_t(v >> 8); }
+void put32(uint8_t* p, uint32_t v) { put16(p, uint16_t(v)); put16(p + 2, uint16_t(v >> 16)); }
+uint16_t crc(const uint8_t* b, uint16_t size) {
+  uint16_t c = 0xffff;
+  for (uint16_t i = 1; i < size; ++i) {
+    if (i == 8 || i == 9) continue;
+    c ^= uint16_t(b[i]) << 8;
+    for (uint8_t bit = 0; bit < 8; ++bit) c = c & 0x8000 ? (c << 1) ^ 0x1021 : c << 1;
   }
-  return result;
+  return c;
 }
 bool newer(uint32_t a, uint32_t b) { return int32_t(a - b) > 0; }
-void encode(const Configuration& c, uint8_t* b, uint32_t seq) {
-  b[0] = committed; b[1] = version; put16(b + 2, MemoryManager::recordSize);
-  put32(b + 4, seq); b[10] = 'R'; b[11] = '4'; b[12] = '8'; b[13] = 'C';
-  b[16] = c.count; b[17] = c.applyOnBoot; put16(b + 18, c.pollMs);
-  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    const auto& p = c.units[i]; uint8_t* out = b + 20 + 12 * i;
-    out[0] = p.address; out[1] = p.enabled;
-    put16(out + 2, p.voltage); put16(out + 4, p.current);
-    put16(out + 6, p.offlineVoltage); put16(out + 8, p.offlineCurrent);
-    put16(out + 10, p.ratedCurrent);
+bool decode(const uint8_t* b, Configuration& c) {
+  c = {}; c.deploymentId = get32(b + 16); c.voltage = get16(b + 20);
+  c.offlineVoltage = get16(b + 22); c.pollMs = get16(b + 24); c.count = b[26];
+  if (b[27] > 1 || b[28]) return false;
+  c.autoResume = b[27]; uint16_t at = 29;
+  for (auto& g : c.groups) {
+    memcpy(g.name, b + at, 8); g.name[8] = 0; g.members = b[at + 8];
+    g.current = get16(b + at + 9); g.offlineCurrent = get16(b + at + 11); at += 13;
   }
-  put16(b + 8, crc(b));
+  for (auto& u : c.units) { memcpy(u.identity.bytes, b + at, 6); u.ratedCurrent = get16(b + at + 6); at += 8; }
+  c.operating.voltage = get16(b + at); at += 2;
+  c.operating.currentMask = b[at++];
+  // Authorization flag is encoded in header reserved byte 14 for schema 2.
+  if (b[14] > 1) return false;
+  c.operating.voltageAuthorized = b[14];
+  c.operating.voltageMask = b[15];
+  for (auto& a : c.operating.current) { a = get16(b + at); at += 2; }
+  return validConfig(c);
+}
+void encode(const Configuration& c, uint8_t* b, uint32_t sequence) {
+  b[0] = 0xa5; b[1] = 2; put16(b + 2, MemoryManager::recordSize); put32(b + 4, sequence);
+  memcpy(b + 10, "R48C", 4); b[14] = c.operating.voltageAuthorized; b[15] = c.operating.voltageMask;
+  put32(b + 16, c.deploymentId); put16(b + 20, c.voltage); put16(b + 22, c.offlineVoltage);
+  put16(b + 24, c.pollMs); b[26] = c.count; b[27] = c.autoResume; uint16_t at = 29;
+  for (const auto& g : c.groups) {
+    memcpy(b + at, g.name, 8); b[at + 8] = g.members;
+    put16(b + at + 9, g.current); put16(b + at + 11, g.offlineCurrent); at += 13;
+  }
+  for (const auto& u : c.units) { memcpy(b + at, u.identity.bytes, 6); put16(b + at + 6, u.ratedCurrent); at += 8; }
+  put16(b + at, c.operating.voltage); at += 2; b[at++] = c.operating.currentMask;
+  for (auto a : c.operating.current) { put16(b + at, a); at += 2; }
+  put16(b + 8, crc(b, MemoryManager::recordSize));
+}
+bool decodeLegacy(const uint8_t* b, uint16_t size, LegacyConfiguration& c) {
+  if (size != 20 + 12 * PSU_MAX_UNITS || b[14] || b[15] || b[17] > 1) return false;
+  c = {}; c.count = b[16]; c.applyOnBoot = b[17]; c.pollMs = get16(b + 18);
+  if (!c.count || c.count > PSU_MAX_UNITS || c.pollMs < limits::minPollMs || c.pollMs > limits::maxPollMs) return false;
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
+    const auto* p = b + 20 + 12 * i; if (p[1] > 1) return false;
+    c.units[i] = {p[0], bool(p[1]), get16(p + 2), get16(p + 4), get16(p + 6), get16(p + 8), get16(p + 10)};
+    const auto& u = c.units[i];
+    if (!u.address || u.address > 127 || u.voltage < limits::minVoltage || u.voltage > limits::maxVoltage ||
+        u.offlineVoltage < limits::minOfflineVoltage || u.offlineVoltage > limits::maxVoltage ||
+        !allowedCurrent(u.current, u.ratedCurrent) || !allowedCurrent(u.offlineCurrent, u.ratedCurrent)) return false;
+    for (uint8_t j = 0; j < i && i < c.count; ++j) if (c.units[j].address == u.address) return false;
+  }
+  return true;
 }
 }
-bool MemoryManager::readRecord(uint8_t slot, Configuration& c, uint32_t& seq) const {
-  uint8_t b[recordSize];
+bool MemoryManager::readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uint32_t& sequence) const {
+  if (storage_.length() < budget) return false;
   const uint16_t base = slot * slotSize;
-  if (storage_.read(base) != committed) return false;
-  for (uint16_t i = 0; i < recordSize; ++i) b[i] = storage_.read(base + i);
-  if (b[1] != version || get16(b + 2) != recordSize || b[10] != 'R' || b[11] != '4' ||
-      b[12] != '8' || b[13] != 'C' || b[14] || b[15] || b[17] > 1 || crc(b) != get16(b + 8)) return false;
-  Configuration candidate = {};
-  candidate.count = b[16]; candidate.applyOnBoot = b[17]; candidate.pollMs = get16(b + 18);
-  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    const uint8_t* in = b + 20 + 12 * i;
-    if (in[1] > 1) return false;
-    candidate.units[i] = {in[0], bool(in[1]), get16(in + 2), get16(in + 4),
-                         get16(in + 6), get16(in + 8), get16(in + 10)};
+  for (uint8_t i = 0; i < 16; ++i) bytes[i] = storage_.read(base + i);
+  size = get16(bytes + 2); sequence = get32(bytes + 4);
+  if (bytes[0] != 0xa5 || (bytes[1] != 1 && bytes[1] != 2) || memcmp(bytes + 10, "R48C", 4) ||
+      size > slotSize || size < 20 || (bytes[1] == 2 && size != recordSize)) return false;
+  for (uint16_t i = 16; i < size; ++i) bytes[i] = storage_.read(base + i);
+  if (crc(bytes, size) != get16(bytes + 8)) return false;
+  if (bytes[1] == 2) { Configuration c; return decode(bytes, c); }
+  LegacyConfiguration old; return decodeLegacy(bytes, size, old);
+}
+StorageResult MemoryManager::load(Configuration& c) const {
+  if (storage_.length() < budget) return StorageResult::TooSmall;
+  uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
+  for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
+  if (slot < 0) return StorageResult::NoValidRecord;
+  readRecord(slot, b, size, seq);
+  if (b[1] == 2) {
+    Configuration next; decode(b, next); c = next;
+    return c.deploymentId == deployment::id ? StorageResult::Ok : StorageResult::WrongDeployment;
   }
-  if (!validConfig(candidate)) return false;
-  c = candidate; seq = get32(b + 4); return true;
+  LegacyConfiguration old; decodeLegacy(b, size, old);
+  // Preserve incompatible per-unit drafts in EEPROM for `legacy` inspection.
+  for (uint8_t i = 0; i < old.count; ++i) if (!old.units[i].enabled ||
+      old.units[i].voltage != old.units[0].voltage || old.units[i].offlineVoltage != old.units[0].offlineVoltage ||
+      old.units[i].current != old.units[0].current || old.units[i].offlineCurrent != old.units[0].offlineCurrent)
+    return StorageResult::LegacyNeedsReview;
+  Configuration next = defaultConfiguration(); next.count = old.count; next.pollMs = old.pollMs;
+  next.voltage = old.units[0].voltage; next.offlineVoltage = old.units[0].offlineVoltage;
+  strcpy(next.groups[0].name, "GROUP1"); next.groups[0].members = membersMask(old.count);
+  next.groups[0].current = old.units[0].current * old.count;
+  next.groups[0].offlineCurrent = old.units[0].offlineCurrent * old.count;
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) next.units[i].ratedCurrent = old.units[i].ratedCurrent;
+  if (!validConfig(next)) return StorageResult::LegacyNeedsReview;
+  c = next; return StorageResult::Migrated; // Unbound, unauthorized, auto-resume off.
 }
-StorageResult MemoryManager::load(Configuration& config) const {
-  if (storage_.length() < budget) return StorageResult::TooSmall;
-  Configuration candidate;
-  uint32_t first = 0, second = 0;
-  const bool a = readRecord(0, candidate, first);
-  if (a) config = candidate;
-  const bool b = readRecord(1, candidate, second);
-  if (b && (!a || newer(second, first))) config = candidate;
-  return a || b ? StorageResult::Ok : StorageResult::NoValidRecord;
+bool MemoryManager::legacy(LegacyConfiguration& c) const {
+  uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
+  for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && b[1] == 1 && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
+  if (slot < 0) return false;
+  readRecord(slot, b, size, seq); return decodeLegacy(b, size, c);
 }
-StorageResult MemoryManager::save(const Configuration& config) {
+StorageResult MemoryManager::save(const Configuration& c) {
   if (storage_.length() < budget) return StorageResult::TooSmall;
-  if (!validConfig(config)) return StorageResult::InvalidConfig;
-  Configuration existing;
-  uint32_t first = 0, second = 0;
-  const bool a = readRecord(0, existing, first);
-  const bool b = readRecord(1, existing, second);
-  const uint8_t newest = b && (!a || newer(second, first)) ? 1 : 0;
-  const uint8_t target = a || b ? 1 - newest : 0;
-  const uint32_t sequence = (a || b ? (newest ? second : first) : 0) + 1;
-  uint8_t bytes[recordSize] = {};
-  encode(config, bytes, sequence);
-  const uint16_t base = target * slotSize;
-  storage_.update(base, 0); // Invalidate only the older slot before changing its contents.
-  for (uint16_t i = 1; i < recordSize; ++i) storage_.update(base + i, bytes[i]);
-  storage_.update(base, committed);
-  uint32_t written = 0;
-  return readRecord(target, existing, written) && written == sequence
-      ? StorageResult::Ok : StorageResult::WriteFailed;
+  if (!validConfig(c)) return StorageResult::InvalidConfig;
+  if (c.deploymentId != deployment::id) return StorageResult::WrongDeployment;
+  uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
+  for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
+  const uint16_t base = slot < 0 ? 0 : uint16_t(1 - slot) * slotSize;
+  memset(b, 0, sizeof(b)); encode(c, b, slot < 0 ? 1 : best + 1);
+  storage_.update(base, 0);
+  for (uint16_t i = 1; i < recordSize; ++i) storage_.update(base + i, b[i]);
+  storage_.update(base, 0xa5);
+  return readRecord(base / slotSize, b, size, seq) && seq == (slot < 0 ? 1 : best + 1) ? StorageResult::Ok : StorageResult::WriteFailed;
 }
 }

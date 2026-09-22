@@ -8,7 +8,7 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 sources = [
     "src/config/ChargerConfig.cpp", "src/protocol/HuaweiProtocol.cpp",
-    "src/psu/Psu.cpp", "src/psu/PsuController.cpp",
+    "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp",
     "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "test/test_main.cpp",
 ]
 with tempfile.TemporaryDirectory(prefix="r4850-tests-") as directory:

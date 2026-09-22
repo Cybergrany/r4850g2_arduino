@@ -1,70 +1,110 @@
 #pragma once
-#include "Psu.h"
-
+#include "Discovery.h"
 namespace psu {
-enum class Result : uint8_t { Ok, Invalid, Busy, Disabled, TransportError };
-enum class ApplyMode : uint8_t { Online, Offline, OnlineAndOffline };
-
+enum class Result : uint8_t { Ok, Invalid, Busy, TransportError, Blocked, ConfirmRequired, Changed };
+enum class Issue : uint8_t {
+  None, Missing, Unbound, Unassigned, IdentityPending, Conflict, NoTelemetry,
+  NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity
+};
+enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
+struct ApplyPlan {
+  Operation operation;
+  int8_t group;
+  uint8_t members, recipients, missing;
+  uint16_t voltage, current[PSU_MAX_UNITS];
+  uint8_t addresses[PSU_MAX_UNITS];
+  uint32_t epochs[PSU_MAX_UNITS];
+  Issue issues[PSU_MAX_UNITS], blocker;
+  uint32_t configurationRevision, topologyRevision, created;
+  bool partial;
+};
+struct OperationReport {
+  Operation operation;
+  uint8_t requested, recipients, succeeded, failed, skipped;
+  bool active;
+  CommandStatus units[PSU_MAX_UNITS];
+};
+struct GroupStatus {
+  uint8_t members, responding, ready, missing;
+  uint16_t requestedCurrent, authorizedCurrent;
+};
+struct BusStatus { uint8_t configured, responding, verified, broadcasting; };
+struct CurrentCheck {
+  Issue issue;
+  uint8_t slot;
+  uint16_t share, maximum;
+};
 class PsuController {
  public:
   explicit PsuController(CanTransport& transport);
   bool begin();
   void tick(uint32_t now);
-  uint8_t count() const { return count_; }
-  const Psu& unit(uint8_t index) const { return units_[index]; } // index < count()
+  const Configuration& configuration() const { return config_; }
+  Result configure(const Configuration& config, bool resumeSaved = false);
+  Result setCount(uint8_t count);
+  Result setGroup(const char* name, uint8_t members);
+  Result removeGroup(uint8_t group);
+  Result bind(uint8_t slot, const Identity& identity, uint16_t ratedCurrent, uint32_t now);
+  // Also permits releasing a retained inactive slot. This does not turn off a PSU.
+  Result unbind(uint8_t slot);
+  Result setVoltage(uint16_t voltage, bool offline = false);
+  Result setCurrent(uint8_t group, uint16_t total, bool offline = false);
+  CurrentCheck checkCurrent(uint8_t group, uint16_t total) const;
+  Result setAutoResume(bool enabled);
+  Result setPollInterval(uint16_t ms);
+  int8_t groupIndex(const char* name) const;
+  const Psu* deviceForSlot(uint8_t slot, uint32_t now) const;
+  Issue issue(uint8_t slot, uint32_t now) const;
+  GroupStatus groupStatus(uint8_t group, uint32_t now) const;
+  BusStatus busStatus(uint32_t now) const;
+  // Returns last measurement, not a freshness guarantee. CurrentCapacity uses
+  // the commissioned rating; efficiency remains a fraction (multiply by 100 for %).
+  bool metric(uint8_t slot, protocol::Metric metric, float& value, uint32_t now) const;
+  ApplyPlan preview(Operation operation, int8_t group, uint32_t now, bool partial = false) const;
+  // Plan expiry + config/topology checks apply to every queue, including confirmations.
+  Result queue(const ApplyPlan& plan, bool confirmed, uint32_t now);
+  const OperationReport& report() const { return report_; }
+  bool voltageSynchronized(uint8_t slot) const { return slot < count() && (voltageSynced_ & (1U << slot)); }
+  const Discovery& discovery() const { return discovery_; }
+  bool busy() const { return report_.active; }
   bool ready() const { return ready_; }
-  bool busy() const { return jobMask_ != 0; }
-  uint16_t pollInterval() const { return pollMs_; }
-  bool applyOnBoot() const { return applyOnBoot_; }
+  uint8_t count() const { return config_.count; }
+  uint16_t pollInterval() const { return config_.pollMs; }
+  uint32_t staleMs() const { return uint32_t(config_.pollMs) * 3 < limits::minimumStaleMs ? limits::minimumStaleMs : uint32_t(config_.pollMs) * 3; }
   uint16_t txFailures() const { return txFailures_; }
   uint8_t droppedFrames() const { return transport_.droppedFrames(); }
-  uint32_t unknownFrames() const { return unknownFrames_; }
-
-  // Stage validated settings in RAM. No CAN writes and no EEPROM writes.
-  // Ranges are zero-based [first, end); ALL targets validate before any change.
-  Result modifySingle(uint8_t index, Parameter parameter, float value);
-  Result modifyRange(uint8_t first, uint8_t end, Parameter parameter, float value);
-  Result setCount(uint8_t count);
-  Result setPollInterval(uint16_t milliseconds);
-  Result setApplyOnBoot(bool apply);
-  Configuration configuration() const;
-  Result configure(const Configuration& config);
-
-  // Queue addressed writes. "Ok" means queued, not accepted by the PSU.
-  // One command is outstanding at a time; per-PSU status records ACK/error/timeout.
-  // Disabled slots are skipped. Bus writes cannot be atomic across several PSUs.
-  Result applySingle(uint8_t index, ApplyMode mode = ApplyMode::Online);
-  Result applyRange(uint8_t first, uint8_t end, ApplyMode mode = ApplyMode::Online);
-  Result requestData(uint8_t first, uint8_t end);
-  Result requestDescription(uint8_t index);
-  Result resetAmpHours(uint8_t first, uint8_t end);
-
+  // A sweep probes 1..127 with INFO requests; no broadcast/configuration writes.
+  void scan() { scanAddress_ = 1; }
+  uint8_t scanning() const { return scanAddress_; }
+  Result requestDescription(uint8_t address);
+  Result requestPoll(uint8_t mask, uint32_t now);
+  void resetAmpHours();
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
-  // Called in main-loop context only. index == -1 means unconfigured/unknown PSU.
-  void observeFrames(FrameObserver observer, void* context);
+  void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
-  bool validRange(uint8_t first, uint8_t end) const;
+  Result change(const Configuration& candidate, uint8_t invalidate = 0);
   bool send(const CanFrame& frame);
   void receive(const CanFrame& frame, uint32_t now);
-  void finishUnit();
+  void advance(bool success);
+  void beginReport(Operation operation, uint8_t requested, uint8_t recipients, uint8_t skipped = 0);
+  void runJob(uint32_t now);
+  void restore(uint32_t now);
   CanTransport& transport_;
-  Psu units_[PSU_MAX_UNITS];
-  uint8_t count_ = 1;
-  uint16_t pollMs_ = limits::defaultPollMs;
-  bool applyOnBoot_ = false;
-  bool ready_ = false;
-  uint8_t pollIndex_ = 0;
-  uint32_t lastPoll_ = 0;
-  uint32_t lastCommand_ = 0;
-  uint16_t txFailures_ = 0;
-  uint32_t unknownFrames_ = 0;
-  uint8_t jobMask_ = 0;
-  uint8_t jobIndex_ = 0;
-  uint8_t phase_ = 0;
-  bool waiting_ = false;
-  ApplyMode mode_ = ApplyMode::Online;
-  uint16_t expected_ = 0;
+  Configuration config_;
+  Discovery discovery_;
+  uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;
+  uint32_t observedEpoch_[PSU_MAX_UNITS] = {};
+  uint8_t voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
+  uint8_t scanAddress_ = 1, probeIndex_ = 0;
+  bool probeTurn_ = false;
+  bool ready_ = false, waiting_ = false, secondPhase_ = false;
+  bool voltageCommissioned_ = false, verifying_ = false, identityChecked_ = false;
+  uint32_t verificationStarted_ = 0;
+  uint8_t pending_ = 0, jobSlot_ = 0;
+  uint16_t expected_ = 0, txFailures_ = 0;
+  ApplyPlan job_ = {};
+  OperationReport report_ = {};
   FrameObserver observer_ = nullptr;
-  void* observerContext_ = nullptr;
+  void* context_ = nullptr;
 };
 }

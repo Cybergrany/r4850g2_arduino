@@ -15,7 +15,7 @@ bandwidth and can increase CAN receive drops.
 | Close/reopen monitor without MCU reset | Same controller state; raw/watch may still be enabled until Ctrl-X or `hello` |
 | USB disconnect with independent board power | Controller keeps running; console cannot detect this event |
 | USB unplug when USB is the only power | Board powers off; reconnect is a new boot |
-| DTR reset or power cycle | RAM/telemetry/unfinished jobs reset; EEPROM/defaults load, saved `bootapply` policy runs |
+| DTR reset or power cycle | RAM/telemetry/unfinished jobs reset; EEPROM/defaults load, saved `autoresume` policy waits for verified, ready members |
 
 Arduino documents the Mega's [USB DTR to reset connection](https://store.arduino.cc/products/arduino-mega-2560-rev3).
 A terminal opening the port can therefore cause a real MCU reset, not just a
@@ -31,10 +31,10 @@ controller configuration; it does not by itself enable applying it to PSUs on bo
 
 1. Open the project monitor at 115200 baud with terminal local echo disabled.
 2. Press **Ctrl-X** before sending Enter or a command. This sends byte `0x18`,
-   clears partial/invalid input, stops raw/watch/reports and description streaming,
+   clears partial/invalid input, stops raw/watch/reports and description streaming, cancels an unsubmitted partial-apply confirmation,
    restores firmware echo, and prints a prompt. It does not cancel PSU jobs or
    change settings. Do not submit an old partial command by pressing Enter first.
-3. Type `hello` for a greeting or `config all` / `status all` to inspect state.
+3. Type `hello` for a greeting or `config` / `status all` to inspect state.
 
 `hello` also resets console preferences, but requires a clean command boundary;
 it cannot recover an unknown partial prefix by itself. Ctrl-C (`0x03`) has the
@@ -83,7 +83,7 @@ input, abandoned commands, timeout rollover, background output, and active PSU
 jobs. They do not emulate the USB bridge, OS port events, power loss, or DTR.
 
 - Boot on independent power with USB absent, then attach/open the monitor.
-  Recover with Ctrl-X; check `config all`, `status all`, and continued polling.
+  Recover with Ctrl-X; check `config`, `status all`, and continued polling.
 - Enable `watch on` / `raw on`, close/reopen the monitor, and use Ctrl-X again.
   Check for a startup banner to distinguish a reset from a surviving session.
 - Type `config` without Enter, reconnect both before and after 30 seconds,
@@ -93,3 +93,6 @@ jobs. They do not emulate the USB bridge, OS port events, power loss, or DTR.
   interrupts the job and follows saved boot policy, so inspect actual PSU state.
 - Unplug/replug USB once with independent power and once with USB-only power.
   Confirm the expected runtime-versus-new-boot behaviour in the table above.
+
+Group commissioning, discovery, apply confirmation, and persistence are covered
+in [the serial group guide](GETTING_STARTED.md).

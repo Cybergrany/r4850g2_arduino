@@ -4,47 +4,48 @@
 
 namespace psu {
 namespace limits {
-// Centivolts / centiamps keep settings exact and EEPROM records compact.
-constexpr uint16_t minVoltage = 4150;
-constexpr uint16_t maxVoltage = 5850;
-constexpr uint16_t minOfflineVoltage = 4800;
-constexpr uint16_t maxCurrent = 6000;
-constexpr uint16_t defaultVoltage = 5520;
-constexpr uint16_t defaultCurrent = 100;
-constexpr uint16_t defaultRatedCurrent = 5000; // R4850G2 = 50 A
-constexpr uint16_t defaultPollMs = 1000;
-constexpr uint16_t minPollMs = 1000;
-constexpr uint16_t maxPollMs = 10000;
-constexpr uint16_t ackTimeoutMs = 750;
-constexpr uint16_t commandGapMs = 250;
-constexpr uint16_t staleMs = 5000;
+constexpr uint16_t minVoltage = 4150, maxVoltage = 5850, minOfflineVoltage = 4800;
+constexpr uint16_t maxCurrent = 6000, defaultRatedCurrent = 5000;
+constexpr uint16_t minPollMs = 1000, maxPollMs = 10000;
+constexpr uint16_t commandGapMs = 250, ackTimeoutMs = 750;
+constexpr uint8_t maxGroups = 8, groupNameLength = 8;
+constexpr uint32_t minimumStaleMs = 5000;
+constexpr uint32_t identityLeaseMs = 15000, confirmationMs = 15000;
+constexpr uint16_t discoveryGapMs = 100, identityRefreshMs = 3000;
 }
-
-struct PsuConfig {
-  uint8_t address; // Huawei software address 1..127. 0 is broadcast, never a PSU.
-  bool enabled;
+struct Identity { uint8_t bytes[6]; };
+bool identified(const Identity& id);
+bool sameIdentity(const Identity& a, const Identity& b);
+struct UnitConfig { Identity identity; uint16_t ratedCurrent; };
+struct GroupConfig {
+  char name[limits::groupNameLength + 1];
+  uint8_t members; // Stable, global controller slots. Groups never overlap.
+  uint16_t current, offlineCurrent; // TOTAL group centiamps, split on staging.
+};
+// Separate from drafts: only an explicitly queued online apply authorizes these.
+struct OperatingProfile {
   uint16_t voltage;
-  uint16_t current;
-  uint16_t offlineVoltage;
-  uint16_t offlineCurrent;
-  uint16_t ratedCurrent;
+  uint16_t current[PSU_MAX_UNITS];
+  uint8_t currentMask, voltageMask;
+  bool voltageAuthorized;
 };
-
 struct Configuration {
+  uint32_t deploymentId;
+  uint16_t voltage, offlineVoltage, pollMs;
   uint8_t count;
-  bool applyOnBoot;
-  uint16_t pollMs;
-  PsuConfig units[PSU_MAX_UNITS];
+  bool autoResume;
+  UnitConfig units[PSU_MAX_UNITS];
+  GroupConfig groups[limits::maxGroups];
+  OperatingProfile operating;
 };
-
-enum class Parameter : uint8_t {
-  Voltage, Current, OfflineVoltage, OfflineCurrent, RatedCurrent, Address, Enabled
-};
-
-PsuConfig defaultPsuConfig(uint8_t index);
 Configuration defaultConfiguration();
-bool validConfig(const PsuConfig& config);
 bool validConfig(const Configuration& config);
-// Values are in V / A; Address and Enabled are integer-valued.
-bool changeParameter(PsuConfig& config, Parameter parameter, float value);
+bool groupName(const char* name);
+bool sameName(const char* a, const char* b);
+uint8_t membersMask(uint8_t count);
+uint8_t population(uint8_t mask);
+int8_t groupFor(const Configuration& config, uint8_t slot);
+// Deterministic rounding: the first remainder members receive one extra centiamp.
+uint16_t allocation(const GroupConfig& group, uint8_t slot, bool offline = false);
+bool allowedCurrent(uint16_t current, uint16_t rating);
 }

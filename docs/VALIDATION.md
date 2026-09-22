@@ -1,9 +1,7 @@
 # Validation
 
-Build target: Arduino Mega 2560. Fork base `143f197`; reference comparison
-`6d8ff660`. No upload or live hardware exercise was performed.
-
-Commands run from the repository with PlatformIO Core 6.1.18:
+Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend validation was
+performed on 2026-09-22. No firmware upload or physical multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
@@ -13,94 +11,105 @@ PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
 git diff --check
 ```
 
-The absolute `PLATFORMIO_CORE_DIR` only isolates this workspace's downloaded
-packages. On another machine, omit it or choose your own writable cache.
+The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
+omit it or choose another writable cache. All five profiles build successfully
+with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
+7.3.0, CAN 0.3.1, SSD1306Ascii 1.3.5, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
+A clean build retains ClickEncoder's existing constructor member-order warnings.
 
-All five builds passed with Atmel AVR platform 5.3.0, Arduino AVR framework
-5.4.0, AVR GCC 7.3.0, CAN 0.3.1, SSD1306Ascii 1.3.5,
-ClickEncoder d6d5738fdf, and TimerOne 1.2.0. The only third-party compile warnings
-observed were ClickEncoder's existing constructor member-order warnings.
-
-Build sizes against the Mega's 8192 bytes of RAM and 253952 bytes of application flash:
-
-| Profile | Static RAM (bytes) | Flash (bytes) |
+| Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 2194 | 34452 |
-| `mega2560_serial` | 1900 | 26682 |
-| `mega2560_display` | 2169 | 32198 |
-| `mega2560_local` | 1676 | 23398 |
-| `mega2560_minimal` | 1352 | 13026 |
+| `mega2560` | 3601 | 53944 |
+| `mega2560_serial` | 3307 | 47218 |
+| `mega2560_display` | 3576 | 52490 |
+| `mega2560_local` | 2891 | 27448 |
+| `mega2560_minimal` | 2559 | 19536 |
 
-Build reports measure static RAM, not worst-case stack or interrupt nesting. The two EEPROM journal
-slots reserve 512 bytes and occupy 116 bytes each with eight configured-capacity
-slots, regardless of the current active count.
+Static RAM excludes worst-case stack/interrupt nesting. EEPROM reserves only
+512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
 
-## Host checks
+## Host coverage
 
-The host suite compiles the actual C++ configuration, protocol, PSU controller,
-memory manager, serial console, and MCP2515 transmit algorithm. Hardware I/O
-is simulated, including MCP2515 registers and time. It runs
-with `-Wall -Wextra -Werror` and AddressSanitizer/UndefinedBehaviorSanitizer.
-LeakSanitizer is disabled because it cannot operate under the execution sandbox's
-ptrace mechanism; address and undefined-behaviour checks remain enabled.
+The tests compile production configuration, protocol, discovery, controller,
+EEPROM, serial parser, and MCP2515 transmit code with simulated hardware/time.
+Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
+UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
+address and undefined-behaviour checks remain enabled.
 
-Covered behaviours:
+The suite passes. Its assertion total is dominated by checking every EEPROM
+access and interruption boundary, not hundreds of thousands of independent cases.
+Meaningful scenarios include:
 
-- Exact CAN IDs and payloads, including addresses 1, 2, and 127; data-frame
-  requests; correct voltage and rated-current scaling.
-- Interleaved telemetry for different PSUs; independent current scaling;
-  signed temperature; separate fast/filtered current; invalid frames ignored.
-- Finite numeric validation; voltage/current limits; unique addresses;
-  atomic validation of RAM edits across heterogeneous PSU configurations.
-- Single and range apply; skipped disabled slots; one outstanding setting;
-  wrong-address/wrong-value ACKs; rejection; timeout; transmit failure;
-  `millis()` rollover; failed CAN initialization with config still editable.
-- Online + offline command ordering and distinct stored setpoints.
-- Every EEPROM update interruption point for both a first save and an
-  overwrite of the older slot after two valid saves: 118 boundaries for each.
-- Corrupted newest-record fallback; incompatible schema; readback failure;
-  invalid configuration rejection; capacity below 512 bytes; address bounds.
-- MCP2515 transmit completion, arbitration followed by success, errors, aborted
-  frames, missing completion, permanently busy TXREQ (including ignored abort),
-  clock rollover, preservation of RX flags, and rejection of invalid frames.
-- Serial echo on/off, visual backspace/DEL, tabs, empty Enter prompt, CRLF split
-  across ticks, bounded input draining, and recovery after an overlong line.
-- Serial commands with LF/CRLF, backspace, partial lines, inclusive ranges,
-  malformed/NaN/infinite/overflowing numbers, overlong lines and surplus tokens.
-- Controller save/load/defaults versus PSU writes; apply-in-progress edits
-  rejected; polling continues while waiting for a serial newline.
-- Description continuation and final fragments; decoded current and OVP ACK values.
-- No terminal observing UART output at boot or during polling/apply; subsequent
-  hello/reset handshake; console reset preserves staged config, EEPROM, and jobs.
-- Ctrl-X/C/U recovery from partial, invalid, and overlong input; CRLF after hello;
-  input idle timeout before consuming queued bytes, including clock rollover.
-- Prompt/input restoration around raw frames and ACKs; device description control
-  bytes sanitized. USB/DTR/power events require the [serial bench checks](SERIAL.md).
+- Exact telemetry/INFO/setting IDs and payloads; malformed frames; rated-current
+  conversion, signed temperatures, efficiency, available current, and Ah.
+- Identity corroboration, invalid identity, collisions, stale addresses,
+  address relocation, unbound devices, registry capacity, and ready/not-ready.
+- Disjoint group membership, equal shares and rounding, configured capacity
+  rejection without clamping, and staged-versus-authorized voltage/current.
+- Two- and eight-unit applies; global voltage before current; explicit offline
+  defaults; per-write identity probe timeout and replacement detection.
+- Wrong register/address/value ACKs, rejection, transport failure, timeout,
+  partial physical success, loss between voltage ACKs and current phase, recovery
+  after a loss during an apply, and retained error states across other group jobs.
+- Missing-member block without writes; explicit partial confirmation; original
+  shares; confirmation expiry and config/topology changes; unoverrideable faults.
+- Known-identity recovery to a different address using authorized settings,
+  never later drafts; boot auto-resume off/on; load-only staging; wrong deployment;
+  membership changes never triggering automatic redistribution; rebinding and
+  saving never granting the replacement the old unit's boot authorization.
+- Independent identity/data scheduling at long poll intervals; wrap-safe
+  freshness; no repeated fault-clearing writes while readiness remains unchanged.
+- Every EEPROM update interruption on initial and third save, and first schema-2
+  migration save; fallback from corrupted latest record; readback failure;
+  wrong deployment; invalid config; too-small storage; all accesses within 512 bytes.
+- All eight groups/identities/ratings, draft and operating values round-trip;
+  uniform legacy migration with identity/auto-resume disabled; mixed legacy
+  preservation and inspection without silent rewriting.
+- Serial group commissioning and commands; decoded diagnostics; malformed
+  numbers; capacity explanations; partial-apply warning, confirmation and Ctrl-X
+  cancellation; current/OVP ACKs and final E-Label fragment.
+- Character echo/backspace/DEL, CRLF split across ticks, tabs, overflow draining,
+  reconnect without output observation, idle timeout before consuming new bytes,
+  timeout rollover, raw-output prompt redraw, and active jobs surviving console reset.
+- MCP2515 success/arbitration/errors/abort/no completion/stuck TXREQ, bounded
+  timeout, rollover, preserved RX flags, and invalid frame rejection.
 
-## Bench checks before deployment
+## Physical bench checks still required
 
-1. Confirm Mega SPI and I2C wiring and the MCP2515 crystal setting. Build the
-   serial-only profile first if the display/encoder are absent. Verify `CAN ready`
-   and the subsequent `Startup complete` message and `> ` prompt. With no PSU
-   connected, confirm that `help` and `config all` still respond after several
-   polling intervals. Repeat on the full build with the display absent; exercise
-   a stuck I2C bus separately to verify the Wire timeout on physical hardware.
-2. With one PSU, inspect `status 1` and `raw on`. Confirm telemetry and current
-   scaling against a meter/load. Use a modest intended setpoint and check both
-   voltage and current ACKs, then measured output.
-3. Attach the additional PSUs and inspect their addresses. Map the configured
-   slots, vary one slot's setpoint, and verify only that physical unit responds.
-   Repeat after different startup orders before relying on independent settings.
-4. Exercise `apply 1-2` and inspect every slot's status. Check that a disconnected
-   or rejecting unit does not report success or prevent the next unit's attempt.
-5. Save/load controller config, reboot, and confirm that `bootapply 0` restores
-   settings without issuing setpoint writes. Then exercise the explicit boot-apply
-   option if needed for the installation.
-6. Test `offline`/`persist` separately and check actual PSU behaviour after loss
-   of CAN traffic and a PSU power cycle. Confirm each unit's accepted limits.
-7. Exercise the display/menu and incomplete serial lines during polling, then
-   inspect receive-drop counters under the intended bus load. Check raw tracing
-   and EEPROM saves separately because they can increase processing latency.
-8. If power-loss recovery is required in service, test physical EEPROM saves
-   under controlled power interruption with the board's brownout configuration.
-   The simulated journal tests do not model analogue brownout corruption.
+Use [the serial commissioning guide](GETTING_STARTED.md) for the actual command
+sequence. Run initial communication checks without a battery/load; introduce
+power tests only after commissioning appropriate limits and defaults.
+
+1. Boot without USB, reconnect, and exercise the [serial lifecycle checks](SERIAL.md).
+   Verify input works with CAN disconnected and with optional display absent.
+   Check CS/INT/SPI, module crystal and termination if transmit errors rise.
+2. With every intended PSU powered, inspect `diag bus`, `diag group NAME` and
+   `raw on` briefly. Verify distinct stable identities, data replies, unsolicited
+   broadcasts, correct ready-byte interpretation and no growing receive drops.
+3. Label physical units and source groups. Confirm identity mapping individually,
+   then repeat different power-up orders and address changes. A known identity
+   must stay bound to its intended slot/group; an unknown replacement must not
+   receive a setting before explicit adoption.
+4. Apply modest selected limits and check ACKs plus a meter/load. Validate current
+   scaling and actual source-group loading under parallel operation. A successful
+   command or telemetry frame alone does not prove electrical behaviour.
+5. Remove CAN from a member during preview, identity guard, and setting ACK wait.
+   Inspect blocking/results, existing outputs, and the explicit partial workflow.
+   Restore it at a changed address; verify the authorized profile returns without
+   applying subsequently saved drafts or redistributing peers' current.
+6. Test a not-ready unit and a rejecting unit. Check bounded attempts and clear
+   errors, then recovery after a genuine readiness transition. Check that a
+   partly failed global voltage apply prevents group-current changes until fixed.
+7. Save profiles with auto-resume off/on, reboot with all/missing/replacement units,
+   and observe actual write traffic. Test wrong deployment ID and legacy review
+   before relying on stored profiles. Do not overwrite the only legacy copy
+   before exporting it if it must be retained.
+8. Set PSU offline defaults explicitly. Test controller/CAN loss and PSU power
+   cycling, including the interval before discovery can verify a returning unit.
+   Confirm hardware fallback is compatible with the common parallel bus.
+9. Observe RX drops with all units, raw/watch output, EEPROM save, and optional
+   display/wheel activity. Simulated tests do not validate real arbitration,
+   UART/USB buffering, I2C faults, interrupt latency or worst-case loop load.
+10. Where required, test EEPROM power interruption under the board's actual
+    brownout configuration. The software journal tests do not model analogue
+    brownout corruption or provide an electrical interlock.
