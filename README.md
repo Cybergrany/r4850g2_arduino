@@ -57,7 +57,9 @@ Type `help`; commands are lowercase. Firmware echoes characters by default;
 leave terminal local echo disabled, or use `echo off` if your terminal handles it.
 Pressing Enter on an empty line prints a fresh prompt. A terminal's
 `send_on_enter` filter buffers typing locally, so firmware echo then appears
-only after Enter.
+only after Enter. After reconnecting, press **Ctrl-X** to discard any old input
+and stop streaming, then type `hello` or `help`. Ctrl-X resets only the console;
+PSU settings and queued jobs continue. See [serial lifecycle and reconnect checks](docs/SERIAL.md).
 Slots are 1-based and do not have to equal their configured CAN addresses.
 Start with the actual address mapping of your units.
 
@@ -87,6 +89,7 @@ polling for that slot; it does not switch the PSU's output off.
 
 | Command | Effect |
 | --- | --- |
+| `hello` | Quiet console greeting; restore echo and stop raw/watch/report output |
 | `help` | Interactive command reference |
 | `config [target]` | Staged settings; target defaults to all |
 | `status [target]` | Telemetry, approximate session Ah, link state, command outcome, error counters |
@@ -116,7 +119,10 @@ Targets are a slot (`2`), inclusive range (`2-4`), or `all`.
 Serial editing supports backspace; overlong or malformed lines are rejected
 without executing a truncated command. The console drains up to 32 input bytes
 per loop; polling continues while input is incomplete. Use `watch off` and
-`raw off` for a quiet interactive session.
+`raw off` for a quiet interactive session. **Ctrl-U** clears the current line.
+Unsubmitted input expires after 30 seconds idle; the remainder is discarded
+through Enter, or **Ctrl-X** immediately starts a fresh console session.
+Timeout and input budget live in `src/config/ConsoleConfig.h`.
 
 For a controller-only check, upload `mega2560_serial`, open the monitor, and
 try `help` and `config all`. These work without a PSU or battery attached.

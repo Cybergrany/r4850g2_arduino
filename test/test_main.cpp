@@ -1,4 +1,5 @@
 #include "config/ChargerConfig.h"
+#include "config/ConsoleConfig.h"
 #include "can/Mcp2515Transmit.h"
 #include "psu/PsuController.h"
 #include "storage/MemoryManager.h"
@@ -54,7 +55,8 @@ struct FakeEeprom : ByteStorage {
 struct FakeSerial : Stream {
   std::deque<char> input;
   std::string output;
-  size_t write(uint8_t b) override { output.push_back(char(b)); return 1; }
+  bool observing = true; // UART still transmits with no terminal to capture it.
+  size_t write(uint8_t b) override { if (observing) output.push_back(char(b)); return 1; }
   int available() override { return input.size(); }
   int read() override { if (input.empty()) return -1; char c = input.front(); input.pop_front(); return uint8_t(c); }
   void feed(const std::string& s) { input.insert(input.end(), s.begin(), s.end()); }
@@ -404,6 +406,106 @@ void serialWorkflow() {
   CHECK(io.output.find("Targets:") != std::string::npos);
   CHECK(io.output.find("save / load") != std::string::npos);
 }
+void serialSessionLifecycle() {
+  FakeCan can; PsuController c(can); CHECK(c.begin());
+  FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io;
+  io.observing = false;
+  SerialConsole terminal(io, c, memory);
+  terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
+  // Boot with no terminal, then run through repeated polls without incoming input.
+  for (uint32_t now = 0; now <= 5000; now += 100) { terminal.tick(now); c.tick(now); }
+  CHECK(io.output.empty() && can.sent.size() >= 5);
+  CHECK(can.writes().empty() && !c.applyOnBoot());
+  uint32_t now = 5001;
+  auto input = [&](const std::string& text) {
+    io.output.clear(); io.feed(text);
+    do { terminal.tick(now++); } while (io.available());
+  };
+  io.observing = true;
+  input("hello\r\n");
+  CHECK(io.output == "hello\r\nR4850 console ready; help for commands; Ctrl-X resets console\r\n> ");
+  CHECK(can.writes().empty());
+  input("set 1 voltage 54\n");
+  const auto saved = bytes.bytes;
+  input("raw on\nwatch on\n");
+  input("apply 1"); // Fully formed but unsubmitted command abandoned by client.
+  io.observing = false;
+  now += console::inputIdleTimeoutMs;
+  terminal.tick(now); c.tick(now);
+  io.observing = true;
+  input("\n"); CHECK(io.output.find("discarded") != std::string::npos);
+  CHECK(!c.busy() && can.writes().empty());
+  // Reset also works on a quick reconnect before the idle timeout.
+  input("apply 1"); input("\x18\r\n");
+  CHECK(!c.busy() && can.writes().empty());
+  CHECK(io.output.find("Console reset;") != std::string::npos);
+  CHECK(c.unit(0).config().voltage == 5400 && bytes.bytes == saved);
+  io.output.clear(); can.incoming.push_back(data(1, 0x75, 55296)); c.tick(now);
+  terminal.tick(now + 1000); CHECK(io.output.empty()); // raw/watch stopped.
+  close(c.unit(0).metric(protocol::OutputVoltage), 54);
+  // Ctrl-U recovers an invalid line; Ctrl-C recovers an overlong one.
+  input(std::string("apply 1") + char(1)); input("\x15" "config 1\n");
+  CHECK(!c.busy()); CHECK(io.output.find("PSU 1 addr=") != std::string::npos);
+  input(std::string(100, 'x')); input("\x03");
+  CHECK(io.output.find("Console reset;") != std::string::npos);
+  input("set 1 current 3\n"); CHECK(c.unit(0).config().current == 300);
+  // Console reset must not cancel or alter an already queued PSU job.
+  input("apply 1\n"); CHECK(c.busy()); input("\x18"); CHECK(c.busy());
+  io.observing = false;
+  c.tick(now + 1000); CHECK(can.writes().size() == 1);
+  can.incoming.push_back(ack(can.writes().back())); c.tick(now + 1001);
+  c.tick(now + 1300); CHECK(can.writes().size() == 2);
+  can.incoming.push_back(ack(can.writes().back())); c.tick(now + 1301);
+  CHECK(!c.busy() && c.unit(0).commandStatus().state == CommandState::Success);
+  io.observing = true;
+  input("hello\n"); CHECK(io.output.find("R4850 console ready;") != std::string::npos);
+  CHECK(c.unit(0).config().current == 300 && bytes.bytes == saved);
+  // A genuine MCU reboot restores EEPROM/defaults, not an old console session.
+  FakeCan rebootCan; PsuController rebootController(rebootCan); CHECK(rebootController.begin());
+  FakeSerial rebootIo; SerialConsole reboot(rebootIo, rebootController, memory);
+  reboot.begin(StorageResult::NoValidRecord); reboot.finishStartup();
+  rebootIo.output.clear(); rebootIo.feed("\n"); reboot.tick(0);
+  CHECK(rebootIo.output == "\r\n> "); CHECK(rebootCan.writes().empty());
+}
+void serialIdleAndBackgroundOutput() {
+  for (uint32_t start : {0U, 0xfffffff0U}) {
+    FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes;
+    MemoryManager memory(bytes); FakeSerial io; SerialConsole terminal(io, c, memory);
+    terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
+    io.feed("apply 1"); terminal.tick(start);
+    // New bytes are already waiting when the timeout is first serviced.
+    io.feed("\r\n"); terminal.tick(start + console::inputIdleTimeoutMs);
+    CHECK(!c.busy() && can.writes().empty());
+    CHECK(io.output.find("Input expired;") != std::string::npos);
+    io.output.clear(); terminal.tick(start + console::inputIdleTimeoutMs + 1);
+    CHECK(io.output.empty()); // No repeated warnings or CRLF duplicate prompt.
+    io.feed("count 2\n"); terminal.tick(start + console::inputIdleTimeoutMs + 2);
+    CHECK(c.count() == 2);
+    io.feed("count 3"); terminal.tick(start + console::inputIdleTimeoutMs + 3);
+    io.feed("\n"); terminal.tick(start + 2 * console::inputIdleTimeoutMs + 2);
+    CHECK(c.count() == 3); // A pause shorter than the timeout remains editable.
+  }
+  FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes;
+  MemoryManager memory(bytes); FakeSerial io; SerialConsole terminal(io, c, memory);
+  terminal.begin(StorageResult::NoValidRecord); terminal.finishStartup();
+  io.feed("raw on\n"); terminal.tick(0);
+  io.feed("set 1 current 4"); terminal.tick(1); io.output.clear();
+  can.incoming.push_back(data(1, 0x75, 55296)); c.tick(2);
+  CHECK(io.output.find("\r\n1081407F ") == 0);
+  CHECK(io.output.substr(io.output.size() - 17) == "> set 1 current 4");
+  io.output.clear(); can.incoming.push_back(ack(protocol::setting(1, 3, 512))); c.tick(3);
+  CHECK(io.output.find("\r\nACK 1 reg=3 accepted 25.00A\r\n") == 0);
+  io.feed("\b3\n"); terminal.tick(4); CHECK(c.unit(0).config().current == 300);
+  io.feed("hello\n"); terminal.tick(5); io.output.clear();
+  can.incoming.push_back(data(1, 0x75, 55296)); c.tick(6); CHECK(io.output.empty());
+  // Untrusted device description characters cannot move the terminal cursor.
+  io.feed("describe 1\n"); terminal.tick(7); io.output.clear();
+  auto description = protocol::request(1, protocol::descriptionCommand); description.id = 0x1081d27e;
+  description.data[2] = 'A'; description.data[3] = 27; description.data[4] = '\r';
+  description.data[5] = 0; description.data[6] = 'B'; description.data[7] = 127;
+  can.incoming.push_back(description); c.tick(8);
+  CHECK(io.output == "\r\nA??B?\r\n> ");
+}
 void descriptionAndAckOutput() {
   FakeCan can; PsuController c(can); CHECK(c.begin()); FakeEeprom bytes; MemoryManager m(bytes);
   FakeSerial io; SerialConsole console(io, c, m); console.begin(StorageResult::NoValidRecord);
@@ -414,7 +516,7 @@ void descriptionAndAckOutput() {
   auto last = first; last.id = 0x1081d27e; text = "R4850!";
   for (int i = 0; i < 6; ++i) last.data[2 + i] = text[i];
   io.output.clear(); can.incoming.push_back(first); can.incoming.push_back(last); c.tick(1);
-  CHECK(io.output == "HuaweiR4850!\r\n");
+  CHECK(io.output == "\r\nHuaweiR4850!\r\n> ");
   can.incoming.push_back(ack(protocol::setting(1, 3, 512))); c.tick(2);
   CHECK(io.output.find("25.00A") != std::string::npos);
   can.incoming.push_back(ack(protocol::setting(1, 2, 60 * 1024), true)); c.tick(3);
@@ -424,7 +526,7 @@ void descriptionAndAckOutput() {
 int main() {
   try {
     boundedCanTransmit(); serialEditing(); protocolAndConfig(); independentTelemetry(); rangesAndAcknowledgements();
-    persistenceCommandsAndRollover(); eepromJournal(); serialWorkflow(); descriptionAndAckOutput();
+    persistenceCommandsAndRollover(); eepromJournal(); serialWorkflow(); serialSessionLifecycle(); serialIdleAndBackgroundOutput(); descriptionAndAckOutput();
     std::cout << "PASS: " << checks << " checks (including every EEPROM write interruption)\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

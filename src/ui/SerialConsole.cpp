@@ -1,6 +1,7 @@
 #include "SerialConsole.h"
 #if PSU_ENABLE_SERIAL
 #include "UiText.h"
+#include "../config/ConsoleConfig.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,8 @@ const __FlashStringHelper* metricName(uint8_t m) {
 }
 }
 void SerialConsole::begin(StorageResult loaded) {
+  resetSession();
+  promptVisible_ = descriptionOpen_ = false;
   controller_.observeFrames(onFrame, this);
   io_.println(F("R4850 modular controller; help for commands"));
   storageReply(loaded);
@@ -59,7 +62,22 @@ void SerialConsole::begin(StorageResult loaded) {
 }
 void SerialConsole::finishStartup() {
   io_.println(F("Startup complete; Enter submits, help lists commands"));
+  prompt();
+}
+void SerialConsole::resetSession() {
+  length_ = 0; discard_ = afterCr_ = false; echo_ = true;
+  view_ = View::None; watch_ = raw_ = false; descriptionIndex_ = -1;
+}
+void SerialConsole::beginOutput() {
+  if (promptVisible_ || descriptionOpen_) io_.println();
+  promptVisible_ = descriptionOpen_ = false;
+}
+void SerialConsole::prompt() {
+  if (promptVisible_) return;
+  beginOutput();
   io_.print(F("> "));
+  if (echo_) for (uint8_t i = 0; i < length_; ++i) io_.write(uint8_t(line_[i]));
+  promptVisible_ = true;
 }
 void SerialConsole::reply(Result r) { io_.println(resultName(r)); }
 void SerialConsole::storageReply(StorageResult r) {
@@ -103,6 +121,11 @@ void SerialConsole::execute() {
   view_ = View::None;
   uint8_t first = 0, end = controller_.count();
   uint16_t n = 0;
+  if (!strcmp(args[0], "hello") && argc == 1) {
+    resetSession();
+    io_.println(F("R4850 console ready; help for commands; Ctrl-X resets console"));
+    return;
+  }
   if (!strcmp(args[0], "help") && argc == 1) { startView(View::Help, 0, 0); return; }
   if ((!strcmp(args[0], "config") || !strcmp(args[0], "status")) && argc <= 2 && target(args[1], first, end)) {
     startView(!strcmp(args[0], "config") ? View::Config : View::Status, first, end); return;
@@ -162,20 +185,41 @@ void SerialConsole::execute() {
   io_.println(F("ERR syntax/value; type help"));
 }
 void SerialConsole::tick(uint32_t now) {
+  // Timeout precedes consumption: bytes arriving after a long gap cannot
+  // complete an abandoned command. Discard through EOL rather than executing
+  // a suffix as a new command. Ctrl-X/C can explicitly establish a fresh session.
+  if (length_ && !discard_ && uint32_t(now - lastInput_) >= console::inputIdleTimeoutMs) {
+    beginOutput(); length_ = 0; discard_ = true;
+    io_.println(F("Input expired; Enter discards remainder, Ctrl-X resets console"));
+    prompt();
+  }
   // Never wait for a newline or call readString/readBytes/parseFloat.
-  for (uint8_t n = 0; n < 32 && io_.available(); ++n) {
+  for (uint8_t n = 0; n < console::inputBytesPerTick && io_.available(); ++n) {
     const int c = io_.read();
+    if (c < 0) break;
+    lastInput_ = now;
+    if (c == 3 || c == 24) { // Ctrl-C / Ctrl-X: console only; no PSU cancellation.
+      beginOutput(); resetSession();
+      io_.println(F("Console reset; PSU jobs unchanged; help for commands"));
+      prompt(); continue;
+    }
+    if (c == 21) { // Ctrl-U: clear the entire line, including invalid/overflow state.
+      beginOutput(); length_ = 0; discard_ = afterCr_ = false;
+      prompt(); continue;
+    }
     // Treat CRLF as one Enter, even when its bytes arrive in separate ticks.
     if (afterCr_ && c == '\n') { afterCr_ = false; continue; }
     afterCr_ = c == '\r';
     if (c == '\n' || c == '\r') {
-      io_.println();
-      if (discard_) io_.println(F("ERR line too long or invalid; discarded"));
+      if (descriptionOpen_) beginOutput();
+      io_.println(); promptVisible_ = false;
+      if (discard_) io_.println(F("ERR incomplete/invalid line; discarded"));
       else if (length_) { line_[length_] = 0; execute(); }
-      length_ = 0; discard_ = false;
-      if (view_ == View::None) io_.print(F("> "));
+      length_ = 0; discard_ = false; afterCr_ = c == '\r';
+      if (view_ == View::None) prompt();
     } else if ((c == 8 || c == 127) && !discard_) {
       if (length_) {
+        prompt();
         --length_;
         if (echo_) io_.print(F("\b \b"));
       }
@@ -183,17 +227,18 @@ void SerialConsole::tick(uint32_t now) {
       if ((c < 32 && c != '\t') || c > 126 || length_ >= sizeof(line_) - 1) discard_ = true;
       else {
         // Normalize tabs so one stored character corresponds to one displayed cell.
+        prompt();
         line_[length_++] = c == '\t' ? ' ' : char(c);
         if (echo_) io_.write(uint8_t(line_[length_ - 1]));
       }
     }
   }
-  if (watch_ && !length_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
+  if (watch_ && !length_ && !discard_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Status, 0, controller_.count());
   }
   if (view_ != View::None && !length_ && !discard_) {
-    outputRow(now);
-    if (view_ == View::None && !watch_) io_.print(F("> "));
+    beginOutput(); outputRow(now);
+    if (view_ == View::None) prompt();
   }
 }
 void SerialConsole::outputRow(uint32_t now) {
@@ -216,7 +261,12 @@ void SerialConsole::outputRow(uint32_t now) {
       case 13: io_.println(F("poll <target> / describe <one slot>")); break;
       case 14: io_.println(F("watch <on|off> / raw <on|off> / reset-ah <target>")); break;
       case 15: io_.println(F("echo <on|off> (on by default; disable local echo)")); break;
-      case 16: io_.println(F("Ranges use per-PSU A, not total bank A.")); break;
+      case 16: io_.println(F("hello = quiet console; Ctrl-X/C = cancel input + quiet console")); break;
+      case 17:
+        io_.print(F("Ctrl-U = clear line; input idle timeout ms="));
+        io_.println(console::inputIdleTimeoutMs); break;
+      case 18: io_.println(F("Console reset leaves PSU jobs/settings unchanged.")); break;
+      case 19: io_.println(F("Ranges use per-PSU A, not total bank A.")); break;
       default: view_ = View::None; break;
     }
     return;
@@ -268,9 +318,19 @@ void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& frame) 
     const uint8_t cmd = protocol::command(frame.id);
     if (cmd == protocol::descriptionCommand && index == self.descriptionIndex_) {
       // Stream complete description, including its final ..7E fragment, without a large string.
-      out.write(frame.data + 2, 6);
-      if (!(frame.id & 1)) { out.println(); self.descriptionIndex_ = -1; }
+      if (!self.descriptionOpen_) self.beginOutput();
+      for (uint8_t i = 2; i < 8; ++i) {
+        // Device strings must not inject terminal controls or NUL padding.
+        const uint8_t c = frame.data[i];
+        if (c) out.write(c >= 32 && c <= 126 ? c : '?');
+      }
+      self.descriptionOpen_ = true;
+      if (!(frame.id & 1)) {
+        out.println(); self.descriptionOpen_ = false; self.descriptionIndex_ = -1;
+        if (self.view_ == View::None) self.prompt();
+      }
     } else if (cmd == protocol::setCommand && (frame.data[0] == 1 || frame.data[0] == 0x21)) {
+      self.beginOutput();
       const uint32_t raw = protocol::readBigEndian(frame.data + 4);
       out.print(F("ACK ")); out.print(index + 1); out.print(F(" reg=")); out.print(frame.data[1]);
       out.print(frame.data[0] & 0x20 ? F(" rejected ") : F(" accepted "));
@@ -278,15 +338,18 @@ void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& frame) 
       else if (frame.data[1] <= protocol::OfflineCurrent) {
         out.print(raw / 1024.0f * self.controller_.unit(index).config().ratedCurrent / 100.0f); out.println('A');
       } else out.println(raw);
+      if (self.view_ == View::None) self.prompt();
     }
   }
   if (self.raw_) {
+    self.beginOutput();
     out.print(frame.id, HEX); out.print(' ');
     for (uint8_t i = 0; i < frame.length && i < 8; ++i) {
       if (frame.data[i] < 16) out.print('0');
       out.print(frame.data[i], HEX); out.print(' ');
     }
     out.println();
+    if (self.view_ == View::None) self.prompt();
   }
 }
 }

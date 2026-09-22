@@ -16,6 +16,9 @@ class SerialConsole {
  private:
   enum class View : uint8_t { None, Help, Config, Status };
   void execute();
+  void resetSession();
+  void beginOutput();
+  void prompt();
   bool target(const char* text, uint8_t& first, uint8_t& end) const;
   void reply(Result result);
   void storageReply(StorageResult result);
@@ -30,6 +33,9 @@ class SerialConsole {
   bool discard_ = false;
   bool echo_ = true;
   bool afterCr_ = false;
+  bool promptVisible_ = false;
+  bool descriptionOpen_ = false;
+  uint32_t lastInput_ = 0;
   View view_ = View::None;
   uint8_t viewIndex_ = 0;
   uint8_t viewEnd_ = 0;

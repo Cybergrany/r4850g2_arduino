@@ -126,8 +126,16 @@ a fully nonblocking adapter can still use the same controller/UI APIs.
 The serial console echoes input by default (`echo off` disables it), treats
 CRLF as a single Enter, and prints a prompt after startup and command output.
 Input draining is limited to 32 bytes per loop. Long reports pause while a line
-is being edited; raw frames and asynchronous ACKs may still interleave with
-input. An empty Enter prints a new prompt. Optional display startup probes its
+is being edited. Raw frames and asynchronous ACKs start on a fresh line and
+restore the prompt plus any echoed input. Device description control characters
+are replaced with `?` and NUL padding is omitted. Descriptions stream until their
+final fragment; other output or typing can split the description across lines.
+An empty Enter prints a new prompt. Input inactivity expires a pending command
+into discard-through-newline state; Ctrl-X/C resets console state and Ctrl-U
+clears input immediately. None of these operations modifies controller state,
+EEPROM, or queued PSU jobs. `hello` restores a quiet console at a clean command
+boundary. The UART cannot infer USB connection state; see [serial lifecycle](SERIAL.md).
+Optional display startup probes its
 I2C address and skips an absent display. Wire transactions have a configured
 25 ms timeout, so an I2C fault cannot cause an indefinite startup wait.
 

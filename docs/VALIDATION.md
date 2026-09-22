@@ -25,9 +25,9 @@ Build sizes against the Mega's 8192 bytes of RAM and 253952 bytes of application
 
 | Profile | Static RAM (bytes) | Flash (bytes) |
 | --- | ---: | ---: |
-| `mega2560` | 2182 | 33350 |
-| `mega2560_serial` | 1888 | 25580 |
-| `mega2560_display` | 2157 | 31094 |
+| `mega2560` | 2194 | 34452 |
+| `mega2560_serial` | 1900 | 26682 |
+| `mega2560_display` | 2169 | 32198 |
 | `mega2560_local` | 1676 | 23398 |
 | `mega2560_minimal` | 1352 | 13026 |
 
@@ -70,6 +70,12 @@ Covered behaviours:
 - Controller save/load/defaults versus PSU writes; apply-in-progress edits
   rejected; polling continues while waiting for a serial newline.
 - Description continuation and final fragments; decoded current and OVP ACK values.
+- No terminal observing UART output at boot or during polling/apply; subsequent
+  hello/reset handshake; console reset preserves staged config, EEPROM, and jobs.
+- Ctrl-X/C/U recovery from partial, invalid, and overlong input; CRLF after hello;
+  input idle timeout before consuming queued bytes, including clock rollover.
+- Prompt/input restoration around raw frames and ACKs; device description control
+  bytes sanitized. USB/DTR/power events require the [serial bench checks](SERIAL.md).
 
 ## Bench checks before deployment
 
