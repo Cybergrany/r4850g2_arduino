@@ -25,11 +25,11 @@ Build sizes against the Mega's 8192 bytes of RAM and 253952 bytes of application
 
 | Profile | Static RAM (bytes) | Flash (bytes) |
 | --- | ---: | ---: |
-| `mega2560` | 2175 | 32480 |
-| `mega2560_serial` | 1882 | 24814 |
-| `mega2560_display` | 2150 | 30254 |
-| `mega2560_local` | 1675 | 22876 |
-| `mega2560_minimal` | 1352 | 12688 |
+| `mega2560` | 2182 | 33350 |
+| `mega2560_serial` | 1888 | 25580 |
+| `mega2560_display` | 2157 | 31094 |
+| `mega2560_local` | 1676 | 23398 |
+| `mega2560_minimal` | 1352 | 13026 |
 
 Build reports measure static RAM, not worst-case stack or interrupt nesting. The two EEPROM journal
 slots reserve 512 bytes and occupy 116 bytes each with eight configured-capacity
@@ -38,7 +38,8 @@ slots, regardless of the current active count.
 ## Host checks
 
 The host suite compiles the actual C++ configuration, protocol, PSU controller,
-memory manager, and serial console. Only the I/O adapters are simulated. It runs
+memory manager, serial console, and MCP2515 transmit algorithm. Hardware I/O
+is simulated, including MCP2515 registers and time. It runs
 with `-Wall -Wextra -Werror` and AddressSanitizer/UndefinedBehaviorSanitizer.
 LeakSanitizer is disabled because it cannot operate under the execution sandbox's
 ptrace mechanism; address and undefined-behaviour checks remain enabled.
@@ -59,6 +60,11 @@ Covered behaviours:
   overwrite of the older slot after two valid saves: 118 boundaries for each.
 - Corrupted newest-record fallback; incompatible schema; readback failure;
   invalid configuration rejection; capacity below 512 bytes; address bounds.
+- MCP2515 transmit completion, arbitration followed by success, errors, aborted
+  frames, missing completion, permanently busy TXREQ (including ignored abort),
+  clock rollover, preservation of RX flags, and rejection of invalid frames.
+- Serial echo on/off, visual backspace/DEL, tabs, empty Enter prompt, CRLF split
+  across ticks, bounded input draining, and recovery after an overlong line.
 - Serial commands with LF/CRLF, backspace, partial lines, inclusive ranges,
   malformed/NaN/infinite/overflowing numbers, overlong lines and surplus tokens.
 - Controller save/load/defaults versus PSU writes; apply-in-progress edits
@@ -68,7 +74,11 @@ Covered behaviours:
 ## Bench checks before deployment
 
 1. Confirm Mega SPI and I2C wiring and the MCP2515 crystal setting. Build the
-   serial-only profile first if the display/encoder are absent. Verify `CAN ready`.
+   serial-only profile first if the display/encoder are absent. Verify `CAN ready`
+   and the subsequent `Startup complete` message and `> ` prompt. With no PSU
+   connected, confirm that `help` and `config all` still respond after several
+   polling intervals. Repeat on the full build with the display absent; exercise
+   a stuck I2C bus separately to verify the Wire timeout on physical hardware.
 2. With one PSU, inspect `status 1` and `raw on`. Confirm telemetry and current
    scaling against a meter/load. Use a modest intended setpoint and check both
    voltage and current ACKs, then measured output.

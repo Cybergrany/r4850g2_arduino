@@ -11,6 +11,7 @@ class SerialConsole {
   SerialConsole(Stream& stream, PsuController& controller, MemoryManager& memory)
       : io_(stream), controller_(controller), memory_(memory) {}
   void begin(StorageResult loaded);
+  void finishStartup();
   void tick(uint32_t now);
  private:
   enum class View : uint8_t { None, Help, Config, Status };
@@ -27,6 +28,8 @@ class SerialConsole {
   char line_[80] = {};
   uint8_t length_ = 0;
   bool discard_ = false;
+  bool echo_ = true;
+  bool afterCr_ = false;
   View view_ = View::None;
   uint8_t viewIndex_ = 0;
   uint8_t viewEnd_ = 0;

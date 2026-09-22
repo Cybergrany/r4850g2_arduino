@@ -7,10 +7,15 @@
 namespace psu {
 void OledDisplay::begin() {
   Wire.begin(); Wire.setClock(board::displayBusHz);
+  Wire.setWireTimeout(board::displayWireTimeoutUs, true);
+  Wire.beginTransmission(board::displayAddress);
+  available_ = Wire.endTransmission() == 0;
+  if (!available_) return; // Missing optional display must not prevent serial input.
   oled_.begin(&Adafruit128x64, board::displayAddress);
   oled_.setFont(Adafruit5x7); oled_.clear();
 }
 void OledDisplay::status(const PsuController& controller, uint8_t index, uint32_t now) {
+  if (!available_) return;
   const Psu& unit = controller.unit(index);
   oled_.clear();
   oled_.print(F("PSU ")); oled_.print(index + 1); oled_.print(F(" addr ")); oled_.println(unit.config().address);
@@ -33,6 +38,7 @@ void OledDisplay::status(const PsuController& controller, uint8_t index, uint32_
   oled_.println(stateName(unit.commandStatus().state));
 }
 void OledDisplay::menu(const PsuController& controller, uint8_t index, uint8_t item, bool editing, bool error) {
+  if (!available_) return;
   const auto& c = controller.unit(index).config();
   oled_.clear(); oled_.print(F("PSU ")); oled_.print(index + 1); oled_.println(F(" settings"));
   oled_.print(editing ? '*' : '>');

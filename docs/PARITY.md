@@ -50,7 +50,8 @@ have not been added.
   41.5..58.5 V online. A PSU can still reject a model-specific endpoint; its ACK
   is authoritative. Current is bounded by `ChargerConfig.h` and 120% of the
   configured rating.
-- The retained CAN driver uses synchronous transmission. The firmware has been
+- CAN transmission is synchronous with a 20 ms timeout and bounded abort handling.
+  The firmware has been
   compiled and its logical behaviours tested with simulated I/O; no claim of
   physical multi-PSU, CAN timing, encoder, display, or power-cut validation is made.
 

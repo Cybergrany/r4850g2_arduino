@@ -1,11 +1,39 @@
 #include "Mcp2515Transport.h"
+#include "Mcp2515Transmit.h"
 #include <CAN.h>
 
 namespace psu {
+namespace {
+// SPI transactions use the same CS and clock as arduino-CAN. Its registered RX
+// interrupt is masked by SPI.beginTransaction while a register access is active.
+class Registers {
+ public:
+  uint32_t now() const { return millis(); }
+  uint8_t read(uint8_t address) {
+    start(0x03, address);
+    const uint8_t value = SPI.transfer(0);
+    finish(); return value;
+  }
+  void write(uint8_t address, uint8_t value) {
+    start(0x02, address); SPI.transfer(value); finish();
+  }
+  void modify(uint8_t address, uint8_t mask, uint8_t value) {
+    start(0x05, address); SPI.transfer(mask); SPI.transfer(value); finish();
+  }
+ private:
+  void start(uint8_t command, uint8_t address) {
+    SPI.beginTransaction(SPISettings(board::canSpiHz, MSBFIRST, SPI_MODE0));
+    digitalWrite(board::canChipSelect, LOW);
+    SPI.transfer(command); SPI.transfer(address);
+  }
+  void finish() { digitalWrite(board::canChipSelect, HIGH); SPI.endTransaction(); }
+};
+}
 Mcp2515Transport* Mcp2515Transport::instance_ = nullptr;
 bool Mcp2515Transport::begin() {
   CAN.setPins(board::canChipSelect, board::canInterrupt);
   CAN.setClockFrequency(board::canCrystalHz);
+  CAN.setSPIFrequency(board::canSpiHz);
   if (!CAN.begin(board::canBitrate)) return false;
   instance_ = this;
   CAN.onReceive(onReceive);
@@ -38,9 +66,7 @@ bool Mcp2515Transport::receive(CanFrame& frame) {
   return true;
 }
 bool Mcp2515Transport::send(const CanFrame& frame) {
-  if (!frame.extended || frame.rtr || frame.length != 8) return false;
-  if (!CAN.beginExtendedPacket(frame.id, frame.length, false)) return false;
-  if (CAN.write(frame.data, frame.length) != frame.length) return false;
-  return CAN.endPacket() == 1;
+  Registers registers;
+  return mcp2515::transmit(registers, frame, board::canTransmitTimeoutMs);
 }
 }

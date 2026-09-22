@@ -1,7 +1,8 @@
 # Firmware boundaries
 
 `src/main.cpp` contains only Arduino's entry points. `Application` wires the
-objects together and calls the controller before either UI on every loop.
+objects together and services serial input, the controller, then the local UI
+on every loop.
 The root `.ino` is an Arduino IDE sketch marker; Arduino compiles the sources
 under `src/` recursively.
 
@@ -109,10 +110,26 @@ a fixed ring (15 usable entries by default). Decoding and all UI output run in
 the main loop. The ring's saturating overflow counter appears as `rx-drops`.
 Long reports emit a row per loop; description fragments stream without storing
 the entire description. Raw tracing can still overrun serial throughput on a
-busy bus. The adapter retains arduino-CAN's synchronous transmit behaviour;
-the PSU ACK timeout does not bound time spent inside that driver's `endPacket`.
-Replacing that driver with a fully nonblocking transport remains possible
-without changing the controller or UI APIs.
+busy bus. The adapter uses arduino-CAN for initialization and reception, but
+owns TX buffer 0 directly so transmission is bounded by `canTransmitTimeoutMs`
+(default 20 ms). It clears stale TX completion, packs the extended frame, and
+requires TX0IF for success. Errors or timeout request a per-buffer abort by
+clearing TXREQ; it never waits indefinitely for abort completion or overwrites
+a still-busy buffer. Register SPI transactions use the library's registered
+interrupt masking. See the [MCP2515 datasheet, sections 3.4/3.6](https://ww1.microchip.com/downloads/en/DeviceDoc/MCP2515-Family-Data-Sheet-DS20001801K.pdf).
+
+A frame already transmitting can finish despite an abort request: a transport
+failure is not proof that the PSU did not receive it. Writes are not retried
+automatically. Transmission remains synchronous for this bounded interval;
+a fully nonblocking adapter can still use the same controller/UI APIs.
+
+The serial console echoes input by default (`echo off` disables it), treats
+CRLF as a single Enter, and prints a prompt after startup and command output.
+Input draining is limited to 32 bytes per loop. Long reports pause while a line
+is being edited; raw frames and asynchronous ACKs may still interleave with
+input. An empty Enter prints a new prompt. Optional display startup probes its
+I2C address and skips an absent display. Wire transactions have a configured
+25 ms timeout, so an I2C fault cannot cause an indefinite startup wait.
 
 ## Controller EEPROM
 

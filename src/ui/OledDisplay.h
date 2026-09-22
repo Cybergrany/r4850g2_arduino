@@ -13,6 +13,7 @@ class OledDisplay {
   void menu(const PsuController& controller, uint8_t index, uint8_t item, bool editing, bool error);
  private:
   SSD1306AsciiWire oled_;
+  bool available_ = false;
 };
 }
 #endif

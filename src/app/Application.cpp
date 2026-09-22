@@ -28,12 +28,15 @@ void Application::begin() {
   // Restoring EEPROM alone never writes the PSU's nonvolatile defaults.
   if (loaded == StorageResult::Ok && config.applyOnBoot)
     controller_.applyRange(0, controller_.count());
+#if PSU_ENABLE_SERIAL
+  console_.finishStartup();
+#endif
 }
 void Application::tick() {
-  controller_.tick(millis());
 #if PSU_ENABLE_SERIAL
   console_.tick(millis());
 #endif
+  controller_.tick(millis());
 #if PSU_ENABLE_DISPLAY || PSU_ENABLE_ENCODER
   localUi_.tick(millis());
 #endif

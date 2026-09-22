@@ -1,4 +1,5 @@
 #include "config/ChargerConfig.h"
+#include "can/Mcp2515Transmit.h"
 #include "psu/PsuController.h"
 #include "storage/MemoryManager.h"
 #include "ui/SerialConsole.h"
@@ -69,6 +70,102 @@ CanFrame ack(CanFrame command, bool error = false) {
   command.id &= ~0x80UL;
   command.data[0] = error ? 0x21 : 1;
   return command;
+}
+// Simulate register state independently of the transmit algorithm, including a
+// chip that never clears TXREQ even when asked to abort.
+struct FakeRegisters {
+  std::array<uint8_t, 128> bytes = {};
+  enum Outcome { Success, ArbitrationThenSuccess, Stuck, Error, Aborted, NoCompletion } outcome = Success;
+  uint32_t clock = 0;
+  unsigned reads = 0, writes = 0, aborts = 0;
+  bool requested = false;
+  uint32_t now() { return clock++; }
+  uint8_t read(uint8_t address) {
+    CHECK(++reads < 200); // A regression must fail instead of hanging the suite.
+    if (address == mcp2515::txControl && requested) {
+      if (outcome == Success || outcome == ArbitrationThenSuccess) {
+        bytes[address] = outcome == Success ? 0 : 0x20;
+        bytes[mcp2515::interruptFlags] |= mcp2515::txComplete;
+      } else if (outcome == Error) bytes[address] |= mcp2515::txError;
+      else if (outcome == Aborted) bytes[address] = mcp2515::txAborted;
+      else if (outcome == NoCompletion) bytes[address] = 0;
+    }
+    return bytes[address];
+  }
+  void write(uint8_t address, uint8_t value) {
+    ++writes; bytes[address] = value;
+    if (address == mcp2515::txControl) requested = true;
+  }
+  void modify(uint8_t address, uint8_t mask, uint8_t value) {
+    if (address == mcp2515::txControl && mask == mcp2515::txRequest && value == 0) {
+      ++aborts;
+      if (outcome == Stuck) return;
+    }
+    bytes[address] = (bytes[address] & ~mask) | (value & mask);
+  }
+};
+void boundedCanTransmit() {
+  const auto frame = protocol::setting(2, 3, 512);
+  FakeRegisters io;
+  io.bytes[mcp2515::interruptFlags] = 0x07; // Stale TX completion + pending RX.
+  CHECK(mcp2515::transmit(io, frame, 20));
+  CHECK(io.bytes[0x31] == 0x84 && io.bytes[0x32] == 0x0a);
+  CHECK(io.bytes[0x33] == 0x80 && io.bytes[0x34] == 0xfe);
+  CHECK(io.bytes[0x35] == 8);
+  for (unsigned i = 0; i < 8; ++i) CHECK(io.bytes[0x36 + i] == frame.data[i]);
+  CHECK(io.bytes[mcp2515::interruptFlags] == 3); // Preserve RX flags.
+  io = FakeRegisters(); io.outcome = FakeRegisters::ArbitrationThenSuccess;
+  CHECK(mcp2515::transmit(io, frame, 20));
+  for (const auto result : {FakeRegisters::Error, FakeRegisters::Aborted, FakeRegisters::NoCompletion}) {
+    io = FakeRegisters(); io.outcome = result;
+    io.bytes[mcp2515::interruptFlags] = mcp2515::txComplete;
+    CHECK(!mcp2515::transmit(io, frame, 20)); // Stale flag cannot imply success.
+  }
+  for (const uint32_t start : {0U, 0xfffffff8U}) {
+    io = FakeRegisters(); io.outcome = FakeRegisters::Stuck; io.clock = start;
+    CHECK(!mcp2515::transmit(io, frame, 20));
+    CHECK(uint32_t(io.clock - start) == 21 && io.aborts == 1);
+    const auto written = io.writes;
+    CHECK(!mcp2515::transmit(io, frame, 20));
+    CHECK(io.writes == written && io.aborts == 2); // Busy buffer not overwritten.
+  }
+  for (unsigned variant = 0; variant < 4; ++variant) {
+    auto invalid = frame;
+    if (variant == 0) invalid.extended = false;
+    if (variant == 1) invalid.rtr = true;
+    if (variant == 2) invalid.length = 7;
+    if (variant == 3) invalid.id = 0x20000000;
+    io = FakeRegisters(); CHECK(!mcp2515::transmit(io, invalid, 20));
+    CHECK(io.reads == 0 && io.writes == 0);
+  }
+}
+void serialEditing() {
+  FakeCan can; PsuController c(can); CHECK(c.begin());
+  FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io; SerialConsole console(io, c, memory);
+  console.begin(StorageResult::NoValidRecord); console.finishStartup();
+  CHECK(io.output.find("Startup complete;") != std::string::npos);
+  CHECK(io.output.substr(io.output.size() - 2) == "> ");
+  auto input = [&](const std::string& text) {
+    io.output.clear(); io.feed(text); console.tick(0);
+  };
+  input("set 1 current 4"); CHECK(io.output == "set 1 current 4");
+  CHECK(c.unit(0).config().current == 100); // No execution before Enter.
+  input("\b3"); CHECK(io.output == "\b \b3");
+  input("\r"); CHECK(io.output == "\r\nOK\r\n> ");
+  CHECK(c.unit(0).config().current == 300);
+  input("\n"); CHECK(io.output.empty()); // CRLF split across ticks.
+  input("\n"); CHECK(io.output == "\r\n> "); // Bare Enter is visible.
+  input("echo off\r\n"); CHECK(io.output == "echo off\r\nOK\r\n> ");
+  input("set\t1 current 4"); CHECK(io.output.empty());
+  input("\x7f" "2\n"); CHECK(io.output == "\r\nOK\r\n> ");
+  CHECK(c.unit(0).config().current == 200);
+  input("echo on\n"); CHECK(io.output == "\r\nOK\r\n> ");
+  input("\b\x7f"); CHECK(io.output.empty());
+  input(std::string(40, 'x')); CHECK(io.available() == 8 && io.output.size() == 32);
+  io.output.clear(); console.tick(0); CHECK(io.available() == 0 && io.output.size() == 8);
+  input(std::string(40, 'x'));
+  console.tick(0); input("\n"); CHECK(io.output.find("discarded") != std::string::npos);
+  input("count 2\n"); CHECK(c.count() == 2); // Drained and ready after overflow.
 }
 void protocolAndConfig() {
   CHECK(protocol::request(0).id == 0x108040fe);
@@ -326,7 +423,7 @@ void descriptionAndAckOutput() {
 }
 int main() {
   try {
-    protocolAndConfig(); independentTelemetry(); rangesAndAcknowledgements();
+    boundedCanTransmit(); serialEditing(); protocolAndConfig(); independentTelemetry(); rangesAndAcknowledgements();
     persistenceCommandsAndRollover(); eepromJournal(); serialWorkflow(); descriptionAndAckOutput();
     std::cout << "PASS: " << checks << " checks (including every EEPROM write interruption)\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

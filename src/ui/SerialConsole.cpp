@@ -57,6 +57,10 @@ void SerialConsole::begin(StorageResult loaded) {
   storageReply(loaded);
   io_.println(controller_.ready() ? F("CAN ready") : F("CAN failed; config console remains available"));
 }
+void SerialConsole::finishStartup() {
+  io_.println(F("Startup complete; Enter submits, help lists commands"));
+  io_.print(F("> "));
+}
 void SerialConsole::reply(Result r) { io_.println(resultName(r)); }
 void SerialConsole::storageReply(StorageResult r) {
   switch (r) {
@@ -135,10 +139,12 @@ void SerialConsole::execute() {
     if (r == Result::Ok) descriptionIndex_ = first;
     reply(r); return;
   }
-  if ((!strcmp(args[0], "watch") || !strcmp(args[0], "raw")) && argc == 2 &&
+  if ((!strcmp(args[0], "watch") || !strcmp(args[0], "raw") || !strcmp(args[0], "echo")) && argc == 2 &&
       (!strcmp(args[1], "on") || !strcmp(args[1], "off"))) {
     const bool on = !strcmp(args[1], "on");
-    if (!strcmp(args[0], "watch")) watch_ = on; else raw_ = on;
+    if (!strcmp(args[0], "watch")) watch_ = on;
+    else if (!strcmp(args[0], "raw")) raw_ = on;
+    else echo_ = on;
     reply(Result::Ok); return;
   }
   if ((!strcmp(args[0], "save") || !strcmp(args[0], "load") || !strcmp(args[0], "defaults")) && argc == 1) {
@@ -159,21 +165,36 @@ void SerialConsole::tick(uint32_t now) {
   // Never wait for a newline or call readString/readBytes/parseFloat.
   for (uint8_t n = 0; n < 32 && io_.available(); ++n) {
     const int c = io_.read();
+    // Treat CRLF as one Enter, even when its bytes arrive in separate ticks.
+    if (afterCr_ && c == '\n') { afterCr_ = false; continue; }
+    afterCr_ = c == '\r';
     if (c == '\n' || c == '\r') {
+      io_.println();
       if (discard_) io_.println(F("ERR line too long or invalid; discarded"));
       else if (length_) { line_[length_] = 0; execute(); }
       length_ = 0; discard_ = false;
+      if (view_ == View::None) io_.print(F("> "));
     } else if ((c == 8 || c == 127) && !discard_) {
-      if (length_) --length_;
+      if (length_) {
+        --length_;
+        if (echo_) io_.print(F("\b \b"));
+      }
     } else if (!discard_) {
       if ((c < 32 && c != '\t') || c > 126 || length_ >= sizeof(line_) - 1) discard_ = true;
-      else line_[length_++] = char(c);
+      else {
+        // Normalize tabs so one stored character corresponds to one displayed cell.
+        line_[length_++] = c == '\t' ? ' ' : char(c);
+        if (echo_) io_.write(uint8_t(line_[length_ - 1]));
+      }
     }
   }
   if (watch_ && !length_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Status, 0, controller_.count());
   }
-  if (view_ != View::None) outputRow(now);
+  if (view_ != View::None && !length_ && !discard_) {
+    outputRow(now);
+    if (view_ == View::None && !watch_) io_.print(F("> "));
+  }
 }
 void SerialConsole::outputRow(uint32_t now) {
   // Emit one short row per loop so CAN processing continues through long reports.
@@ -194,7 +215,8 @@ void SerialConsole::outputRow(uint32_t now) {
       case 12: io_.println(F("defaults = reset RAM only; save to persist")); break;
       case 13: io_.println(F("poll <target> / describe <one slot>")); break;
       case 14: io_.println(F("watch <on|off> / raw <on|off> / reset-ah <target>")); break;
-      case 15: io_.println(F("Ranges use per-PSU A, not total bank A.")); break;
+      case 15: io_.println(F("echo <on|off> (on by default; disable local echo)")); break;
+      case 16: io_.println(F("Ranges use per-PSU A, not total bank A.")); break;
       default: view_ = View::None; break;
     }
     return;

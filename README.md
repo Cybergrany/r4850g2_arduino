@@ -51,7 +51,13 @@ appropriate external wiring; it does not fit that PCB's Nano footprint.
 
 ## Quick serial session
 
-Use 115200 baud, newline or CRLF line endings. Type `help`; commands are lowercase.
+Use 115200 baud with CR, LF, or CRLF line endings. After initialization, expect
+`Startup complete; Enter submits, help lists commands` followed by `> `.
+Type `help`; commands are lowercase. Firmware echoes characters by default;
+leave terminal local echo disabled, or use `echo off` if your terminal handles it.
+Pressing Enter on an empty line prints a fresh prompt. A terminal's
+`send_on_enter` filter buffers typing locally, so firmware echo then appears
+only after Enter.
 Slots are 1-based and do not have to equal their configured CAN addresses.
 Start with the actual address mapping of your units.
 
@@ -101,13 +107,24 @@ polling for that slot; it does not switch the PSU's output off.
 | `defaults` | Restore compiled defaults in RAM only; `save` makes this persistent |
 | `poll <target>` | Request fresh telemetry |
 | `describe <slot>` | Request and stream that PSU's ASCII description |
+| `echo on` / `echo off` | Enable/disable firmware character echo (default on) |
 | `watch on` / `watch off` | Repeated status reports |
 | `raw on` / `raw off` | Incoming CAN frame trace; also useful for finding addresses |
 | `reset-ah <target>` | Reset approximate session Ah counters |
 
 Targets are a slot (`2`), inclusive range (`2-4`), or `all`.
 Serial editing supports backspace; overlong or malformed lines are rejected
-without executing a truncated command. Polling continues while input is incomplete.
+without executing a truncated command. The console drains up to 32 input bytes
+per loop; polling continues while input is incomplete. Use `watch off` and
+`raw off` for a quiet interactive session.
+
+For a controller-only check, upload `mega2560_serial`, open the monitor, and
+try `help` and `config all`. These work without a PSU or battery attached.
+`CAN ready` reports MCP2515 initialization, not the presence of a responding PSU.
+CAN transmission waits at most the configured 20 ms before requesting an abort;
+a missing display is skipped, with a 25 ms I2C timeout in display-enabled builds.
+This keeps missing peripherals from indefinitely blocking serial input. Actual
+CAN traffic still needs a powered, correctly wired and terminated bus.
 
 ## Reboot and persistence
 
