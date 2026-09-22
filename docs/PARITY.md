@@ -23,7 +23,7 @@ Arduino sketch's fixed current multiplier.
 | Online plus offline writes (`-s`) | `apply all`, wait/check result, then `offline all`, wait/check result |
 | Accepted/rejected setting ACK and value | Matching job outcome; decoded volts/amps and raw value in serial |
 | Incoming OVP ACK | Decoded as volts; no new OVP setter |
-| Ah estimate from `1001117E` | Per discovered device, same /20 and 377 ms assumption; `reset-ah` |
+| Ah estimate from `1001117E` | Per bound slot/identity session in RAM, same /20 and 377 ms assumption; `reset-ah` |
 | ASCII description | `describe ADDRESS`, including continuation/final fragments and sanitized controls |
 | Ignored/unknown traffic inspection | `raw on`, bus counters, and raw alarm/status bits |
 
@@ -63,8 +63,10 @@ its own saved settings. [Craig's hardware review](https://www.beyondlogic.org/re
 ## Deliberate limits
 
 - Ah remains a rough reference-compatible session estimate. Lost frames
-  undercount; identity/reset transitions can reset the observation; it is not a
-  calibrated battery fuel gauge.
+  undercount. Bound-slot totals survive reconnects/address changes in Mega RAM;
+  reboot, `reset-ah`, rebinding to a different identity, slot removal or deployment
+  change resets them. The discovery-local counter remains available to API users
+  but can reset with its observation. Neither is a calibrated battery fuel gauge.
 - Per-unit configured current is bounded by 60 A and 120% of the commissioned
   rating. Group totals exceeding any member's allowed share are rejected, never
   silently capped. Hardware can reject tighter model-specific bounds.

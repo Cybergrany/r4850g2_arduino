@@ -110,16 +110,35 @@ bool MemoryManager::legacy(LegacyConfiguration& c) const {
   readRecord(slot, b, size, seq); return decodeLegacy(b, size, c);
 }
 StorageResult MemoryManager::save(const Configuration& c) {
+  const auto result = startSave(c);
+  if (result != StorageResult::Ok) return result;
+  while (saving_) stepSave();
+  return saveResult_;
+}
+StorageResult MemoryManager::startSave(const Configuration& c) {
+  if (saving_) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
   if (!validConfig(c)) return StorageResult::InvalidConfig;
   if (c.deploymentId != deployment::id) return StorageResult::WrongDeployment;
   uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
-  const uint16_t base = slot < 0 ? 0 : uint16_t(1 - slot) * slotSize;
-  memset(b, 0, sizeof(b)); encode(c, b, slot < 0 ? 1 : best + 1);
-  storage_.update(base, 0);
-  for (uint16_t i = 1; i < recordSize; ++i) storage_.update(base + i, b[i]);
-  storage_.update(base, 0xa5);
-  return readRecord(base / slotSize, b, size, seq) && seq == (slot < 0 ? 1 : best + 1) ? StorageResult::Ok : StorageResult::WriteFailed;
+  saveBase_ = slot < 0 ? 0 : uint16_t(1 - slot) * slotSize;
+  saveSequence_ = slot < 0 ? 1 : best + 1;
+  memset(pending_, 0, sizeof(pending_)); encode(c, pending_, saveSequence_);
+  saveAt_ = 0; saving_ = true; saveResult_ = StorageResult::Busy;
+  return StorageResult::Ok;
+}
+void MemoryManager::stepSave() {
+  if (!saving_) return;
+  if (saveAt_ == 0) storage_.update(saveBase_, 0);
+  else if (saveAt_ < recordSize) storage_.update(saveBase_ + saveAt_, pending_[saveAt_]);
+  else if (saveAt_ == recordSize) storage_.update(saveBase_, 0xa5);
+  else {
+    uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0;
+    saveResult_ = readRecord(saveBase_ / slotSize, b, size, seq) && seq == saveSequence_
+        ? StorageResult::Ok : StorageResult::WriteFailed;
+    saving_ = false;
+  }
+  ++saveAt_;
 }
 }

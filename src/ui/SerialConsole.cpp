@@ -105,6 +105,7 @@ void SerialConsole::storageReply(StorageResult r) {
     case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs 512 bytes")); break;
     case StorageResult::InvalidConfig: io_.println(F("ERR invalid configuration")); break;
     case StorageResult::WriteFailed: io_.println(F("ERR EEPROM verification failed")); break;
+    case StorageResult::Busy: io_.println(F("ERR EEPROM save in progress")); break;
     case StorageResult::Migrated: io_.println(F("Legacy settings migrated to RAM GROUP1; bind identities, apply, save. Auto-resume OFF.")); break;
     case StorageResult::LegacyNeedsReview: io_.println(F("BLOCKED legacy per-unit settings differ: use legacy to inspect. EEPROM untouched. Commission parallel groups before save.")); break;
     case StorageResult::WrongDeployment: io_.println(F("BLOCKED wrong deployment: inspect config; defaults selects compiled deployment. EEPROM untouched.")); break;
@@ -361,6 +362,7 @@ void SerialConsole::printUnit(uint8_t i, uint32_t now) {
   io_.print(F(" voltage-authorized=")); io_.print(bool(c.operating.voltageMask & (1U << i)));
   const auto& s = controller_.report().units[i];
   io_.print(F(" voltage-acked=")); io_.print(controller_.voltageSynchronized(i));
+  io_.print(F(" current-acked=")); io_.print(controller_.currentSynchronized(i));
   io_.print(F(" last=")); io_.print(stateName(s.state)); io_.print(F(" reg=")); io_.println(s.reg);
   if (d) {
     io_.print(F("  response age ms=")); io_.print(uint32_t(now - d->lastSeen));
@@ -458,9 +460,8 @@ void SerialConsole::outputRow(uint32_t now) {
       if (controller_.metric(slot, m, value, now)) io_.println(m == protocol::Efficiency ? value * 100 : value);
       else io_.println(F("N/A"));
     } else {
-      const auto* d = controller_.deviceForSlot(slot, now);
       io_.print(F("PSU ")); io_.print(slot + 1); io_.print(F(" Ah~="));
-      if (d) io_.println(d->telemetry.ampHours, 4); else io_.println(F("N/A"));
+      io_.println(controller_.sessionAmpHours(slot), 4);
     }
     ++row_;
   } else if (view_ == View::Units) {

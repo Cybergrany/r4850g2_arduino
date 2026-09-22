@@ -19,6 +19,7 @@ struct ApplyPlan {
   bool partial;
 };
 struct OperationReport {
+  uint32_t sequence;
   Operation operation;
   uint8_t requested, recipients, succeeded, failed, skipped;
   bool active;
@@ -50,6 +51,9 @@ class PsuController {
   Result setVoltage(uint16_t voltage, bool offline = false);
   Result setCurrent(uint8_t group, uint16_t total, bool offline = false);
   CurrentCheck checkCurrent(uint8_t group, uint16_t total) const;
+  // Exact maximum accepted by checkCurrent, including unequal ratings/rounding.
+  uint16_t groupCurrentMaximum(uint8_t group) const;
+  uint32_t configurationRevision() const { return revision_; }
   Result setAutoResume(bool enabled);
   Result setPollInterval(uint16_t ms);
   int8_t groupIndex(const char* name) const;
@@ -60,11 +64,15 @@ class PsuController {
   // Returns last measurement, not a freshness guarantee. CurrentCapacity uses
   // the commissioned rating; efficiency remains a fraction (multiply by 100 for %).
   bool metric(uint8_t slot, protocol::Metric metric, float& value, uint32_t now) const;
+  bool freshMetric(uint8_t slot, protocol::Metric metric, float& value, uint32_t now) const;
+  float sessionAmpHours(uint8_t slot) const { return slot < count() ? sessionAh_[slot] : 0; }
+  bool sessionObserved(uint8_t slot) const { return slot < count() && (sessionSeen_ & (1U << slot)); }
   ApplyPlan preview(Operation operation, int8_t group, uint32_t now, bool partial = false) const;
   // Plan expiry + config/topology checks apply to every queue, including confirmations.
   Result queue(const ApplyPlan& plan, bool confirmed, uint32_t now);
   const OperationReport& report() const { return report_; }
   bool voltageSynchronized(uint8_t slot) const { return slot < count() && (voltageSynced_ & (1U << slot)); }
+  bool currentSynchronized(uint8_t slot) const { return slot < count() && (currentSynced_ & (1U << slot)); }
   const Discovery& discovery() const { return discovery_; }
   bool busy() const { return report_.active; }
   bool ready() const { return ready_; }
@@ -84,6 +92,7 @@ class PsuController {
  private:
   Result change(const Configuration& candidate, uint8_t invalidate = 0);
   bool send(const CanFrame& frame);
+  void reconcileSessions(const Configuration& next);
   void receive(const CanFrame& frame, uint32_t now);
   void advance(bool success);
   void beginReport(Operation operation, uint8_t requested, uint8_t recipients, uint8_t skipped = 0);
@@ -93,8 +102,12 @@ class PsuController {
   Configuration config_;
   Discovery discovery_;
   uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;
+  uint32_t reportSequence_ = 0;
+  float sessionAh_[PSU_MAX_UNITS] = {};
+  uint8_t sessionSeen_ = 0;
   uint32_t observedEpoch_[PSU_MAX_UNITS] = {};
   uint8_t voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
+  uint8_t currentSynced_ = 0;
   uint8_t scanAddress_ = 1, probeIndex_ = 0;
   bool probeTurn_ = false;
   bool ready_ = false, waiting_ = false, secondPhase_ = false;

@@ -20,6 +20,8 @@ void Psu::receive(const CanFrame& f, uint32_t now) {
     telemetry.values[m] = (m == protocol::InputTemperature || m == protocol::OutputTemperature)
         ? int32_t(raw) / float(protocol::fixedPointScale) : raw / float(protocol::fixedPointScale);
     telemetry.validMask |= uint16_t(1U << m);
+    telemetry.freshMask |= uint16_t(1U << m);
+    telemetry.updated[m] = now;
     telemetry.dataSeen = true; telemetry.lastData = now;
   }
 }

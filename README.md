@@ -11,9 +11,13 @@ creating groups, checking responses and broadcasts, applying settings, saving,
 and handling missing or replaced units.
 
 The MCP2515 interface is unchanged. Screen, wheel, and serial support are
-independently optional. The existing screen now monitors PSU/group state; the
-wheel selects a PSU. Configuration uses serial or the backend API. The old
-per-PSU voltage menus and independent-pack controls have been removed.
+optional. The local UI targets a **3.2-inch 320x240 ILI9341 SPI display** with
+three group columns, two chargers per detail page, and wheel-based voltage/current
+editing. SSD1306 support has been removed. A display is required for local edits;
+serial-only operation remains supported.
+
+See [local UI, wiring and controls](docs/LOCAL_UI.md) and the
+[generated screen preview](docs/ui-preview.html) (open the HTML file in a browser).
 
 ## Build and wiring
 
@@ -29,22 +33,24 @@ See [serial connection behaviour](docs/SERIAL.md).
 
 | Environment | Screen | Wheel | Serial |
 | --- | --- | --- | --- |
-| `mega2560` (default) | Monitor | Select PSU | Yes |
+| `mega2560` (default) | ILI9341 dashboard/config | Navigate/edit | Yes |
 | `mega2560_serial` | No | No | Yes |
-| `mega2560_display` | Monitor first slot | No | Yes |
-| `mega2560_local` | Monitor | Select PSU | No |
+| `mega2560_display` | Group overview, automatic paging | No | Yes |
+| `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
 | `mega2560_minimal` | No | No | No |
 
-Commission and save using a serial-enabled build before using a build without
-configuration controls. Reboot restoration is separately opt-in. Dependencies
+Commission identities/groups using a serial-enabled build before using
+`mega2560_local`; voltage/current editing is then available on the display. Reboot restoration is separately opt-in. Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
 The supported target is Mega 2560, with a **512-byte EEPROM budget** even though
 Mega provides more. The original Nano was already at 99.7% flash.
 
 Defaults: MCP2515 CS 10, INT 2, **8 MHz crystal**, 125 kbit/s; Mega SPI MISO 50,
 MOSI 51, SCK 52 (or ICSP). Use correctly terminated CAN wiring. Encoder CLK/DT/SW
-are 3/4/5. Optional SSD1306: address `0x3c`, SDA 20, SCL 21. The historical Nano
-PCB pictured below does not accept a Mega directly.
+are 3/4/5. ILI9341 SCK/MOSI/MISO share 52/51/50, with **CS 22, DC 23, RST 24**.
+Use a module with suitable level shifting for Mega logic. Backlight PWM is
+optional and disabled by default. See the wiring guide before connecting a
+module; the historical Nano PCB pictured below does not accept a Mega directly.
 
 For Arduino IDE, retain the complete `src/` tree, open the root `.ino`, select
 Mega 2560, and install enabled libraries from `platformio.ini`. The sketch marker
@@ -59,6 +65,7 @@ is empty; `src/main.cpp` supplies `setup`/`loop`. Validation uses PlatformIO.
 | [`ChargerConfig.h`](src/config/ChargerConfig.h) | Configuration types, limits, discovery/apply timing |
 | [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–8) |
 | [`ConsoleConfig.h`](src/config/ConsoleConfig.h) | Serial input budget and idle expiry |
+| [`UiConfig.h`](src/config/UiConfig.h) | UI timing, edit increments, paging, dimming and drawing budget |
 
 Change the deployment ID when moving to another physical installation. EEPROM
 for another ID stays inspectable but cannot authorize writes. `defaults` selects
@@ -106,7 +113,7 @@ of the [commissioning guide](docs/GETTING_STARTED.md#upgrading-and-moving-instal
 
 [Architecture and public APIs](docs/ARCHITECTURE.md) describe the structured
 preview, group diagnostics, discovery, failure reports, transport boundary, and
-EEPROM format for future UI implementations. The serial command reference is in
+EEPROM format and the replaceable display boundary. The serial command reference is in
 the [commissioning guide](docs/GETTING_STARTED.md#serial-command-reference).
 
 ```sh

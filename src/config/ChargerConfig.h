@@ -48,4 +48,5 @@ int8_t groupFor(const Configuration& config, uint8_t slot);
 // Deterministic rounding: the first remainder members receive one extra centiamp.
 uint16_t allocation(const GroupConfig& group, uint8_t slot, bool offline = false);
 bool allowedCurrent(uint16_t current, uint16_t rating);
+uint16_t currentMaximum(uint16_t rating);
 }

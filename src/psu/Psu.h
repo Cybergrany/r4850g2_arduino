@@ -6,7 +6,8 @@ enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Su
 struct CommandStatus { CommandState state; uint8_t reg; uint32_t rawValue; };
 struct Telemetry {
   float values[protocol::MetricCount];
-  uint16_t validMask;
+  uint32_t updated[protocol::MetricCount]; // Freshness is per field, not per reply batch.
+  uint16_t validMask, freshMask;
   float ampHours;
   uint32_t lastData, lastBroadcast, alarmBits;
   bool dataSeen, broadcastSeen, ready, alarmSeen;

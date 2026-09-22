@@ -7,7 +7,9 @@ bool PsuController::begin() { ready_ = transport_.begin(); return ready_; }
 Result PsuController::configure(const Configuration& c, bool resume) {
   if (busy()) return Result::Busy;
   if (!validConfig(c)) return Result::Invalid;
+  reconcileSessions(c);
   config_ = c; ++revision_; voltageSynced_ = restoreBlocked_ = 0;
+  currentSynced_ = 0;
   voltageCommissioned_ = verifying_ = identityChecked_ = false;
   report_ = {};
   running_ = resume && c.autoResume && c.operating.voltageAuthorized && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
@@ -20,7 +22,9 @@ Result PsuController::change(const Configuration& next, uint8_t invalidate) {
   Configuration c = next;
   c.operating.currentMask &= uint8_t(~invalidate);
   if (!validConfig(c)) return Result::Invalid;
+  reconcileSessions(c);
   config_ = c; ++revision_; running_ &= uint8_t(~invalidate);
+  currentSynced_ &= uint8_t(~invalidate);
   restorePending_ &= uint8_t(~invalidate); restoreBlocked_ &= uint8_t(~invalidate);
   return Result::Ok;
 }
@@ -97,12 +101,30 @@ CurrentCheck PsuController::checkCurrent(uint8_t g, uint16_t total) const {
   if (g >= limits::maxGroups || !config_.groups[g].members) { result.issue = Issue::Invalid; return result; }
   auto group = config_.groups[g]; group.current = total;
   for (uint8_t i = 0; i < count(); ++i) if (group.members & (1U << i)) {
-    const uint32_t ratedLimit = uint32_t(config_.units[i].ratedCurrent) * 120 / 100;
-    const uint16_t maximum = ratedLimit < limits::maxCurrent ? ratedLimit : limits::maxCurrent;
+    const uint16_t maximum = currentMaximum(config_.units[i].ratedCurrent);
     const uint16_t share = allocation(group, i);
     if (share > maximum) return {Issue::Capacity, i, share, maximum};
   }
   return result;
+}
+uint16_t PsuController::groupCurrentMaximum(uint8_t group) const {
+  if (group >= limits::maxGroups || !config_.groups[group].members) return 0;
+  uint16_t low = 0, high = uint16_t(population(config_.groups[group].members)) * limits::maxCurrent;
+  // Allocation is monotonic. Reuse validation rather than approximating a sum
+  // of ratings (which is wrong for equally shared groups with unequal ratings).
+  while (low < high) {
+    const uint16_t mid = low + (uint32_t(high) - low + 1) / 2;
+    if (checkCurrent(group, mid).issue == Issue::None) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+void PsuController::reconcileSessions(const Configuration& next) {
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i)
+    if (next.deploymentId != config_.deploymentId || i >= next.count ||
+        !sameIdentity(next.units[i].identity, config_.units[i].identity)) {
+      sessionAh_[i] = 0; sessionSeen_ &= uint8_t(~(1U << i));
+    }
 }
 Result PsuController::setAutoResume(bool on) { auto c = config_; c.autoResume = on; return change(c); }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
@@ -161,6 +183,12 @@ bool PsuController::metric(uint8_t slot, protocol::Metric m, float& value, uint3
   if (m == protocol::CurrentCapacity) value *= config_.units[slot].ratedCurrent / 100.0f;
   return true;
 }
+bool PsuController::freshMetric(uint8_t slot, protocol::Metric m, float& value, uint32_t now) const {
+  if (m >= protocol::MetricCount) return false;
+  const auto* d = deviceForSlot(slot, now);
+  return d && d->verified(now) && d->fresh(now, staleMs()) &&
+      (d->telemetry.freshMask & (1U << m)) && uint32_t(now - d->telemetry.updated[m]) <= staleMs() && metric(slot, m, value, now);
+}
 ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool partial) const {
   ApplyPlan p = {}; p.operation = op; p.group = group; p.created = now;
   p.configurationRevision = revision_; p.topologyRevision = discovery_.revision(); p.partial = partial;
@@ -207,6 +235,7 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
     voltageSynced_ = 0; running_ |= fresh.recipients;
   }
   if (p.operation == Operation::All || p.operation == Operation::GroupCurrent) {
+    currentSynced_ &= uint8_t(~fresh.recipients);
     for (uint8_t i = 0; i < count(); ++i) if (fresh.recipients & (1U << i)) config_.operating.current[i] = fresh.current[i];
     config_.operating.currentMask |= fresh.recipients; running_ |= fresh.recipients;
   }
@@ -217,6 +246,7 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   return Result::Ok;
 }
 void PsuController::beginReport(Operation op, uint8_t requested, uint8_t recipients, uint8_t skipped) {
+  report_.sequence = ++reportSequence_;
   report_.active = true; report_.operation = op;
   report_.requested = requested; report_.recipients = recipients; report_.skipped = skipped;
   report_.succeeded = report_.failed = 0;
@@ -244,6 +274,14 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
     const auto* d = deviceForSlot(i, now);
     if (d && d->address == protocol::address(f.id)) { slot = i; break; }
   }
+  if (slot >= 0 && protocol::isCurrentBroadcast(f)) {
+    const auto* d = deviceForSlot(slot, now);
+    if (d && d->verified(now)) {
+      const uint16_t raw = uint16_t(f.data[6]) << 8 | f.data[7];
+      sessionAh_[slot] += raw / protocol::ahCurrentDivisor * protocol::ahSampleSeconds / 3600;
+      sessionSeen_ |= 1U << slot;
+    }
+  }
   // A routing address is not an identity. Recheck INFO immediately before each
   // setting write, including the current phase and nonvolatile operations.
   if (verifying_ && slot == jobSlot_ && protocol::isReply(f) &&
@@ -263,6 +301,7 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
         voltageSynced_ |= 1U << jobSlot_;
         if (voltageSynced_ == membersMask(count())) voltageCommissioned_ = true;
       }
+      if (ok && f.data[1] == protocol::OnlineCurrent) currentSynced_ |= 1U << jobSlot_;
       advance(ok);
     }
   }
@@ -340,6 +379,7 @@ void PsuController::restore(uint32_t now) {
     const uint32_t epoch = d && issue(i, now) == Issue::None ? d->epoch : 0;
     if (epoch != observedEpoch_[i]) {
       voltageSynced_ &= uint8_t(~(1U << i));
+      currentSynced_ &= uint8_t(~(1U << i));
       if (running_ & (1U << i)) restorePending_ |= 1U << i;
       // A real disconnect/identity epoch transition permits one recovery attempt.
       restoreBlocked_ &= uint8_t(~(1U << i));
@@ -415,6 +455,7 @@ Result PsuController::requestPoll(uint8_t mask, uint32_t now) {
   return Result::Ok;
 }
 void PsuController::resetAmpHours() {
+  memset(sessionAh_, 0, sizeof(sessionAh_)); sessionSeen_ = 0;
   for (uint8_t i = 0; i < Discovery::capacity; ++i) {
     const auto& d = discovery_.device(i);
     if (d.occupied) discovery_.address(d.address)->telemetry.ampHours = 0;

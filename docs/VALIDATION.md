@@ -1,6 +1,6 @@
 # Validation
 
-Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend validation was
+Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend and ILI9341 UI validation was
 performed on 2026-09-22. No firmware upload or physical multi-PSU test was performed.
 
 ```sh
@@ -14,18 +14,22 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. All five profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
-7.3.0, CAN 0.3.1, SSD1306Ascii 1.3.5, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
+7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
+Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
 A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 3601 | 53944 |
-| `mega2560_serial` | 3307 | 47218 |
-| `mega2560_display` | 3576 | 52490 |
-| `mega2560_local` | 2891 | 27448 |
-| `mega2560_minimal` | 2559 | 19536 |
+| `mega2560` | 5930 | 76208 |
+| `mega2560_serial` | 4175 | 48616 |
+| `mega2560_display` | 5905 | 73648 |
+| `mega2560_local` | 5230 | 53286 |
+| `mega2560_minimal` | 3427 | 20388 |
 
-Static RAM excludes worst-case stack/interrupt nesting. EEPROM reserves only
+The full UI build uses 72.4% static RAM and 30.0% flash, leaving 2262 bytes
+for stack/runtime use. Static RAM excludes worst-case stack/interrupt nesting.
+There is no full colour framebuffer; two text/style scenes use 1170 bytes.
+Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
 
 ## Host coverage
@@ -36,7 +40,9 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-The suite passes. Its assertion total is dominated by checking every EEPROM
+The suite passes. UI navigation, formatting and persistence use the production
+model/layout code; the host suite does not simulate the actual ILI9341, SPI
+interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
 access and interruption boundary, not hundreds of thousands of independent cases.
 Meaningful scenarios include:
 
@@ -71,8 +77,30 @@ Meaningful scenarios include:
 - Character echo/backspace/DEL, CRLF split across ticks, tabs, overflow draining,
   reconnect without output observation, idle timeout before consuming new bytes,
   timeout rollover, raw-output prompt redraw, and active jobs surviving console reset.
+- Three-group and two-charger paging; empty/deleted groups; returning to the
+  selected PSU; edit cancellation and backend clamping; exact mixed-rating group
+  capacity including the centiamp remainder.
+- Initial voltage commissioning before group current; UI apply/ACK/save ordering;
+  runtime ACKs versus saved requests after reboot; independent serial changes
+  invalidating an edit; operation ownership and missing-member No/Yes/expiry.
+- Missing-member partial applies retain shares and warn with member numbers;
+  voltage and not-ready members have no override; CAN apply failure does not save;
+  EEPROM failure is distinguished from accepted live settings; changes made during
+  a save remain unsaved and the UI reports the earlier snapshot.
+- Incremental EEPROM writes alter at most one byte per step, retain the initial
+  snapshot, reject overlapping saves, and pass the existing interruption coverage.
+- Per-field freshness despite continuing unrelated replies; partial/missing sums,
+  signed temperature maxima and millis rollover; volatile session Ah retained
+  across absence/address relocation and reset for a replacement identity.
+- Actual layout snapshots for group pages, aligned charger values including W,
+  green OK/error detail, group configuration and partial confirmation. Numeric
+  formatting preserves units, uses k/M where needed and handles invalid readings.
 - MCP2515 success/arbitration/errors/abort/no completion/stuck TXREQ, bounded
   timeout, rollover, preserved RX flags, and invalid frame rejection.
+
+The [generated preview](ui-preview.html) uses frames exported from those tests
+and the pinned Adafruit GFX font. Its pixel layout was inspected; its six screens'
+JavaScript drawing paths execute with bounded coordinates. It is not an LCD test.
 
 ## Physical bench checks still required
 
@@ -113,3 +141,16 @@ power tests only after commissioning appropriate limits and defaults.
 10. Where required, test EEPROM power interruption under the board's actual
     brownout configuration. The software journal tests do not model analogue
     brownout corruption or provide an electrical interlock.
+
+11. Wire the selected SPI ILI9341 module per [the local UI guide](LOCAL_UI.md).
+    Confirm logic levels, shared MISO release, separate CS, display ID, rotation,
+    text readability and backlight drive. Boot with it absent: serial/CAN must
+    still work and the wheel must not issue blind settings.
+12. Exercise rapid wheel turns, short click, hold/release, cancellation, paging,
+    optional idle dim/wake and serial edits during a local edit. A hold must not
+    also commit a short click. Check the display-only build's automatic paging.
+13. With all PSUs broadcasting, navigate repeatedly and perform local apply/save
+    operations while serial remains in use. Verify ACK/error screens, EEPROM
+    readback, no unexpected settings and CAN drop/error counters. Measure loop
+    timing and free stack under this load; bounded transfer size alone does not
+    prove hardware interrupt latency or electrical bus behavior.

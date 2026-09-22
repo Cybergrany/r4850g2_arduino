@@ -366,7 +366,10 @@ The serial command syntax intentionally changes from the earlier multi-pack
 firmware. Per-unit voltages, manual address mappings, enabled-slot skipping,
 `bootapply`, `modifySingle`/`modifyRange`, and the combined `persist` command are
 removed. Use global voltage, named groups, identity bindings, `autoresume`, and
-explicit online/offline operations. The OLED/wheel are monitors for now.
+explicit online/offline operations. After serial commissioning, the
+[ILI9341/wheel UI](LOCAL_UI.md) monitors groups and edits global voltage/group
+current through the same backend. A successful local apply also saves controller
+EEPROM; serial `apply` and `save` remain separate operations.
 
 EEPROM schema 2 uses two 256-byte journal slots, with a 216-byte record at eight
 PSUs. The remainder of Mega EEPROM is untouched. A save commits last with CRC

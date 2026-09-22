@@ -41,6 +41,10 @@ void Discovery::receive(const CanFrame& f, uint32_t now) {
 void Discovery::tick(uint32_t now, uint32_t staleMs) {
   for (auto& d : devices_) {
     if (!d.occupied) continue;
+    // Expire freshness permanently until that field is received again. Keeping
+    // only a timestamp would let a months-old value revive after millis wraps.
+    for (uint8_t m = 0; m < protocol::MetricCount; ++m)
+      if (uint32_t(now - d.telemetry.updated[m]) > staleMs) d.telemetry.freshMask &= uint16_t(~(1U << m));
     const bool live = d.fresh(now, staleMs);
     bool conflict = false;
     for (const auto& other : devices_)

@@ -3,6 +3,7 @@
 #include "../psu/PsuController.h"
 #include "../storage/ArduinoEeprom.h"
 #include "../ui/LocalUi.h"
+#include "../ui/Ili9341Display.h"
 #include "../ui/SerialConsole.h"
 
 namespace psu {
@@ -19,7 +20,8 @@ class Application {
 #if PSU_ENABLE_SERIAL
   SerialConsole console_;
 #endif
-#if PSU_ENABLE_DISPLAY || PSU_ENABLE_ENCODER
+#if PSU_ENABLE_DISPLAY
+  Ili9341Display display_;
   LocalUi localUi_;
 #endif
 };

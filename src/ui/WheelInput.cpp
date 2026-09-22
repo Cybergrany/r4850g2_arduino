@@ -16,6 +16,13 @@ void WheelInput::begin() {
   Timer1.initialize(1000);
   Timer1.attachInterrupt(serviceEncoder);
 }
-WheelEvent WheelInput::read() { return {encoder.getValue(), encoder.getButton() == ClickEncoder::Clicked}; }
+UiInput WheelInput::read() {
+  const auto button = encoder.getButton();
+  UiInput event = {encoder.getValue(), false, false};
+  if (button == ClickEncoder::Held) { event.held = !held_; held_ = true; }
+  else if (button == ClickEncoder::Released) held_ = false;
+  else if (button == ClickEncoder::Clicked) { event.clicked = !held_; held_ = false; }
+  return event;
+}
 }
 #endif

@@ -11,7 +11,7 @@ controller, and storage code are ordinary C++11 without Arduino dependencies.
 | `src/protocol/` | Huawei frame classification, registers, numeric encoding |
 | `src/psu/` | Discovered physical devices, stable slot bindings, group allocation, apply/recovery state machines |
 | `src/storage/` | Versioned journal over `ByteStorage`; Arduino adapter uses standard EEPROM |
-| `src/ui/` | Serial commands, diagnostic rendering, optional wheel/display monitor |
+| `src/ui/` | Serial commands, diagnostic rendering, ILI9341 layout/renderer and wheel navigation/editing |
 | `src/app/` | Startup composition and cooperative scheduling |
 | `test/` | Production code exercised with simulated hardware/time |
 
@@ -90,16 +90,19 @@ atomic in RAM and return Busy while a job runs. The old independent-pack
 | `groupStatus(group,now)` | Membership/responding/ready/missing masks and requested/authorized totals |
 | `busStatus(now)` | Configured slots versus fresh responders, verified identities and broadcasting units |
 | `issue(slot,now)` | Missing, unbound, unassigned, conflict, identity pending, data stale, not ready, deployment mismatch |
-| `voltageSynchronized(slot)` | Whether this runtime identity/epoch acknowledged the authorized common voltage |
+| `voltageSynchronized(slot)`, `currentSynchronized(slot)` | Runtime ACK flags; clear on boot/identity loss and affected writes |
+| `freshMetric`, `summarize`, `sessionTotal` | Per-field freshness, partial sums/means/maxima, and volatile session totals |
+| `groupCurrentMaximum(group)` | Exact accepted maximum using the same allocation/validation as serial |
+| `configurationRevision()` | Invalidate an edit when another interface changes configuration |
 | `discovery()` | Read-only observed devices, identity verification, current addresses, epochs, registry counters |
 | `deviceForSlot`, `metric` | Last observed measurements; `issue`/timestamps must also be checked for freshness |
 | `preview(op,group,now,partial)` | Snapshot of recipients, missing members, shares, per-slot blockers, configuration/topology revisions |
 | `queue(plan,confirmed,now)` | Revalidate the plan and queue work, or return Changed/Blocked/ConfirmRequired/Busy |
-| `report()` | Active operation, requested/recipient/succeeded/failed/skipped masks, per-slot command state/register/value |
+| `report()` | Monotonic operation sequence, active operation, requested/recipient/succeeded/failed/skipped masks, per-slot command state/register/value |
 | `scan`, `requestPoll`, `requestDescription` | Read-only bus diagnostics |
 | `observeFrames` | Optional raw/description observer; parsing and state transitions remain in the core |
 
-The future UI can render these types directly. It must distinguish requested,
+Serial and the local UI consume these types directly. It must distinguish requested,
 authorized, acknowledged, measured, and stale data. `report().units` retains each
 slot's last command state even when another group's operation runs. Operation
 masks describe the most recent job. They are bounded state, not a historical log.
@@ -194,19 +197,47 @@ continues to supply initialization and receive handling.
 Serial drains at most 32 input bytes per loop, never waits for a line, and yields
 between report rows. Echo, backspace, CR/LF/CRLF, idle expiration, Ctrl-X/C reset,
 Ctrl-U line clear, and prompt redraw remain available. Description control bytes
-are sanitized. A console reset also cancels a pending UI confirmation, but
+are sanitized. A console reset also cancels a pending serial confirmation, but
 cannot cancel a submitted controller job. See [serial lifecycle](SERIAL.md).
 A large raw stream or synchronous EEPROM save can still increase receive drops.
 
-The existing OLED is a monitor with compact readiness/last-command messages;
-the wheel selects a slot. It uses the same backend state and has no separate
-bank/voltage editing logic. Future richer UI work need not parse serial strings.
-Absent display hardware is skipped and I2C transactions have a 25 ms timeout.
+The local UI is separated into `UiModel` (navigation, editing, confirmations and
+operation ownership), `UiView` (320x240 layout), `UiFrame` (585-byte text/style
+scene), and the injected `Display` interface. `Ili9341Display` keeps a second
+585-byte scene cache and a 32-byte glyph raster. There is no full pixel buffer,
+heap-allocated canvas, or String-based menu. A future display can replace the
+renderer; a different resolution can also replace the layout without changing
+navigation/backend policy. SSD1306 support and its dependency are removed.
+
+The header averages fresh configured-unit output voltages and sums fresh current
+and output power. Per-metric timestamps and an expiring freshness mask prevent
+other replies from keeping an old measurement fresh, including across millis
+rollover. `metric()` retains its last-value API; `freshMetric()` is the stricter
+presentation hook. Partial sums carry `*`; no available readings show `--`.
+Session Ah is accumulated in the controller for verified bound slots and survives
+observation recycling and address changes. It resets for reboot/reset-ah or a
+changed identity, removed slot or deployment, and is never stored in EEPROM.
+
+Display initialization and the only full-screen clear run before CAN starts.
+Runtime drawing uses at most four transactions per service call, each carrying
+24 RGB565 pixels (two rows of a glyph); the CAN interrupt can run between SPI
+transactions. Cached cells are committed only after their entire glyph has been
+sent, even if the scene changes mid-glyph. Missing display ID disables local
+controls while serial/CAN remain available. Optional PWM dimming consumes the
+first wake interaction. Read-only builds cycle group pages automatically.
+
+`UiModel` owns the sequence of its operation and retains its result masks; another
+serial job cannot be mistaken for its successful apply. Edits/confirmations are
+invalidated by configuration revisions and confirmation topology/expiry checks.
+A successful local apply snapshots EEPROM via `startSave` / `stepSave`, writing
+one byte per step so CAN and serial continue to run. Missing-member overrides
+remain explicit and never redistribute load. Final apply/save errors are visible
+even when the operator leaves the progress screen. See [local UI](LOCAL_UI.md).
 
 ## EEPROM schema 2 and migration
 
 `ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Only
-explicit `save` writes. Two 256-byte journal slots reserve bytes 0–511;
+serial `save` or a successful local apply/save writes. Two 256-byte journal slots reserve bytes 0–511;
 integer encoding is explicit little-endian and independent of struct padding.
 At eight-slot capacity the record is **216 bytes**, whether one or eight slots
 are active. Telemetry, observations, sessions, pending jobs and ACK history are

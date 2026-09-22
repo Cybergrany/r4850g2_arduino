@@ -1,28 +1,27 @@
 #pragma once
 #include "../config/BuildOptions.h"
-#if PSU_ENABLE_DISPLAY || PSU_ENABLE_ENCODER
-#include "../psu/PsuController.h"
-#include "OledDisplay.h"
+#if PSU_ENABLE_DISPLAY
+#include "UiView.h"
+#include "Display.h"
 #include "WheelInput.h"
 namespace psu {
-// Existing screen remains a monitor. Future editing UIs should use the same
-// preview/queue/structured diagnostics API as SerialConsole.
 class LocalUi {
  public:
-  explicit LocalUi(PsuController& controller) : controller_(controller) {}
+  LocalUi(PsuController& controller, MemoryManager& memory, Display& display)
+      : controller_(controller), model_(controller, memory), display_(display) {}
   void begin();
   void tick(uint32_t now);
+  bool available() const { return available_; }
  private:
   PsuController& controller_;
-#if PSU_ENABLE_DISPLAY
-  OledDisplay display_;
-#endif
+  UiModel model_;
+  Display& display_;
+  UiFrame frame_;
 #if PSU_ENABLE_ENCODER
   WheelInput wheel_;
 #endif
-  uint8_t index_ = 0;
-  bool dirty_ = true;
-  uint32_t lastDraw_ = 0;
+  uint32_t lastDraw_ = 0, lastInput_ = 0, lastPage_ = 0;
+  bool available_ = false, dirty_ = true, dimmed_ = false;
 };
 }
 #endif

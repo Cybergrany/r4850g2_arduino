@@ -5,6 +5,9 @@
 #include "psu/PsuController.h"
 #include "storage/MemoryManager.h"
 #include "ui/SerialConsole.h"
+#include "ui/UiView.h"
+#include <fstream>
+#include <cstdlib>
 #include <array>
 #include <cmath>
 #include <deque>
@@ -532,7 +535,9 @@ void eepromAndMigration() {
   CHECK(validConfig(one) && memory.load(out) == StorageResult::NoValidRecord);
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     bytes.bytes.fill(0xff); bytes.stopAfter = cut; bytes.calls = 0;
-    try { memory.save(one); } catch (const PowerCut&) {}
+    // Power loss destroys the in-RAM incremental-save state as well as execution.
+    MemoryManager interrupted(bytes);
+    try { interrupted.save(one); } catch (const PowerCut&) {}
     bytes.stopAfter = -1;
     CHECK(memory.load(out) == (cut <= MemoryManager::recordSize ? StorageResult::NoValidRecord : StorageResult::Ok));
   }
@@ -553,7 +558,8 @@ void eepromAndMigration() {
   auto three = two; three.voltage = 5600;
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     bytes.bytes = original; bytes.calls = 0; bytes.stopAfter = cut;
-    try { memory.save(three); } catch (const PowerCut&) {}
+    MemoryManager interrupted(bytes);
+    try { interrupted.save(three); } catch (const PowerCut&) {}
     bytes.stopAfter = -1;
     CHECK(memory.load(out) == StorageResult::Ok);
     CHECK(out.voltage == (cut <= MemoryManager::recordSize ? 5500 : 5600));
@@ -583,7 +589,8 @@ void eepromAndMigration() {
   const auto migrated = out;
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     legacy.bytes = preserved; legacy.calls = 0; legacy.stopAfter = cut;
-    try { old.save(migrated); } catch (const PowerCut&) {}
+    MemoryManager interrupted(legacy);
+    try { interrupted.save(migrated); } catch (const PowerCut&) {}
     legacy.stopAfter = -1;
     CHECK(old.load(out) == (cut <= MemoryManager::recordSize ? StorageResult::Migrated : StorageResult::Ok));
   }
@@ -687,12 +694,219 @@ void serialLifecycleAndParity() {
     CHECK(terminal.input("\r\n").find("Input expired") != std::string::npos && idle.can.writes().empty());
   }
 }
+struct UiRig {
+  Rig& r;
+  FakeEeprom bytes;
+  MemoryManager memory;
+  UiModel ui;
+  explicit UiRig(Rig& rig) : r(rig), memory(bytes), ui(r.c, memory) { ui.tick(r.now); }
+  void turn(int16_t n) { ui.input({n, false, false}, r.now); }
+  void click() { ui.input({0, true, false}, r.now); }
+  void hold() { ui.input({0, false, true}, r.now); }
+  void tick(uint32_t ms = 1, bool refresh = true) { r.step(ms, true, refresh); ui.tick(r.now); }
+  void finish() {
+    for (unsigned n = 0; ui.working() && n < 2000; ++n) tick(10);
+    CHECK(!ui.working());
+  }
+};
+std::string rowText(const UiFrame& f, uint8_t row) {
+  std::string text;
+  for (uint8_t col = 0; col < ui::columns; ++col) text += f.cell(uint16_t(row) * ui::columns + col).character;
+  return text;
+}
+void snapshot(const char* name, const UiFrame& frame);
+void uiWorkflows() {
+  Rig r; UiRig u(r);
+  CHECK(u.ui.page() == UiPage::Groups && u.ui.group() == 0);
+  u.click(); CHECK(u.ui.page() == UiPage::Units); u.turn(1); CHECK(u.ui.unit() == 1);
+  u.click(); CHECK(u.ui.page() == UiPage::Detail); u.click(); CHECK(u.ui.unit() == 1);
+  u.hold(); CHECK(u.ui.page() == UiPage::Groups); u.click(); CHECK(u.ui.unit() == 1);
+  u.hold(); u.hold(); CHECK(u.ui.page() == UiPage::Config && u.ui.field() == UiField::Current);
+  const auto old = r.c.configuration().groups[0].current;
+  u.click(); u.turn(30000); CHECK(u.ui.editValue() == r.c.groupCurrentMaximum(0));
+  CHECK(r.c.configuration().groups[0].current == old && r.can.writes().empty());
+  u.turn(-30000); CHECK(u.ui.editValue() == 0);
+  u.hold(); CHECK(r.c.configuration().groups[0].current == old && !u.ui.editing());
+  // Current before global voltage commissioning produces a useful blocker.
+  u.hold(); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.blocker() == Issue::VoltageUnsynced);
+  CHECK(r.can.writes().empty());
+  u.click(); u.turn(1); CHECK(u.ui.field() == UiField::Voltage);
+  u.click(); u.turn(1); u.click(); CHECK(u.ui.notice() == UiNotice::Applying);
+  u.finish(); CHECK(u.ui.notice() == UiNotice::Saved);
+  Configuration saved; CHECK(u.memory.load(saved) == StorageResult::Ok);
+  CHECK(saved.voltage == 5410 && saved.operating.voltage == 5410);
+  CHECK(saved.operating.currentMask == 0); // Voltage edit cannot apply group drafts.
+  for (const auto& frame : r.can.writes()) CHECK(frame.data[1] == protocol::OnlineVoltage);
+  u.click(); u.turn(1); u.click(); u.turn(1); u.click();
+  CHECK(u.ui.notice() == UiNotice::Applying); u.finish();
+  CHECK(u.ui.notice() == UiNotice::Saved && u.memory.load(saved) == StorageResult::Ok);
+  CHECK(saved.groups[0].current == old + ui::currentStep);
+  CHECK(saved.operating.current[0] + saved.operating.current[1] == old + ui::currentStep);
+  CHECK(r.c.currentSynchronized(0) && !pendingSettings(r.c, 3));
+  Rig reboot(saved); CHECK(!reboot.c.currentSynchronized(0) && pendingSettings(reboot.c, 3));
+  reboot.apply(Operation::Voltage); CHECK(pendingSettings(reboot.c, 3));
+  reboot.apply(Operation::GroupCurrent, 0); CHECK(!pendingSettings(reboot.c, 3));
+  // Serial/config changes invalidate a local draft before a confirming click.
+  u.click(); u.click(); u.turn(3); const auto writes = r.can.writes().size();
+  CHECK(r.c.setCurrent(0, 1000) == Result::Ok); u.ui.tick(r.now);
+  CHECK(!u.ui.editing() && u.ui.notice() == UiNotice::Changed);
+  u.click(); CHECK(r.can.writes().size() == writes && r.c.configuration().groups[0].current == 1000);
+  // No groups is a valid commissioning screen; gestures cannot index -1.
+  Rig empty; CHECK(empty.c.removeGroup(0) == Result::Ok); UiRig e(empty);
+  e.click(); e.hold(); e.turn(300); CHECK(e.ui.group() == -1 && e.ui.page() == UiPage::Groups);
+  UiFrame frame; UiView::compose(frame, e.ui, empty.c, empty.now);
+  CHECK(rowText(frame, 3).find("No groups") != std::string::npos);
+  Rig removed; UiRig deleted(removed); deleted.hold(); deleted.click();
+  CHECK(removed.c.removeGroup(0) == Result::Ok); deleted.ui.tick(removed.now);
+  CHECK(deleted.ui.notice() == UiNotice::Changed && !deleted.ui.editing());
+  deleted.click(); CHECK(deleted.ui.page() == UiPage::Groups && removed.can.writes().empty());
+}
+void uiPartialAndFailures() {
+  Rig r; r.apply(); UiRig u(r);
+  r.live = 1; r.step(6000); u.ui.tick(r.now);
+  u.hold(); u.click(); u.turn(1); u.click();
+  CHECK(u.ui.page() == UiPage::Confirm && !u.ui.confirmingYes());
+  UiFrame warning; UiView::compose(warning, u.ui, r.c, r.now); snapshot("confirmation", warning);
+  CHECK(rowText(warning, 10).find("Missing PSU: 2") != std::string::npos);
+  CHECK(rowText(warning, 12).find('~') == std::string::npos);
+  const auto writes = r.can.writes().size(); u.click();
+  CHECK(u.ui.notice() == UiNotice::Cancelled && r.can.writes().size() == writes);
+  u.click(); u.click(); u.click(); CHECK(u.ui.page() == UiPage::Confirm);
+  u.turn(1); CHECK(u.ui.confirmingYes()); u.click(); CHECK(u.ui.notice() == UiNotice::Applying);
+  const auto share = allocation(r.c.configuration().groups[0], 0);
+  u.finish(); CHECK(u.ui.notice() == UiNotice::PartialSaved);
+  CHECK(r.c.report().recipients == 1 && r.c.report().skipped == 2);
+  CHECK(r.c.configuration().operating.current[0] == share); // No redistribution.
+  Configuration saved; CHECK(u.memory.load(saved) == StorageResult::Ok);
+  // The confirmation expires; another click cannot issue its old write plan.
+  u.click(); u.click(); u.click(); CHECK(u.ui.page() == UiPage::Confirm);
+  const auto before = r.can.writes().size(); r.step(limits::confirmationMs + 1); u.click();
+  CHECK(u.ui.notice() == UiNotice::Changed && r.can.writes().size() == before);
+  // Global voltage has no missing-member override.
+  u.turn(1); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.page() != UiPage::Confirm);
+  CHECK(r.can.writes().size() == before);
+  Rig unready; unready.apply(); UiRig blocked(unready);
+  unready.can.incoming.push_back(broadcast(2, false)); unready.c.tick(unready.now);
+  blocked.hold(); blocked.click(); blocked.click();
+  CHECK(blocked.ui.notice() == UiNotice::Blocked && blocked.ui.blocker() == Issue::NotReady);
+  // CAN failure never produces a success banner or an EEPROM record.
+  Rig failure; failure.apply(); UiRig bad(failure); failure.can.sendOk = false;
+  bad.hold(); bad.click(); bad.turn(1); bad.click(); bad.finish();
+  CHECK(bad.ui.notice() == UiNotice::ApplyFailed && bad.memory.load(saved) == StorageResult::NoValidRecord);
+  // EEPROM failure is distinguished from already-acknowledged live settings.
+  Rig storage; storage.apply(); UiRig broken(storage); broken.bytes.ignoredAddress = 20;
+  broken.hold(); broken.click(); broken.turn(1); broken.click(); broken.finish();
+  CHECK(broken.ui.notice() == UiNotice::SaveFailed && storage.c.report().failed == 0);
+  // An asynchronous save snapshots once, rejects overlapping saves, and writes
+  // at most one byte per tick while the main loop remains available.
+  FakeEeprom bytes; MemoryManager memory(bytes); auto original = installation();
+  CHECK(memory.startSave(original) == StorageResult::Ok && memory.saving());
+  CHECK(memory.save(original) == StorageResult::Busy);
+  original.voltage = 5500;
+  unsigned ticks = 0;
+  while (memory.saving()) { const auto prior = bytes.bytes; memory.stepSave(); unsigned changed = 0;
+    for (unsigned i = 0; i < prior.size(); ++i) changed += prior[i] != bytes.bytes[i];
+    CHECK(changed <= 1 && ++ticks <= MemoryManager::recordSize + 2);
+  }
+  CHECK(memory.saveResult() == StorageResult::Ok && memory.load(saved) == StorageResult::Ok && saved.voltage == 5400);
+  // A serial change during save must not be labelled as the saved configuration.
+  Rig concurrent; concurrent.apply(); UiRig changed(concurrent);
+  changed.hold(); changed.click(); changed.click();
+  for (unsigned i = 0; changed.ui.notice() == UiNotice::Applying && i < 1000; ++i) changed.tick(10);
+  CHECK(changed.ui.notice() == UiNotice::Saving);
+  CHECK(concurrent.c.setCurrent(0, 1000) == Result::Ok); changed.finish();
+  CHECK(changed.ui.notice() == UiNotice::SavedOlder);
+  CHECK(changed.memory.load(saved) == StorageResult::Ok && saved.groups[0].current == 5500);
+}
+void presentationAndSessions() {
+  auto cfg = installation(3); cfg.units[1].ratedCurrent = 1001;
+  cfg.groups[0].current = 1000; Rig r(cfg);
+  const auto maximum = r.c.groupCurrentMaximum(0);
+  CHECK(r.c.checkCurrent(0, maximum).issue == Issue::None);
+  CHECK(r.c.checkCurrent(0, maximum + 1).issue == Issue::Capacity);
+  CHECK(maximum == 3604); // Equal shares and centiamp remainder, not sum of ratings.
+  r.can.incoming.push_back(data(1, 0x81, 10 * 1024));
+  r.can.incoming.push_back(data(2, 0x81, 20 * 1024));
+  r.can.incoming.push_back(data(1, 0x7f, uint32_t(int32_t(-10 * 1024))));
+  r.can.incoming.push_back(data(2, 0x7f, uint32_t(int32_t(-5 * 1024)))); r.c.tick(r.now);
+  auto amps = summarize(r.c, 7, protocol::OutputCurrent, Aggregate::Sum, r.now);
+  CHECK(amps.observed == 2 && amps.expected == 3 && amps.partial()); close(amps.value, 30);
+  auto temp = summarize(r.c, 7, protocol::OutputTemperature, Aggregate::Maximum, r.now); close(temp.value, -5);
+  r.step(6000); // Other telemetry keeps arriving, but current/temperature do not.
+  amps = summarize(r.c, 7, protocol::OutputCurrent, Aggregate::Sum, r.now); CHECK(!amps.valid());
+  float old; CHECK(r.c.metric(0, protocol::OutputCurrent, old, r.now)); close(old, 10); // Last-value API preserved.
+  const auto accumulated = r.c.sessionAmpHours(0); CHECK(accumulated > 0);
+  r.live &= ~1; r.step(31000); close(r.c.sessionAmpHours(0), accumulated);
+  r.addresses[0] = 17; r.live |= 1; r.step(250); r.step(250);
+  CHECK(r.c.sessionAmpHours(0) > accumulated && r.c.deviceForSlot(0, r.now)->address == 17);
+  auto total = sessionTotal(r.c, 7); CHECK(total.observed == 3 && total.value >= accumulated);
+  CHECK(r.c.setCurrent(0, 100) == Result::Ok); CHECK(r.c.sessionAmpHours(0) >= accumulated);
+  auto replacement = r.c.configuration(); replacement.units[0].identity = identity(99);
+  CHECK(r.c.configure(replacement) == Result::Ok); close(r.c.sessionAmpHours(0), 0); CHECK(!r.c.sessionObserved(0));
+  r.c.resetAmpHours(); close(sessionTotal(r.c, 7).value, 0);
+  // Per-field freshness remains correct across millis rollover.
+  Rig wrap; wrap.now = 0xffffff00; wrap.heartbeat(); wrap.c.tick(wrap.now); wrap.now += 200; wrap.heartbeat(); wrap.c.tick(wrap.now);
+  wrap.can.incoming.push_back(data(1, 0x81, 1024)); wrap.c.tick(wrap.now);
+  CHECK(wrap.c.freshMetric(0, protocol::OutputCurrent, old, wrap.now + 100));
+  CHECK(!wrap.c.freshMetric(0, protocol::OutputCurrent, old, wrap.now + 6000));
+}
+void snapshot(const char* name, const UiFrame& frame) {
+  const char* path = std::getenv("PSU_UI_SNAPSHOTS"); if (!path) return;
+  std::ofstream file(std::string(path) + "/" + name + ".txt"); CHECK(bool(file));
+  for (uint8_t row = 0; row < ui::rows; ++row) file << rowText(frame, row) << '\n';
+  for (uint16_t i = 0; i < UiFrame::cells; ++i) file << "0123456789abcdef"[frame.cell(i).style];
+  file << '\n';
+}
+void uiLayouts() {
+  char text[9]; formatValue(text, sizeof(text), 123456.7f, "W"); CHECK(std::strlen(text) <= 8 && std::strstr(text, "W"));
+  formatValue(text, 7, 123456.7f, "W"); CHECK(std::strstr(text, "kW") && std::strlen(text) <= 6);
+  formatValue(text, sizeof(text), -12.34f, "C", 2); CHECK(std::string(text) == "-12.34C");
+  formatValue(text, sizeof(text), INFINITY, "W"); CHECK(std::string(text) == "--");
+  UiFrame frame; frame.clear(); frame.text(0, 0, 8, "TOO_LONG_NAME"); CHECK(rowText(frame, 0).substr(0, 8) == "TOO_LON~");
+  auto cfg = installation(8); for (auto& g : cfg.groups) g = {};
+  for (uint8_t i = 0; i < 5; ++i) { std::snprintf(cfg.groups[i].name, sizeof(cfg.groups[i].name), "GROUP%u", unsigned(i + 1));
+    cfg.groups[i].members = i < 3 ? 3U << (i * 2) : 1U << (i + 3);
+    cfg.groups[i].current = i < 2 ? 2000 : i == 2 ? 0 : 500;
+  }
+  Rig r(cfg); r.apply(); UiRig u(r);
+  for (uint8_t i = 0; i < 8; ++i) {
+    const uint16_t amps = i < 2 ? 10 : i == 2 ? 10 : i < 6 ? 0 : 5;
+    r.can.incoming.push_back(data(i + 1, 0x81, amps * 1024UL));
+    r.can.incoming.push_back(data(i + 1, 0x73, amps * 54UL * 1024));
+    r.can.incoming.push_back(data(i + 1, 0x7f, (i < 2 ? 60 : i < 4 ? 55 : 15) * 1024UL));
+    r.can.incoming.push_back(data(i + 1, 0x80, 40 * 1024UL));
+    r.can.incoming.push_back(data(i + 1, 0x78, 227 * 1024UL));
+    r.can.incoming.push_back(data(i + 1, 0x71, 50 * 1024UL));
+    r.can.incoming.push_back(data(i + 1, 0x72, amps ? 2560 : 0));
+  }
+  while (!r.can.incoming.empty()) r.c.tick(r.now);
+  r.can.incoming.push_back(broadcast(4, false)); r.c.tick(r.now);
+  u.turn(1); UiView::compose(frame, u.ui, r.c, r.now); snapshot("groups", frame);
+  CHECK(rowText(frame, 0).find("40.0A") != std::string::npos && rowText(frame, 0).find("2160W") != std::string::npos);
+  CHECK(rowText(frame, 2).find("GROUP1") != std::string::npos && rowText(frame, 2).find("GROUP3") != std::string::npos);
+  CHECK(rowText(frame, 12).find("ERR 1/2") != std::string::npos);
+  u.click(); u.turn(1); UiView::compose(frame, u.ui, r.c, r.now); snapshot("chargers", frame);
+  CHECK(rowText(frame, 4).find("40C/55C") != std::string::npos && rowText(frame, 4).find("540W") != std::string::npos);
+  CHECK(rowText(frame, 6).substr(0, 2) == "OK" && frame.cell(6 * ui::columns).style == Good);
+  CHECK(rowText(frame, 12).find("NOT READY") != std::string::npos);
+  u.click(); UiView::compose(frame, u.ui, r.c, r.now); snapshot("details", frame);
+  CHECK(rowText(frame, 4).find("NOT READY") != std::string::npos);
+  u.hold(); u.turn(2); CHECK(u.ui.groupRank() == 3);
+  UiView::compose(frame, u.ui, r.c, r.now); snapshot("groups-page2", frame);
+  CHECK(rowText(frame, 2).find("GROUP4") != std::string::npos && rowText(frame, 0).find("2/2") != std::string::npos);
+  u.hold(); u.click();
+  const uint32_t paintTime = r.now + ((r.now / ui::blinkMs) % 2 ? ui::blinkMs : 0);
+  UiView::compose(frame, u.ui, r.c, paintTime); snapshot("config", frame);
+  CHECK(rowText(frame, 3).find("ALL GROUPS") != std::string::npos);
+  CHECK(rowText(frame, 4).find("54.00V") != std::string::npos && rowText(frame, 5).find("58.50V") != std::string::npos);
+}
 }
 int main() {
   try {
     boundedCanTransmit(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
     eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity();
+    uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

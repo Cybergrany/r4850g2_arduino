@@ -9,7 +9,8 @@ root = Path(__file__).resolve().parents[1]
 sources = [
     "src/config/ChargerConfig.cpp", "src/protocol/HuaweiProtocol.cpp",
     "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp",
-    "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "test/test_main.cpp",
+    "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "src/psu/Presentation.cpp",
+    "src/ui/UiModel.cpp", "src/ui/UiFrame.cpp", "src/ui/UiView.cpp", "test/test_main.cpp",
 ]
 with tempfile.TemporaryDirectory(prefix="r4850-tests-") as directory:
     binary = str(Path(directory) / "tests")

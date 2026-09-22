@@ -14,9 +14,13 @@ constexpr uint8_t encoderClock = 3;
 constexpr uint8_t encoderData = 4;
 constexpr uint8_t encoderButton = 5;
 constexpr uint8_t encoderStepsPerNotch = 4;
-constexpr uint8_t displayAddress = 0x3c;
-constexpr uint32_t displayBusHz = 400000UL;
-constexpr uint32_t displayWireTimeoutUs = 25000UL;
+// ILI9341 320x240 landscape, SPI shared with CAN; CS must be separate.
+constexpr uint8_t displayChipSelect = 22, displayDataCommand = 23;
+constexpr int8_t displayReset = 24;
+constexpr int8_t displayBacklight = -1; // Optional PWM logic input, e.g. pin 6; not a bare LED load.
+constexpr uint32_t displaySpiHz = 8000000UL;
+constexpr uint8_t displayRotation = 1; // 1 or 3: landscape.
+constexpr bool displayVerifyId = true; // Connect TFT SDO/MISO; opt out only for a verified write-only module.
 constexpr uint32_t serialBaud = 115200UL;
 constexpr uint16_t eepromBudget = 512;
 } }

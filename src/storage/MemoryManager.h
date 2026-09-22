@@ -8,7 +8,7 @@ class ByteStorage {
   virtual void update(uint16_t address, uint8_t value) = 0;
   virtual ~ByteStorage() = default;
 };
-enum class StorageResult : uint8_t { Ok, NoValidRecord, TooSmall, InvalidConfig, WriteFailed, Migrated, LegacyNeedsReview, WrongDeployment };
+enum class StorageResult : uint8_t { Ok, NoValidRecord, TooSmall, InvalidConfig, WriteFailed, Migrated, LegacyNeedsReview, WrongDeployment, Busy };
 struct LegacyUnit { uint8_t address; bool enabled; uint16_t voltage, current, offlineVoltage, offlineCurrent, ratedCurrent; };
 struct LegacyConfiguration { uint8_t count; bool applyOnBoot; uint16_t pollMs; LegacyUnit units[PSU_MAX_UNITS]; };
 class MemoryManager {
@@ -18,10 +18,21 @@ class MemoryManager {
   explicit MemoryManager(ByteStorage& storage) : storage_(storage) {}
   StorageResult load(Configuration& config) const;
   StorageResult save(const Configuration& config);
+  // Snapshot once; write one EEPROM byte per step so the application can keep
+  // servicing CAN and serial. Existing synchronous save uses the same journal.
+  StorageResult startSave(const Configuration& config);
+  void stepSave();
+  bool saving() const { return saving_; }
+  StorageResult saveResult() const { return saveResult_; }
   bool legacy(LegacyConfiguration& config) const;
  private:
   bool readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uint32_t& sequence) const;
   ByteStorage& storage_;
+  uint8_t pending_[recordSize] = {};
+  uint16_t saveBase_ = 0, saveAt_ = 0;
+  uint32_t saveSequence_ = 0;
+  bool saving_ = false;
+  StorageResult saveResult_ = StorageResult::Ok;
 };
 static_assert(MemoryManager::recordSize <= MemoryManager::slotSize, "EEPROM journal overflow");
 }

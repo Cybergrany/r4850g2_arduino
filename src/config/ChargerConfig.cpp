@@ -28,8 +28,12 @@ bool groupName(const char* s) {
   return n <= limits::groupNameLength && !sameName(s, "all") && !sameName(s, "voltage") &&
       !sameName(s, "current") && !sameName(s, "bus");
 }
+uint16_t currentMaximum(uint16_t rating) {
+  const uint32_t rated = uint32_t(rating) * 120 / 100;
+  return rated < limits::maxCurrent ? rated : limits::maxCurrent;
+}
 bool allowedCurrent(uint16_t c, uint16_t r) {
-  return r >= 100 && c <= limits::maxCurrent && uint32_t(c) * 100 <= uint32_t(r) * 120;
+  return r >= 100 && c <= currentMaximum(r);
 }
 uint16_t allocation(const GroupConfig& g, uint8_t slot, bool offline) {
   if (slot >= PSU_MAX_UNITS || !(g.members & (1U << slot))) return 0;
