@@ -255,10 +255,28 @@ void PsuController::beginReport(Operation op, uint8_t requested, uint8_t recipie
   for (uint8_t i = 0; i < count(); ++i) if (recipients & (1U << i))
     report_.units[i] = {CommandState::Queued, 0, 0};
 }
-bool PsuController::send(const CanFrame& f) {
-  if (ready_ && transport_.send(f)) return true;
+bool PsuController::send(const CanFrame& f, TxPurpose purpose) {
+  sentThisTick_ = true;
+  if (ready_ && transport_.send(f)) {
+    txPending_ = transport_.transmitState() == TransmitState::Pending;
+    txPurpose_ = purpose; txJobSlot_ = jobSlot_; txJobSequence_ = report_.sequence;
+    return true;
+  }
   if (txFailures_ != UINT16_MAX) ++txFailures_;
+  if (purpose == TxPurpose::ManualRead && readFailures_ != UINT16_MAX) ++readFailures_;
   return false;
+}
+void PsuController::serviceTransmit(uint32_t now) {
+  transport_.service(now);
+  if (!txPending_ || transport_.transmitState() == TransmitState::Pending) return;
+  txPending_ = false;
+  if (transport_.transmitState() != TransmitState::Failed) return;
+  if (txFailures_ != UINT16_MAX) ++txFailures_;
+  if (txPurpose_ == TxPurpose::ManualRead && readFailures_ != UINT16_MAX) ++readFailures_;
+  if (txPurpose_ == TxPurpose::Job && busy() && report_.sequence == txJobSequence_ && jobSlot_ == txJobSlot_) {
+    report_.units[jobSlot_].state = CommandState::TransportError;
+    advance(false);
+  }
 }
 void PsuController::advance(bool success) {
   const uint8_t bit = uint8_t(1U << jobSlot_);
@@ -344,7 +362,7 @@ void PsuController::runJob(uint32_t now) {
       return;
     }
   }
-  if (uint32_t(now - lastSend_) < limits::commandGapMs) return;
+  if (txPending_ || uint32_t(now - lastSend_) < limits::commandGapMs) return;
   for (jobSlot_ = 0; !(pending_ & (1U << jobSlot_)); ++jobSlot_) {}
   const auto* d = deviceForSlot(jobSlot_, now);
   if (!d || d->epoch != job_.epochs[jobSlot_] || d->address != job_.addresses[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
@@ -358,7 +376,7 @@ void PsuController::runJob(uint32_t now) {
   if (!verifying_) {
     report_.units[jobSlot_] = {CommandState::VerifyingIdentity, reg, expected_};
     verifying_ = true; identityChecked_ = false; verificationStarted_ = now;
-    if (!send(protocol::request(d->address, protocol::infoCommand))) {
+    if (!send(protocol::request(d->address, protocol::infoCommand), TxPurpose::Job)) {
       report_.units[jobSlot_].state = CommandState::TransportError; advance(false);
     }
     return;
@@ -370,7 +388,7 @@ void PsuController::runJob(uint32_t now) {
     return;
   }
   report_.units[jobSlot_] = {CommandState::Waiting, reg, expected_};
-  lastSend_ = now; waiting_ = send(protocol::setting(d->address, reg, expected_));
+  lastSend_ = now; waiting_ = send(protocol::setting(d->address, reg, expected_), TxPurpose::Job);
   if (!waiting_) { report_.units[jobSlot_].state = CommandState::TransportError; advance(false); }
 }
 void PsuController::restore(uint32_t now) {
@@ -409,49 +427,71 @@ void PsuController::restore(uint32_t now) {
 }
 void PsuController::tick(uint32_t now) {
   if (!ready_) return;
+  sentThisTick_ = false;
+  serviceTransmit(now);
   CanFrame f;
   for (uint8_t n = 0; n < 32 && transport_.receive(f); ++n) receive(f, now);
   discovery_.tick(now, staleMs());
   restore(now);
   if (busy()) runJob(now);
   // Identity and telemetry refresh continue even during a long multi-unit job.
-  if (uint32_t(now - lastProbe_) < limits::discoveryGapMs) return;
-  lastProbe_ = now;
-  probeTurn_ = !probeTurn_;
-  if (scanAddress_ && probeTurn_ && !busy()) {
-    send(protocol::request(scanAddress_, protocol::infoCommand));
-    scanAddress_ = scanAddress_ == 127 ? 0 : scanAddress_ + 1; return;
+  if (sentThisTick_ || txPending_ || uint32_t(now - lastProbe_) < limits::readRequestGapMs) return;
+  // Round-robin due requests, without consuming a timeslot on an idle entry.
+  // Established devices take priority over manual reads and unused addresses;
+  // repeated manual polls must not starve identity leases or other members.
+  for (uint8_t n = 0; n < Discovery::capacity; ++n) {
+    const auto& entry = discovery_.device(probeIndex_);
+    if (++probeIndex_ == Discovery::capacity) probeIndex_ = 0;
+    if (!entry.occupied) continue;
+    Psu* d = discovery_.address(entry.address);
+    const uint32_t infoInterval = d->identitySamples < 2 ? limits::minPollMs : limits::identityRefreshMs;
+    if (uint32_t(now - d->lastInfoRequest) >= infoInterval) {
+      lastProbe_ = d->lastInfoRequest = now;
+      send(protocol::request(d->address, protocol::infoCommand)); return;
+    }
+    if (uint32_t(now - d->lastDataRequest) >= config_.pollMs) {
+      lastProbe_ = d->lastDataRequest = now;
+      send(protocol::request(d->address, protocol::dataCommand)); return;
+    }
   }
-  // Skip unused discovery slots without spending a scheduling interval on each.
-  uint8_t searched = 0;
-  while (!discovery_.device(probeIndex_).occupied && searched++ < Discovery::capacity)
-    probeIndex_ = (probeIndex_ + 1) % Discovery::capacity;
-  const auto& entry = discovery_.device(probeIndex_);
-  probeIndex_ = (probeIndex_ + 1) % Discovery::capacity;
-  if (!entry.occupied) return;
-  Psu* d = discovery_.address(entry.address);
-  // Independent schedules: a long telemetry interval must not starve either
-  // identity refresh or telemetry by selecting INFO on every visit.
-  const uint32_t infoInterval = d->identitySamples < 2 ? limits::minPollMs : limits::identityRefreshMs;
-  if (uint32_t(now - d->lastInfoRequest) >= infoInterval) {
-    d->lastInfoRequest = now;
-    send(protocol::request(d->address, protocol::infoCommand));
-  } else if (uint32_t(now - d->lastDataRequest) >= config_.pollMs) {
-    d->lastDataRequest = now;
-    send(protocol::request(d->address, protocol::dataCommand));
+  if (requestedDescription_) {
+    const uint8_t address = requestedDescription_; requestedDescription_ = 0;
+    lastProbe_ = now; send(protocol::request(address, protocol::descriptionCommand), TxPurpose::ManualRead); return;
+  }
+  if (requestedPoll_) {
+    for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (requestedPoll_ & (1U << i)) {
+      requestedPoll_ &= uint8_t(~(1U << i));
+      const auto* d = deviceForSlot(i, now);
+      if (!d || !d->fresh(now, staleMs())) {
+        if (readFailures_ != UINT16_MAX) ++readFailures_;
+      } else {
+        lastProbe_ = now; discovery_.address(d->address)->lastDataRequest = now;
+        send(protocol::request(d->address), TxPurpose::ManualRead);
+      }
+      return;
+    }
+  }
+  if (scanAddress_ && !busy() && uint32_t(now - lastScan_) >= limits::discoveryGapMs) {
+    lastProbe_ = lastScan_ = now;
+    send(protocol::request(scanAddress_, protocol::infoCommand));
+    scanAddress_ = scanAddress_ == 127 ? 0 : scanAddress_ + 1;
   }
 }
 Result PsuController::requestDescription(uint8_t address) {
   if (!address || address > 127) return Result::Invalid;
-  return send(protocol::request(address, protocol::descriptionCommand)) ? Result::Ok : Result::TransportError;
+  if (!ready_) return Result::TransportError;
+  if (requestedDescription_) return Result::Busy;
+  requestedDescription_ = address; return Result::Ok;
 }
 Result PsuController::requestPoll(uint8_t mask, uint32_t now) {
   if (!mask || (mask & ~membersMask(count()))) return Result::Invalid;
+  if (!ready_) return Result::TransportError;
+  if (requestedPoll_) return Result::Busy;
   for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
     const auto* d = deviceForSlot(i, now);
-    if (!d) return Result::Blocked;
-    if (!send(protocol::request(d->address))) return Result::TransportError;
+    if (!d || !d->fresh(now, staleMs())) return Result::Blocked;
   }
+  requestedPoll_ = mask;
   return Result::Ok;
 }
 void PsuController::resetAmpHours() {

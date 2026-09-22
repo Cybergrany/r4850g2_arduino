@@ -9,5 +9,6 @@ class ArduinoEeprom : public ByteStorage {
   uint16_t length() const override { return EEPROM.length(); }
   uint8_t read(uint16_t address) const override { return EEPROM.read(address); }
   void update(uint16_t address, uint8_t value) override { EEPROM.update(address, value); }
+  bool ready() const override { return eeprom_is_ready(); }
 };
 }

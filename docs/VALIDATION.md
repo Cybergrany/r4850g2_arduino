@@ -1,6 +1,6 @@
 # Validation
 
-Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend and ILI9341 UI validation was
+Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend, ILI9341 UI and cooperative scheduling validation was
 performed on 2026-09-22. No firmware upload or physical multi-PSU test was performed.
 
 ```sh
@@ -20,13 +20,13 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 5930 | 76208 |
-| `mega2560_serial` | 4175 | 48616 |
-| `mega2560_display` | 5905 | 73648 |
-| `mega2560_local` | 5230 | 53286 |
-| `mega2560_minimal` | 3427 | 20388 |
+| `mega2560` | 6482 | 79342 |
+| `mega2560_serial` | 4719 | 51160 |
+| `mega2560_display` | 6457 | 76288 |
+| `mega2560_local` | 5280 | 54070 |
+| `mega2560_minimal` | 3469 | 22138 |
 
-The full UI build uses 72.4% static RAM and 30.0% flash, leaving 2262 bytes
+The full UI build uses 79.1% static RAM and 31.2% flash, leaving 1710 bytes
 for stack/runtime use. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
@@ -97,6 +97,21 @@ Meaningful scenarios include:
   formatting preserves units, uses k/M where needed and handles invalid readings.
 - MCP2515 success/arbitration/errors/abort/no completion/stuck TXREQ, bounded
   timeout, rollover, preserved RX flags, and invalid frame rejection.
+- Cooperative TX checks return while pending, preserve telemetry processing,
+  prevent overlapping transmissions and attribute later failures to the correct
+  identity/setting job. Queued read failures are reported to the operator.
+- Eight-unit INFO/DATA scheduling while scanning, paced manual polls, vanished
+  queued targets, and identity refresh under continuously requested manual polls.
+- Stalled/three-byte UART capacity never blocks CAN processing or overfills the
+  simulated UART. Console trace loss is reported separately; startup and reports
+  fit the output buffer. Backpressured input, extra pasted lines, split suffixes,
+  Ctrl-X cancellation and CRLF are exercised without unintended commands.
+- Busy EEPROM causes no reads/writes until ready. Serial saves retain a snapshot,
+  write at most one byte per pass, report later edits as unsaved, and reject
+  conflicting commands. Save tokens distinguish an earlier completed UI save
+  from a subsequent in-progress save.
+- Display comparison work is bounded per pass, stops completely when idle, and
+  finds a new value even when a scene changes during an older glyph's rendering.
 
 The [generated preview](ui-preview.html) uses frames exported from those tests
 and the pinned Adafruit GFX font. Its pixel layout was inspected; its six screens'
@@ -135,9 +150,13 @@ power tests only after commissioning appropriate limits and defaults.
 8. Set PSU offline defaults explicitly. Test controller/CAN loss and PSU power
    cycling, including the interval before discovery can verify a returning unit.
    Confirm hardware fallback is compatible with the common parallel bus.
-9. Observe RX drops with all units, raw/watch output, EEPROM save, and optional
-   display/wheel activity. Simulated tests do not validate real arbitration,
-   UART/USB buffering, I2C faults, interrupt latency or worst-case loop load.
+9. Record `diag bus` before/after raw/watch output, EEPROM save, and display/wheel
+   activity with all units broadcasting. Inspect `loop-max-us`, `rx-high-water`,
+   `rx-drops`, `hw-overflow-events`, `trace-drops` and `output-overruns` as described
+   in the [scheduling checks](GETTING_STARTED.md#checking-scheduling-under-load).
+   Distinguish deliberately dropped console traces from actual CAN losses.
+   Simulated tests do not validate real arbitration, UART/USB buffering, SPI
+   faults, interrupt latency or worst-case loop load.
 10. Where required, test EEPROM power interruption under the board's actual
     brownout configuration. The software journal tests do not model analogue
     brownout corruption or provide an electrical interlock.

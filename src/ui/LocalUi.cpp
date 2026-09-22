@@ -27,7 +27,7 @@ void LocalUi::tick(uint32_t now) {
 #endif
   if (oldPage != model_.page() || oldNotice != model_.notice()) dirty_ = true;
   if (dirty_ || uint32_t(now - lastDraw_) >= ui::refreshMs) {
-    UiView::compose(frame_, model_, controller_, now); lastDraw_ = now; dirty_ = false;
+    UiView::compose(frame_, model_, controller_, now); display_.invalidate(); lastDraw_ = now; dirty_ = false;
   }
   display_.service(frame_);
 }

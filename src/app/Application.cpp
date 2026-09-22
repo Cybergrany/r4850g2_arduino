@@ -28,18 +28,23 @@ void Application::begin() {
 #endif
 #if PSU_ENABLE_SERIAL
 #if PSU_ENABLE_DISPLAY
-  Serial.println(localUi_.available() ? F("ILI9341 ready") : F("ILI9341 unavailable; local controls disabled"));
+  console_.displayStatus(localUi_.available());
 #endif
   console_.finishStartup();
 #endif
 }
 void Application::tick() {
+  const uint32_t started = micros();
+  // Receive/process CAN before optional producers. Storage has one owner and
+  // advances only when EEPROM is ready, including serial-only builds.
+  controller_.tick(millis());
+  memory_.stepSave();
 #if PSU_ENABLE_SERIAL
   console_.tick(millis());
 #endif
-  controller_.tick(millis());
 #if PSU_ENABLE_DISPLAY
   localUi_.tick(millis());
 #endif
+  controller_.recordLoopTime(uint32_t(micros() - started));
 }
 }

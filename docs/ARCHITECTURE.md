@@ -135,11 +135,18 @@ Freshness is `max(5000 ms, pollMs * 3)`. The observed ready byte is intentionall
 a narrow check, not a complete fault decoder; raw `0x0183` data is exposed without
 guessing that every nonzero value means a fault.
 
-The idle sweep shares a 100 ms scheduling budget with per-device reads. Known
-identity refresh and telemetry have separate timers so either remains serviced
-at long poll intervals. During applies the sweep pauses, but identity/telemetry
-refresh continues. Poll intervals are targets rather than timing guarantees
-under bus/serial overload. Diagnostics expose data/broadcast ages and drops.
+Read requests are spaced at least 25 ms apart, allowing a telemetry reply burst
+to progress before the next request. Known devices get round-robin due INFO/DATA
+requests; idle addresses are probed at most every 100 ms using remaining slots.
+Due periodic reads take priority over manual reads, so repeated `poll all`
+commands cannot starve identity leases or other members' telemetry.
+This accommodates eight one-second DATA schedules plus three-second identity
+refreshes. During applies the sweep pauses, but identity/telemetry refresh
+continues. Poll intervals remain targets under actual bus load/faults.
+Manual polls queue a mask and resolve one recipient per slot, rather than
+sending the entire group in one call. `requestPoll`/`requestDescription` return
+queue acceptance; later transport errors or vanished poll targets increment
+`readFailures()` and produce an explicit serial error. Reads never set PSU values.
 
 ## Apply, identity guard, and recovery
 
@@ -194,12 +201,29 @@ completion, and bounds transmit/abort handling to the configured 20 ms timeout.
 It preserves RX flags and never overwrites a still-busy TX buffer. The library
 continues to supply initialization and receive handling.
 
-Serial drains at most 32 input bytes per loop, never waits for a line, and yields
-between report rows. Echo, backspace, CR/LF/CRLF, idle expiration, Ctrl-X/C reset,
+Transmission is cooperative: `send` starts one frame, `service(now)` checks it
+once per loop, and `transmitState()` exposes pending/sent/failed. No main-loop
+spin waits for arbitration or completion. The controller retains the purpose and
+job identity of that send so a delayed transport failure cannot be attributed to
+another operation. CAN processing runs first in `Application::tick`, followed
+by one ready EEPROM step, serial, and the optional local UI. RXB0 rollover into
+RXB1 is enabled. Hardware overflow flags are counted and cleared independently
+of software-ring drops; these latched events are not an exact lost-frame count.
+
+Serial drains at most 32 input bytes and transmits at most 48 buffered output
+bytes per loop, limited further by `availableForWrite()`. A 384-byte output ring
+and split report fragments avoid waiting for UART space. Input remains serviced
+under output backpressure; one complete command can wait for response space,
+and excess commands are explicitly discarded through EOL without executing a
+suffix. Echo, backspace, CR/LF/CRLF, idle expiration, Ctrl-X/C reset,
 Ctrl-U line clear, and prompt redraw remain available. Description control bytes
 are sanitized. A console reset also cancels a pending serial confirmation, but
 cannot cancel a submitted controller job. See [serial lifecycle](SERIAL.md).
-A large raw stream or synchronous EEPROM save can still increase receive drops.
+The frame observer copies only relevant frames into a four-entry console trace
+queue; it performs no printing. Trace overflow drops diagnostic entries and
+warns the operator, leaving the controller's ACK/state processing intact. The
+console reports trace drops separately from CAN receive drops. Custom Stream
+adapters must implement `availableForWrite()`; the Mega HardwareSerial does.
 
 The local UI is separated into `UiModel` (navigation, editing, confirmations and
 operation ownership), `UiView` (320x240 layout), `UiFrame` (585-byte text/style
@@ -225,12 +249,20 @@ transactions. Cached cells are committed only after their entire glyph has been
 sent, even if the scene changes mid-glyph. Missing display ID disables local
 controls while serial/CAN remain available. Optional PWM dimming consumes the
 first wake interaction. Read-only builds cycle group pages automatically.
+After composing a scene, `Display::invalidate()` schedules one comparison pass.
+`FrameChanges` scans at most 32 cells per loop with a comparison-based cursor
+wrap, and does no scanning once that pass is complete. Mid-glyph invalidation
+retains a full new pass so the completed old glyph cannot hide a newer value.
 
 `UiModel` owns the sequence of its operation and retains its result masks; another
 serial job cannot be mistaken for its successful apply. Edits/confirmations are
 invalidated by configuration revisions and confirmation topology/expiry checks.
-A successful local apply snapshots EEPROM via `startSave` / `stepSave`, writing
-one byte per step so CAN and serial continue to run. Missing-member overrides
+A successful local apply and serial `save` snapshot EEPROM via `startSave`.
+Application owns `stepSave`: at most one byte update per loop, only when the
+EEPROM is ready, so neither path waits for a previous write. Both consumers
+observe their completion token and verification result, even if another save
+has since begun. The synchronous `save` helper remains for offline callers/tests.
+Missing-member overrides
 remain explicit and never redistribute load. Final apply/save errors are visible
 even when the operator leaves the progress screen. See [local UI](LOCAL_UI.md).
 

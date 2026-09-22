@@ -37,17 +37,11 @@ void Ili9341Display::Glyph::drawPixel(int16_t x, int16_t y, uint16_t value) {
 void Ili9341Display::Glyph::prepare(char c) { memset(rows, 0, sizeof(rows)); drawChar(0, 0, c, 1, 0, 2); }
 void Ili9341Display::service(const UiFrame& frame) {
   if (!available_) return;
+  uint8_t searchBudget = ui::scanCellsPerTick;
   for (uint8_t slice = 0; slice < ui::slicesPerTick; ++slice) {
     if (scanRow_ == ui::cellHeight) {
-      uint16_t searched = 0;
-      while (searched++ < UiFrame::cells) {
-        const auto next = frame.cell(cursor_), old = previous_.cell(cursor_);
-        if (next.character != old.character || next.style != old.style) {
-          active_ = next; glyph_.prepare(active_.character); scanRow_ = 0; break;
-        }
-        cursor_ = (cursor_ + 1) % UiFrame::cells;
-      }
-      if (scanRow_ == ui::cellHeight) return;
+      if (!changes_.next(frame, previous_, searchBudget, activeIndex_, active_)) return;
+      glyph_.prepare(active_.character); scanRow_ = 0;
     }
     uint16_t pixels[ui::cellWidth * ui::sliceRows];
     const uint16_t foreground = color(active_.style), background = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
@@ -57,11 +51,11 @@ void Ili9341Display::service(const UiFrame& frame) {
     // arduino-CAN's SPI.usingInterrupt masks its RX IRQ during transactions.
     // Release it every 24 pixels, never hold it for a whole glyph/line/screen.
     tft_.startWrite();
-    tft_.setAddrWindow(4 + cursor_ % ui::columns * ui::cellWidth,
-                      cursor_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, ui::sliceRows);
+    tft_.setAddrWindow(4 + activeIndex_ % ui::columns * ui::cellWidth,
+                      activeIndex_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, ui::sliceRows);
     tft_.writePixels(pixels, ui::cellWidth * ui::sliceRows); tft_.endWrite();
     scanRow_ += ui::sliceRows;
-    if (scanRow_ == ui::cellHeight) { previous_.cell(cursor_, active_); cursor_ = (cursor_ + 1) % UiFrame::cells; }
+    if (scanRow_ == ui::cellHeight) previous_.cell(activeIndex_, active_);
   }
 }
 static_assert(ui::cellHeight % ui::sliceRows == 0, "Glyph slices must fit exactly");

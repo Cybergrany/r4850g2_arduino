@@ -81,9 +81,16 @@ class PsuController {
   uint32_t staleMs() const { return uint32_t(config_.pollMs) * 3 < limits::minimumStaleMs ? limits::minimumStaleMs : uint32_t(config_.pollMs) * 3; }
   uint16_t txFailures() const { return txFailures_; }
   uint8_t droppedFrames() const { return transport_.droppedFrames(); }
+  uint8_t receiveHighWater() const { return transport_.receiveHighWater(); }
+  uint16_t hardwareOverflows() const { return transport_.hardwareOverflows(); }
+  uint16_t readFailures() const { return readFailures_; }
+  uint32_t maxLoopUs() const { return maxLoopUs_; }
+  void recordLoopTime(uint32_t us) { if (us > maxLoopUs_) maxLoopUs_ = us; }
   // A sweep probes 1..127 with INFO requests; no broadcast/configuration writes.
   void scan() { scanAddress_ = 1; }
   uint8_t scanning() const { return scanAddress_; }
+  // Read requests are queued and paced. OK means queued, not a received reply;
+  // readFailures reports subsequent transport failures or disappearing targets.
   Result requestDescription(uint8_t address);
   Result requestPoll(uint8_t mask, uint32_t now);
   void resetAmpHours();
@@ -91,7 +98,9 @@ class PsuController {
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
   Result change(const Configuration& candidate, uint8_t invalidate = 0);
-  bool send(const CanFrame& frame);
+  enum class TxPurpose : uint8_t { Background, Job, ManualRead };
+  bool send(const CanFrame& frame, TxPurpose purpose = TxPurpose::Background);
+  void serviceTransmit(uint32_t now);
   void reconcileSessions(const Configuration& next);
   void receive(const CanFrame& frame, uint32_t now);
   void advance(bool success);
@@ -103,18 +112,22 @@ class PsuController {
   Discovery discovery_;
   uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;
   uint32_t reportSequence_ = 0;
+  uint32_t lastScan_ = 0, maxLoopUs_ = 0, txJobSequence_ = 0;
   float sessionAh_[PSU_MAX_UNITS] = {};
   uint8_t sessionSeen_ = 0;
   uint32_t observedEpoch_[PSU_MAX_UNITS] = {};
   uint8_t voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
   uint8_t currentSynced_ = 0;
   uint8_t scanAddress_ = 1, probeIndex_ = 0;
-  bool probeTurn_ = false;
+  uint8_t requestedPoll_ = 0, requestedDescription_ = 0, txJobSlot_ = 0;
+  bool txPending_ = false, sentThisTick_ = false;
+  TxPurpose txPurpose_ = TxPurpose::Background;
   bool ready_ = false, waiting_ = false, secondPhase_ = false;
   bool voltageCommissioned_ = false, verifying_ = false, identityChecked_ = false;
   uint32_t verificationStarted_ = 0;
   uint8_t pending_ = 0, jobSlot_ = 0;
   uint16_t expected_ = 0, txFailures_ = 0;
+  uint16_t readFailures_ = 0;
   ApplyPlan job_ = {};
   OperationReport report_ = {};
   FrameObserver observer_ = nullptr;

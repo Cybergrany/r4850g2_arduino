@@ -6,6 +6,8 @@ namespace psu {
 class Display {
  public:
   virtual bool begin() = 0;
+  // Call after composing a new scene; an idle renderer must do no scanning.
+  virtual void invalidate() = 0;
   virtual void service(const UiFrame& frame) = 0;
   virtual bool canDim() const = 0;
   virtual void dim(bool dimmed) = 0;

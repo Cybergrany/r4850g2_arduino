@@ -12,6 +12,9 @@ constexpr uint8_t maxGroups = 8, groupNameLength = 8;
 constexpr uint32_t minimumStaleMs = 5000;
 constexpr uint32_t identityLeaseMs = 15000, confirmationMs = 15000;
 constexpr uint16_t discoveryGapMs = 100, identityRefreshMs = 3000;
+// A telemetry request yields a burst of about 14 replies at 125 kbit/s.
+// Space read requests while giving eight units enough slots for DATA and INFO.
+constexpr uint16_t readRequestGapMs = 25;
 }
 struct Identity { uint8_t bytes[6]; };
 bool identified(const Identity& id);

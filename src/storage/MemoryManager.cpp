@@ -79,6 +79,7 @@ bool MemoryManager::readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uin
   LegacyConfiguration old; return decodeLegacy(bytes, size, old);
 }
 StorageResult MemoryManager::load(Configuration& c) const {
+  if (saving_ || !storage_.ready()) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
   uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
@@ -104,6 +105,7 @@ StorageResult MemoryManager::load(Configuration& c) const {
   c = next; return StorageResult::Migrated; // Unbound, unauthorized, auto-resume off.
 }
 bool MemoryManager::legacy(LegacyConfiguration& c) const {
+  if (saving_ || !storage_.ready()) return false;
   uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && b[1] == 1 && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
   if (slot < 0) return false;
@@ -116,7 +118,7 @@ StorageResult MemoryManager::save(const Configuration& c) {
   return saveResult_;
 }
 StorageResult MemoryManager::startSave(const Configuration& c) {
-  if (saving_) return StorageResult::Busy;
+  if (saving_ || !storage_.ready()) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
   if (!validConfig(c)) return StorageResult::InvalidConfig;
   if (c.deploymentId != deployment::id) return StorageResult::WrongDeployment;
@@ -126,10 +128,11 @@ StorageResult MemoryManager::startSave(const Configuration& c) {
   saveSequence_ = slot < 0 ? 1 : best + 1;
   memset(pending_, 0, sizeof(pending_)); encode(c, pending_, saveSequence_);
   saveAt_ = 0; saving_ = true; saveResult_ = StorageResult::Busy;
+  if (++saveToken_ == 0) ++saveToken_;
   return StorageResult::Ok;
 }
 void MemoryManager::stepSave() {
-  if (!saving_) return;
+  if (!saving_ || !storage_.ready()) return;
   if (saveAt_ == 0) storage_.update(saveBase_, 0);
   else if (saveAt_ < recordSize) storage_.update(saveBase_ + saveAt_, pending_[saveAt_]);
   else if (saveAt_ == recordSize) storage_.update(saveBase_, 0xa5);
@@ -138,6 +141,7 @@ void MemoryManager::stepSave() {
     saveResult_ = readRecord(saveBase_ / slotSize, b, size, seq) && seq == saveSequence_
         ? StorageResult::Ok : StorageResult::WriteFailed;
     saving_ = false;
+    completedToken_ = saveToken_; completedResult_ = saveResult_;
   }
   ++saveAt_;
 }

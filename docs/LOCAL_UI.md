@@ -170,6 +170,10 @@ and is consumed. Dimming is suppressed during local apply/save operations.
 cells through short SPI transactions (24 pixels at most; four transactions per
 tick). It uses character/style caches and one glyph raster, not a full pixel
 framebuffer. Initialization and its full clear happen before CAN reception starts.
+Each new scene schedules a bounded comparison pass (32 cells per tick); an
+unchanged, completed scene causes no further scans. A new renderer must implement
+`Display::invalidate()` as well as `service()`. Application advances EEPROM saves
+for both UI and serial, even when the display is absent; the UI observes results.
 
 Regenerate the preview from real layout tests after installing the display libraries:
 

@@ -79,6 +79,9 @@ const __FlashStringHelper* metricName(uint8_t metric) {
 void SerialConsole::resetSession() {
   length_ = 0; discard_ = afterCr_ = false; echo_ = true;
   view_ = View::None; watch_ = raw_ = confirmation_ = false; descriptionAddress_ = 0;
+  traceHead_ = traceTail_ = traceCount_ = 0;
+  submitted_ = redraw_ = trailingDiscard_ = false;
+  backlogNotice_ = resetNotice_ = expiredNotice_ = false;
 }
 void SerialConsole::beginOutput() {
   if (promptVisible_ || descriptionOpen_) io_.println();
@@ -97,6 +100,9 @@ void SerialConsole::begin(StorageResult loaded) {
   io_.println(controller_.ready() ? F("CAN ready; discovering identities (not proof of PSU presence)") : F("CAN failed; console available"));
 }
 void SerialConsole::finishStartup() { io_.println(F("Startup complete; Enter submits, Ctrl-X resets console")); prompt(); }
+void SerialConsole::displayStatus(bool available) {
+  io_.println(available ? F("ILI9341 ready") : F("ILI9341 unavailable; local controls disabled"));
+}
 void SerialConsole::reply(Result r) { io_.println(resultName(r)); }
 void SerialConsole::storageReply(StorageResult r) {
   switch (r) {
@@ -122,7 +128,7 @@ void SerialConsole::printMembers(uint8_t m) {
     first = false; io_.print(i + 1);
   }
 }
-void SerialConsole::startView(View view, uint8_t mask) { view_ = view; row_ = 0; viewMask_ = mask; }
+void SerialConsole::startView(View view, uint8_t mask) { view_ = view; row_ = field_ = 0; viewMask_ = mask; }
 void SerialConsole::execute() {
   char* args[6] = {}; char* context = nullptr; uint8_t argc = 0;
   for (char* word = strtok_r(line_, " \t", &context); word; word = strtok_r(nullptr, " \t", &context)) {
@@ -130,6 +136,11 @@ void SerialConsole::execute() {
   }
   if (!argc) return;
   view_ = View::None; uint16_t n = 0, value = 0; uint8_t mask = 0;
+  if (memory_.saving() && (!strcmp(args[0], "save") || !strcmp(args[0], "load") ||
+      !strcmp(args[0], "defaults") || !strcmp(args[0], "legacy") || !strcmp(args[0], "apply") ||
+      !strcmp(args[0], "offline") || !strcmp(args[0], "confirm"))) {
+    storageReply(StorageResult::Busy); return;
+  }
   if (!strcmp(args[0], "hello") && argc == 1) {
     resetSession(); io_.println(F("R4850 console ready; help for commands; Ctrl-X resets console")); return;
   }
@@ -251,10 +262,14 @@ void SerialConsole::execute() {
   if (!strcmp(args[0], "poll") && argc == 2) {
     const int8_t g = controller_.groupIndex(args[1]);
     mask = !strcmp(args[1], "all") ? membersMask(controller_.count()) : g >= 0 ? controller_.configuration().groups[g].members : 0;
-    reply(controller_.requestPoll(mask, now_)); return;
+    const auto r = controller_.requestPoll(mask, now_); reply(r);
+    if (r == Result::Ok) io_.println(F("POLL QUEUED; paced per PSU; telemetry/diag bus shows replies"));
+    return;
   }
   if (!strcmp(args[0], "describe") && argc == 2 && integer(args[1], 127, n) && n) {
-    const auto r = controller_.requestDescription(n); if (r == Result::Ok) descriptionAddress_ = n; reply(r); return;
+    const auto r = controller_.requestDescription(n); reply(r);
+    if (r == Result::Ok) { descriptionAddress_ = n; io_.println(F("DESCRIPTION QUEUED; reply follows when available")); }
+    return;
   }
   if (!strcmp(args[0], "reset-ah") && argc == 1) { controller_.resetAmpHours(); reply(Result::Ok); return; }
   if ((!strcmp(args[0], "watch") || !strcmp(args[0], "raw") || !strcmp(args[0], "echo")) && argc == 2 &&
@@ -266,7 +281,13 @@ void SerialConsole::execute() {
   if ((!strcmp(args[0], "save") || !strcmp(args[0], "load") || !strcmp(args[0], "defaults")) && argc == 1) {
     if (controller_.busy()) { reply(Result::Busy); return; }
     if (!strcmp(args[0], "defaults")) { reply(controller_.configure(defaultConfiguration())); return; }
-    if (!strcmp(args[0], "save")) storageReply(memory_.save(controller_.configuration()));
+    if (!strcmp(args[0], "save")) {
+      const auto r = memory_.startSave(controller_.configuration());
+      if (r == StorageResult::Ok) {
+        waitingSave_ = true; saveToken_ = memory_.saveToken(); saveRevision_ = controller_.configurationRevision();
+        io_.println(F("EEPROM save started; wait for EEPROM OK before power-off"));
+      } else storageReply(r);
+    }
     else {
       Configuration c = controller_.configuration(); const auto r = memory_.load(c);
       if (r == StorageResult::Ok || r == StorageResult::Migrated || r == StorageResult::WrongDeployment) reply(controller_.configure(c));
@@ -278,58 +299,103 @@ void SerialConsole::execute() {
 }
 void SerialConsole::tick(uint32_t now) {
   now_ = now;
-  // Timeout precedes consumption: bytes arriving after a long gap cannot
-  // complete an abandoned command. Discard through EOL rather than executing
-  // a suffix as a new command. Ctrl-X/C can explicitly establish a fresh session.
+  io_.drain(stream_);
+  // Expire before consuming new bytes, even while the UART cannot accept output.
   if (length_ && !discard_ && uint32_t(now - lastInput_) >= console::inputIdleTimeoutMs) {
-    beginOutput(); length_ = 0; discard_ = true;
-    io_.println(F("Input expired; Enter discards remainder, Ctrl-X resets console"));
-    prompt();
+    length_ = 0; submitted_ = false; discard_ = true; expiredNotice_ = true;
   }
-  // Never wait for a newline or call readString/readBytes/parseFloat.
-  for (uint8_t n = 0; n < console::inputBytesPerTick && io_.available(); ++n) {
-    const int c = io_.read();
+  // Always drain input, independently of output backpressure. Retain one complete
+  // command; additional pasted lines are discarded through EOL with a warning.
+  // Never execute a suffix after losing a prefix, or wait for UART output space.
+  for (uint8_t n = 0; n < console::inputBytesPerTick && stream_.available(); ++n) {
+    const int c = stream_.read();
     if (c < 0) break;
-    lastInput_ = now;
-    if (c == 3 || c == 24) { // Ctrl-C / Ctrl-X: console only; no PSU cancellation.
-      beginOutput(); resetSession();
-      io_.println(F("Console reset; PSU jobs unchanged; help for commands"));
-      prompt(); continue;
+    if (c == 3 || c == 24) {
+      resetSession(); resetNotice_ = true; break;
     }
-    if (c == 21) { // Ctrl-U: clear the entire line, including invalid/overflow state.
-      beginOutput(); length_ = 0; discard_ = afterCr_ = false;
-      prompt(); continue;
-    }
-    // Treat CRLF as one Enter, even when its bytes arrive in separate ticks.
     if (afterCr_ && c == '\n') { afterCr_ = false; continue; }
     afterCr_ = c == '\r';
+    if (submitted_) {
+      backlogNotice_ = true; trailingDiscard_ = c != '\r' && c != '\n';
+      continue;
+    }
+    lastInput_ = now;
+    const bool outputReady = io_.free() >= console::outputReserveBytes;
+    if (c == 21) {
+      length_ = 0; discard_ = false; afterCr_ = false;
+      if (outputReady) { beginOutput(); prompt(); } else redraw_ = true;
+      break;
+    }
     if (c == '\n' || c == '\r') {
-      if (descriptionOpen_) beginOutput();
-      io_.println(); promptVisible_ = false;
-      if (discard_) io_.println(F("ERR incomplete/invalid line; discarded"));
-      else if (length_) { line_[length_] = 0; execute(); }
-      length_ = 0; discard_ = false; afterCr_ = c == '\r';
-      if (view_ == View::None) prompt();
-    } else if ((c == 8 || c == 127) && !discard_) {
+      submitted_ = true;
+      if (outputReady && !redraw_) {
+        if (descriptionOpen_) beginOutput();
+        io_.println(); promptVisible_ = false;
+      } else redraw_ = true;
+      break;
+    }
+    if ((c == 8 || c == 127) && !discard_) {
       if (length_) {
-        prompt();
+        if (outputReady && !redraw_) { prompt(); if (echo_) io_.print(F("\b \b")); }
+        else redraw_ = true;
         --length_;
-        if (echo_) io_.print(F("\b \b"));
       }
     } else if (!discard_) {
       if ((c < 32 && c != '\t') || c > 126 || length_ >= sizeof(line_) - 1) discard_ = true;
       else {
-        // Normalize tabs so one stored character corresponds to one displayed cell.
-        prompt();
+        if (outputReady && !redraw_) prompt(); else redraw_ = true;
         line_[length_++] = c == '\t' ? ' ' : char(c);
-        if (echo_) io_.write(uint8_t(line_[length_ - 1]));
+        if (echo_ && outputReady && !redraw_) io_.write(uint8_t(line_[length_ - 1]));
       }
     }
+  }
+  if (io_.free() < console::outputReserveBytes) return;
+  if (expiredNotice_ || resetNotice_) {
+    beginOutput();
+    io_.println(expiredNotice_ ? F("Input expired; Enter discards remainder, Ctrl-X resets console") :
+                                F("Console reset; PSU jobs unchanged; help for commands"));
+    expiredNotice_ = resetNotice_ = false; prompt(); return;
+  }
+  if (redraw_) {
+    beginOutput(); prompt(); redraw_ = false;
+    if (submitted_) { io_.println(); promptVisible_ = false; }
+    if (io_.free() < console::outputReserveBytes) return;
+  }
+  if (waitingSave_ && memory_.completedToken() == saveToken_) {
+    waitingSave_ = false; beginOutput(); storageReply(memory_.completedResult());
+    if (memory_.completedResult() == StorageResult::Ok && saveRevision_ != controller_.configurationRevision())
+      io_.println(F("Saved earlier snapshot; newer RAM changes remain unsaved"));
+    if (!submitted_) prompt();
+    return;
+  }
+  if (submitted_) {
+    const bool trailing = trailingDiscard_, backlog = backlogNotice_, afterCr = afterCr_;
+    if (discard_) io_.println(F("ERR incomplete/invalid line; discarded"));
+    else if (length_) { line_[length_] = 0; execute(); }
+    // `hello` resets console preferences; preserve stream boundaries for bytes
+    // already consumed behind this command, including a split CRLF.
+    length_ = 0; submitted_ = false; discard_ = trailing; trailingDiscard_ = false;
+    backlogNotice_ = backlogNotice_ || backlog; afterCr_ = afterCr;
+    if (view_ == View::None) prompt();
+    return;
+  }
+  if (backlogNotice_) {
+    backlogNotice_ = false; beginOutput();
+    io_.println(F("ERR input backlog: extra command(s) discarded; resend after prompt")); prompt(); return;
+  }
+  if (reportedReadFailures_ != controller_.readFailures()) {
+    reportedReadFailures_ = controller_.readFailures(); beginOutput();
+    io_.println(F("ERR queued poll/describe failed or target disappeared; diag bus")); prompt(); return;
+  }
+  if (reportedOverruns_ != io_.overruns()) {
+    reportedOverruns_ = io_.overruns(); beginOutput();
+    io_.println(F("ERR console output truncated; command may have executed; inspect status")); prompt(); return;
   }
   if (!wasBusy_ && controller_.busy() && controller_.report().operation == Operation::Restore) {
     beginOutput(); io_.print(F("RESTORE authorized profile; slots=")); printMembers(controller_.report().recipients);
     io_.println(F(" (saved/staged drafts are not applied)"));
     if (view_ == View::None) prompt();
+    wasBusy_ = true; return;
   }
   if (wasBusy_ && !controller_.busy()) {
     beginOutput();
@@ -339,38 +405,52 @@ void SerialConsole::tick(uint32_t now) {
     io_.print(F(" incomplete/skipped=")); printMembers(r.skipped);
     io_.print(F(" operation=")); io_.println(operationName(r.operation));
     startView(View::Units, r.requested);
+    wasBusy_ = false; return;
   }
   wasBusy_ = controller_.busy();
+  if (traceDrops_ != reportedTraceDrops_ && uint32_t(now - lastTraceNotice_) >= 1000) {
+    reportedTraceDrops_ = traceDrops_; lastTraceNotice_ = now; beginOutput();
+    io_.print(F("WARN trace/description frames dropped=")); io_.print(traceDrops_);
+    io_.println(F("; CAN processing continues; retry description with raw off")); prompt(); return;
+  }
   if (watch_ && !length_ && !discard_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Telemetry, membersMask(controller_.count()));
   }
-  if (view_ != View::None && !length_ && !discard_) {
+  traceTurn_ = !traceTurn_;
+  if (traceCount_ && (traceTurn_ || view_ == View::None || length_ || discard_)) {
+    const auto& entry = trace_[traceTail_]; printFrame(entry.slot, entry.frame);
+    if (++traceTail_ == console::traceSlots) traceTail_ = 0;
+    --traceCount_;
+  } else if (view_ != View::None && !length_ && !discard_) {
     beginOutput(); outputRow(now);
     if (view_ == View::None) prompt();
   }
 }
-void SerialConsole::printUnit(uint8_t i, uint32_t now) {
+void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
   const auto& c = controller_.configuration();
   const auto* d = controller_.deviceForSlot(i, now);
-  io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" id=")); printIdentity(c.units[i].identity);
-  io_.print(F(" addr=")); if (d) io_.print(d->address); else io_.print('-');
-  io_.print(' '); io_.println(issueName(controller_.issue(i, now)));
-  io_.print(F("  staged A=")); const int8_t g = groupFor(c, i);
-  if (g >= 0) io_.print(allocation(c.groups[g], i) / 100.0f); else io_.print('-');
-  io_.print(F(" authorized A="));
-  if (c.operating.currentMask & (1U << i)) io_.print(c.operating.current[i] / 100.0f); else io_.print('-');
-  io_.print(F(" voltage-authorized=")); io_.print(bool(c.operating.voltageMask & (1U << i)));
-  const auto& s = controller_.report().units[i];
-  io_.print(F(" voltage-acked=")); io_.print(controller_.voltageSynchronized(i));
-  io_.print(F(" current-acked=")); io_.print(controller_.currentSynchronized(i));
-  io_.print(F(" last=")); io_.print(stateName(s.state)); io_.print(F(" reg=")); io_.println(s.reg);
-  if (d) {
+  if (field == 0) {
+    io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" id=")); printIdentity(c.units[i].identity);
+    io_.print(F(" addr=")); if (d) io_.print(d->address); else io_.print('-');
+    io_.print(' '); io_.println(issueName(controller_.issue(i, now)));
+  } else if (field == 1) {
+    io_.print(F("  staged A=")); const int8_t g = groupFor(c, i);
+    if (g >= 0) io_.print(allocation(c.groups[g], i) / 100.0f); else io_.print('-');
+    io_.print(F(" authorized A="));
+    if (c.operating.currentMask & (1U << i)) io_.print(c.operating.current[i] / 100.0f); else io_.print('-');
+    io_.print(F(" voltage-authorized=")); io_.print(bool(c.operating.voltageMask & (1U << i)));
+    const auto& s = controller_.report().units[i];
+    io_.print(F(" voltage-acked=")); io_.print(controller_.voltageSynchronized(i));
+    io_.print(F(" current-acked=")); io_.print(controller_.currentSynchronized(i));
+    io_.print(F(" last=")); io_.print(stateName(s.state)); io_.print(F(" reg=")); io_.println(s.reg);
+  } else if (d && field == 2) {
     io_.print(F("  response age ms=")); io_.print(uint32_t(now - d->lastSeen));
     io_.print(F(" data=")); if (d->telemetry.dataSeen) io_.print(uint32_t(now - d->telemetry.lastData)); else io_.print('-');
     io_.print(F(" broadcast=")); if (d->telemetry.broadcastSeen) io_.print(uint32_t(now - d->telemetry.lastBroadcast)); else io_.print('-');
     io_.print(F(" alarm-raw="));
     if (d->telemetry.alarmSeen) { io_.print(F("0x")); io_.println(d->telemetry.alarmBits, HEX); }
     else io_.println(F("unknown"));
+  } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
     io_.print(F(" A="));
@@ -389,6 +469,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 4: io_.println(F("poll all/NAME; telemetry all/NAME; watch on/off. CAN ready alone does not prove a PSU is present.")); break;
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
+      case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -432,14 +513,23 @@ void SerialConsole::outputRow(uint32_t now) {
     if (row_ == 0) {
       io_.print(F("CAN init=")); io_.print(controller_.ready()); io_.print(F(" bitrate=")); io_.print(board::canBitrate);
       io_.print(F(" crystal=")); io_.print(board::canCrystalHz); io_.print(F(" CS/INT=")); io_.print(board::canChipSelect); io_.print('/'); io_.println(board::canInterrupt);
+    } else if (row_ == 1) {
       io_.print(F("tx-errors=")); io_.print(controller_.txFailures()); io_.print(F(" rx-drops=")); io_.print(controller_.droppedFrames());
       io_.print(F(" discovery-overflow=")); io_.print(controller_.discovery().overflow()); io_.print(F(" ignored=")); io_.print(controller_.discovery().ignored());
       io_.print(F(" scan-next=")); io_.println(controller_.scanning());
+    } else if (row_ == 2) {
+      io_.print(F("loop-max-us=")); io_.print(controller_.maxLoopUs());
+      io_.print(F(" rx-high-water=")); io_.print(controller_.receiveHighWater());
+      io_.print('/'); io_.print(board::canReceiveSlots - 1);
+      io_.print(F(" hw-overflow-events=")); io_.println(controller_.hardwareOverflows());
+      io_.print(F("trace-drops=")); io_.print(traceDrops_); io_.print(F(" output-overruns=")); io_.print(io_.overruns());
+      io_.print(F(" queued-read-failures=")); io_.println(controller_.readFailures());
+    } else if (row_ == 3) {
       const auto bus = controller_.busStatus(now);
       io_.print(F("configured slots=")); io_.print(bus.configured); io_.print(F(" responding addresses=")); io_.print(bus.responding);
       io_.print(F(" verified identities=")); io_.print(bus.verified); io_.print(F(" broadcasting=")); io_.println(bus.broadcasting);
-    } else if (row_ <= Discovery::capacity) {
-      const auto& d = controller_.discovery().device(row_ - 1);
+    } else if (row_ < Discovery::capacity + 4) {
+      const auto& d = controller_.discovery().device(row_ - 4);
       if (d.occupied) {
         io_.print(F("addr=")); io_.print(d.address); io_.print(F(" id=")); printIdentity(d.identity);
         io_.print(F(" verified=")); io_.print(d.verified(now)); io_.print(F(" conflict=")); io_.print(d.conflict);
@@ -449,13 +539,13 @@ void SerialConsole::outputRow(uint32_t now) {
     } else { io_.println(F("Addresses are temporary; count responders, not the highest address. Unbound devices receive no setting writes.")); view_ = View::None; }
     ++row_;
   } else if (view_ == View::Telemetry) {
-    constexpr uint8_t rowsPerUnit = protocol::MetricCount + 2;
+    constexpr uint8_t rowsPerUnit = protocol::MetricCount + 5;
     while (row_ / rowsPerUnit < c.count && !(viewMask_ & (1U << (row_ / rowsPerUnit)))) row_ += rowsPerUnit;
     const uint8_t slot = row_ / rowsPerUnit, field = row_ % rowsPerUnit;
     if (slot >= c.count) { view_ = View::None; return; }
-    if (field == 0) printUnit(slot, now);
-    else if (field <= protocol::MetricCount) {
-      const auto m = static_cast<protocol::Metric>(field - 1); float value;
+    if (field < 4) printUnit(slot, field, now);
+    else if (field < protocol::MetricCount + 4) {
+      const auto m = static_cast<protocol::Metric>(field - 4); float value;
       io_.print(F("PSU ")); io_.print(slot + 1); io_.print(' '); io_.print(metricName(m)); io_.print('=');
       if (controller_.metric(slot, m, value, now)) io_.println(m == protocol::Efficiency ? value * 100 : value);
       else io_.println(F("N/A"));
@@ -466,7 +556,10 @@ void SerialConsole::outputRow(uint32_t now) {
     ++row_;
   } else if (view_ == View::Units) {
     while (row_ < c.count && !(viewMask_ & (1U << row_))) ++row_;
-    if (row_ < c.count) printUnit(row_++, now); else view_ = View::None;
+    if (row_ < c.count) {
+      printUnit(row_, field_, now);
+      if (++field_ == 4) { field_ = 0; ++row_; }
+    } else view_ = View::None;
   } else if (view_ == View::Plan) {
     if (row_ == 0) {
       io_.print(F("PLAN ")); io_.print(issueName(plan_.blocker)); io_.print(F(" members=")); printMembers(plan_.members);
@@ -483,6 +576,7 @@ void SerialConsole::outputRow(uint32_t now) {
     }
     ++row_;
   } else if (view_ == View::Legacy) {
+    if (memory_.saving()) { storageReply(StorageResult::Busy); view_ = View::None; return; }
     LegacyConfiguration old;
     if (!memory_.legacy(old)) { io_.println(F("No valid legacy record")); view_ = View::None; return; }
     if (row_ < old.count) {
@@ -494,12 +588,25 @@ void SerialConsole::outputRow(uint32_t now) {
   }
 }
 void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& f) {
-  auto& s = *static_cast<SerialConsole*>(context); auto& out = s.io_;
+  auto& s = *static_cast<SerialConsole*>(context);
+  const bool description = protocol::isReply(f) && protocol::command(f.id) == protocol::descriptionCommand &&
+      protocol::address(f.id) == s.descriptionAddress_;
+  const bool acknowledgement = index >= 0 && protocol::isReply(f) && protocol::command(f.id) == protocol::setCommand;
+  if (!s.raw_ && !description && !acknowledgement) return;
+  // Observing a frame must never print, wait for the UART, or impede the CAN
+  // receive drain. Setting outcomes already live in the controller report.
+  if (s.traceCount_ == console::traceSlots) { if (s.traceDrops_ != UINT16_MAX) ++s.traceDrops_; return; }
+  s.trace_[s.traceHead_] = {f, index};
+  if (++s.traceHead_ == console::traceSlots) s.traceHead_ = 0;
+  ++s.traceCount_;
+}
+void SerialConsole::printFrame(int8_t index, const CanFrame& f) {
+  auto& s = *this; auto& out = io_;
   if (protocol::isReply(f) && protocol::command(f.id) == protocol::descriptionCommand && protocol::address(f.id) == s.descriptionAddress_) {
     if (!s.descriptionOpen_) s.beginOutput();
     for (uint8_t i = 2; i < 8; ++i) if (f.data[i]) out.write(f.data[i] >= 32 && f.data[i] <= 126 ? f.data[i] : '?');
     s.descriptionOpen_ = true;
-    if (!(f.id & 1)) { out.println(); s.descriptionOpen_ = false; s.descriptionAddress_ = 0; if (s.view_ == View::None) s.prompt(); }
+    if (!(f.id & 1)) { out.println(); s.descriptionOpen_ = false; s.descriptionAddress_ = 0; }
   }
   if (index >= 0 && protocol::isReply(f) && protocol::command(f.id) == protocol::setCommand) {
     s.beginOutput(); out.print(F("ACK PSU ")); out.print(index + 1); out.print(F(" reg=")); out.print(f.data[1]);
@@ -510,13 +617,13 @@ void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& f) {
       out.print(F(" A=")); out.print(raw / float(protocol::fixedPointScale) * s.controller_.configuration().units[index].ratedCurrent / 100.0f);
     }
     out.println();
-    if (s.view_ == View::None) s.prompt();
   }
   if (s.raw_) {
     s.beginOutput(); out.print(f.id, HEX); out.print(' ');
     for (uint8_t i = 0; i < f.length && i < 8; ++i) { if (f.data[i] < 16) out.print('0'); out.print(f.data[i], HEX); out.print(' '); }
-    out.println(); if (s.view_ == View::None) s.prompt();
+    out.println();
   }
+  if (!s.descriptionOpen_ && s.view_ == View::None) s.prompt();
 }
 }
 #endif

@@ -54,7 +54,7 @@ class UiModel {
   int8_t group_ = -1;
   uint8_t unit_ = 0;
   uint8_t succeeded_ = 0, failed_ = 0;
-  uint16_t edit_ = 0;
+  uint16_t edit_ = 0, saveToken_ = 0;
   uint32_t editRevision_ = 0, operationSequence_ = 0, operationRevision_ = 0;
   bool editing_ = false, confirmYes_ = false;
 };

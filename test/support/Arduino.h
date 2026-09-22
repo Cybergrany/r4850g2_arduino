@@ -37,6 +37,7 @@ class Print {
 };
 class Stream : public Print {
  public:
+  virtual int availableForWrite() { return 64; }
   virtual int available() = 0;
   virtual int read() = 0;
 };

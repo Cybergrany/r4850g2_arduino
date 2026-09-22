@@ -8,7 +8,6 @@ namespace {
 // interrupt is masked by SPI.beginTransaction while a register access is active.
 class Registers {
  public:
-  uint32_t now() const { return millis(); }
   uint8_t read(uint8_t address) {
     start(0x03, address);
     const uint8_t value = SPI.transfer(0);
@@ -35,6 +34,9 @@ bool Mcp2515Transport::begin() {
   CAN.setClockFrequency(board::canCrystalHz);
   CAN.setSPIFrequency(board::canSpiHz);
   if (!CAN.begin(board::canBitrate)) return false;
+  Registers registers;
+  // Let RXB0 overflow into RXB1 while SPI briefly masks the receive interrupt.
+  registers.modify(0x60, 0x04, 0x04); // RXB0CTRL.BUKT
   instance_ = this;
   CAN.onReceive(onReceive);
   return true;
@@ -57,6 +59,8 @@ void Mcp2515Transport::onReceive(int length) {
   // Publish only a complete frame. No Serial, display, configuration, or EEPROM in ISR.
   asm volatile("" ::: "memory");
   self.head_ = next;
+  const uint8_t used = (next + board::canReceiveSlots - self.tail_) % board::canReceiveSlots;
+  if (used > self.highWater_) self.highWater_ = used;
 }
 bool Mcp2515Transport::receive(CanFrame& frame) {
   if (tail_ == head_) return false;
@@ -67,6 +71,17 @@ bool Mcp2515Transport::receive(CanFrame& frame) {
 }
 bool Mcp2515Transport::send(const CanFrame& frame) {
   Registers registers;
-  return mcp2515::transmit(registers, frame, board::canTransmitTimeoutMs);
+  return transmitter_.start(registers, frame, millis());
+}
+void Mcp2515Transport::service(uint32_t now) {
+  Registers registers;
+  transmitter_.poll(registers, now, board::canTransmitTimeoutMs);
+  // EFLG's overflow bits latch: count observed overflow events, not exact lost
+  // frames. Preserve all unrelated error flags and never clear receive flags.
+  const uint8_t overflow = registers.read(0x2d) & 0xc0;
+  if (overflow) {
+    if (hardwareOverflows_ != UINT16_MAX) ++hardwareOverflows_;
+    registers.modify(0x2d, overflow, 0);
+  }
 }
 }

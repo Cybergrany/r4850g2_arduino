@@ -1,12 +1,13 @@
 # Serial lifecycle on the Mega 2560
 
 The application calls `Serial.begin(115200)` without waiting for a host and
-services serial input before CAN/controller work each loop. The Mega uses a
+services CAN/controller work before serial and optional display work each loop. The Mega uses a
 hardware UART behind a separate USB bridge. Its AVR `HardwareSerial::operator bool`
 always returns true; it does not expose terminal presence or DTR. UART transmission
-continues without a terminal. It can wait for room in the UART transmit buffer,
-but does not wait for a USB reader. Continuous raw output still consumes UART
-bandwidth and can increase CAN receive drops.
+continues without a terminal. Firmware buffers output and writes only when
+`availableForWrite()` reports room, with at most 48 transmitted bytes per loop.
+It never waits for a UART buffer or USB reader. Raw logging has its own bounded
+queue; saturation drops trace entries with a warning, not controller ACK handling.
 
 | Situation | Expected behaviour |
 | --- | --- |
@@ -54,12 +55,28 @@ the next newline, so neither the old command nor its tail is executed. The
 expiry warning is emitted once. Ctrl-X or Ctrl-U can clear discard state early.
 The timeout and per-loop input budget are in `src/config/ConsoleConfig.h`.
 
+Input continues draining while output is backed up. One complete command may
+wait for response space; further input is discarded through its newline and
+reported as `ERR input backlog`. An incomplete discarded prefix cannot become
+a new command when its suffix arrives later. Ctrl-X can cancel a command that
+has not yet reached the controller. For scripts, submit one command and wait
+for its response/prompt before sending another; do not blindly paste a long
+batch. After `save`, wait for `EEPROM OK`, not just the initial prompt.
+
 Reports yield between rows and pause during editing. Raw frames and setting ACKs
 print on their own lines and redraw the prompt/input, using basic CR/LF and
 backspace rather than terminal-specific escape sequences. This redraw requires
 firmware echo with local echo disabled. Description fragments remain streamed;
 intervening input/output can split them across lines. Console resets cannot
 withdraw commands already submitted to the PSU controller.
+
+`save` prints `EEPROM save started`, then a later verification result. CAN and
+input continue during programming. Edits made after the snapshot remain in RAM
+and are explicitly reported as unsaved. Overlapping saves, loads, defaults and
+explicit applies return Busy during programming. A console reset does not cancel
+the save. `poll` and `describe` also report queue acceptance separately from
+subsequent replies or transport errors. If a description overflows the trace
+queue, retry with `raw off` after the warning.
 
 ## Garbled output on reconnect
 

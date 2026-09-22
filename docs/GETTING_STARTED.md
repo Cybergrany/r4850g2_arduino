@@ -212,6 +212,12 @@ After a completed apply:
 save
 ```
 
+The first response is `EEPROM save started`. Wait for **`EEPROM OK`** before
+powering off; it means the journal record was committed and verified. CAN,
+display and serial continue running during the save. If you edit configuration
+while it runs, the console reports that newer RAM changes remain unsaved.
+An overlapping save, load, defaults or explicit apply returns Busy.
+
 Controller EEPROM stores identities, ratings, groups, drafts, and a separate
 **authorized operating profile**. Saving new drafts does not authorize them:
 if a known unit reconnects, it restores its last authorized voltage/current,
@@ -416,9 +422,31 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `offline all` | Explicit PSU nonvolatile voltage/current writes |
 | `status [all\|NAME]`, `telemetry [all\|NAME]` | Member summary or all decoded metrics and approximate Ah |
 | `watch on/off`, `raw on/off`, `echo on/off` | Console output preferences (not persistent) |
-| `poll all`, `poll NAME` | Request fresh data from known members |
-| `describe ADDRESS` | Stream E-Label by current CAN address, including unbound devices |
+| `poll all`, `poll NAME` | Queue paced data requests for known members; inspect subsequent replies/errors |
+| `describe ADDRESS` | Queue E-Label request by current address, including unbound devices |
 | `interval MS` | Target telemetry request interval, 1000–10000 ms; identity refresh is independent |
 | `reset-ah` | Reset session estimates for all discovered devices |
 | `save`, `load`, `defaults`, `legacy` | Controller EEPROM/template/migration operations |
 | `autoresume on/off` | Stage policy for restoration after controller reboot; save explicitly |
+
+## Checking scheduling under load
+
+Run `diag bus` before and after exercising page changes, wheel edits, `watch on`,
+brief `raw on`, `poll all`, and a controller `save`, with all intended PSUs on:
+
+- `loop-max-us`: longest complete application loop since boot (startup excluded).
+- `rx-high-water=N/15`: largest observed software receive queue occupancy.
+- `rx-drops`: software receive overflow, saturating at 255.
+- `hw-overflow-events`: observed MCP2515 RX overflow flags, saturating at 65535;
+  this counts latched events, not the precise number of lost frames.
+- `trace-drops`: console trace/description entries omitted under output load;
+  these do not mean the controller missed those CAN frames or their ACKs.
+- `output-overruns`: unexpected console formatting overflow; should remain zero.
+- `queued-read-failures`: manual poll/description transmission failures or poll
+  members that disappeared before dispatch. Serial also prints an error.
+
+All counters reset on reboot. Expect no growing CAN receive-drop/overflow counts
+on a healthy installation. A high queue watermark or loop maximum helps locate
+timing pressure; use a logic analyser for actual SPI/interrupt timing. Runtime
+metrics supplement the [bench checks](VALIDATION.md); they are not a hardware
+timing guarantee. `poll`/`describe` saying queued is not proof of a PSU response.

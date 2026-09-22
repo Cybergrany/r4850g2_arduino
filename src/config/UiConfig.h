@@ -8,4 +8,5 @@ constexpr uint8_t dimBrightness = 24, fullBrightness = 255;
 constexpr uint8_t groupsPerPage = 3, unitsPerPage = 2;
 constexpr uint8_t columns = 26, rows = 15, cellWidth = 12, cellHeight = 16;
 constexpr uint8_t slicesPerTick = 4, sliceRows = 2; // At most 24 RGB565 pixels per SPI transaction.
+constexpr uint8_t scanCellsPerTick = 32;
 } }

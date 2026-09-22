@@ -32,6 +32,17 @@ class UiFrame {
   char characters_[cells];
   uint8_t styles_[(cells + 1) / 2];
 };
+// One bounded pass over a new scene. Advance before handing a changed cell to
+// the device: invalidation during a partial glyph schedules a complete new pass.
+class FrameChanges {
+ public:
+  void invalidate() { remaining_ = UiFrame::cells; }
+  bool next(const UiFrame& frame, const UiFrame& painted, uint8_t& budget,
+            uint16_t& index, UiCell& cell);
+  bool pending() const { return remaining_ != 0; }
+ private:
+  uint16_t cursor_ = 0, remaining_ = 0;
+};
 // Bounded numeric formatting: adjust precision/engineering units or show OVF.
 // Never truncate a digit or unit to make a measurement fit.
 void formatValue(char* out, uint8_t size, float value, const char* unit, uint8_t decimals = 1);

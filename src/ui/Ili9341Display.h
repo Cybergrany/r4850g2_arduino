@@ -8,6 +8,7 @@ class Ili9341Display : public Display {
  public:
   Ili9341Display();
   bool begin() override;
+  void invalidate() override { changes_.invalidate(); }
   void service(const UiFrame& frame) override;
   bool canDim() const override;
   void dim(bool dimmed) override;
@@ -21,8 +22,9 @@ class Ili9341Display : public Display {
   } glyph_;
   Adafruit_ILI9341 tft_;
   UiFrame previous_;
+  FrameChanges changes_;
   UiCell active_ = {' ', 0};
-  uint16_t cursor_ = 0;
+  uint16_t activeIndex_ = 0;
   uint8_t scanRow_ = ui::cellHeight;
   bool available_ = false;
 };

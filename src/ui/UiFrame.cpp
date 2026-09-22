@@ -20,6 +20,16 @@ void UiFrame::cell(uint16_t i, UiCell v) {
   const uint8_t shift = i % 2 * 4;
   styles_[i / 2] = (styles_[i / 2] & uint8_t(~(15 << shift))) | ((v.style & 15) << shift);
 }
+bool FrameChanges::next(const UiFrame& frame, const UiFrame& painted, uint8_t& budget,
+                        uint16_t& index, UiCell& value) {
+  while (remaining_ && budget) {
+    --remaining_; --budget; index = cursor_;
+    if (++cursor_ == UiFrame::cells) cursor_ = 0;
+    value = frame.cell(index); const auto old = painted.cell(index);
+    if (value.character != old.character || value.style != old.style) return true;
+  }
+  return false;
+}
 void UiFrame::put(uint8_t row, uint8_t col, uint8_t width, const char* value, bool flash, uint8_t style, bool right) {
   if (row >= ui::rows || col >= ui::columns) return;
   if (width > ui::columns - col) width = ui::columns - col;

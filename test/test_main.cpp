@@ -27,10 +27,17 @@ void close(float a, float b, float tolerance = 0.001f) { CHECK(std::fabs(a - b) 
 struct FakeCan : CanTransport {
   bool initOk = true;
   bool sendOk = true;
+  bool asynchronous = false;
+  TransmitState txState = TransmitState::Sent;
   std::vector<CanFrame> sent;
   std::deque<CanFrame> incoming;
   bool begin() override { return initOk; }
-  bool send(const CanFrame& frame) override { if (sendOk) sent.push_back(frame); return sendOk; }
+  bool send(const CanFrame& frame) override {
+    CHECK(!asynchronous || txState != TransmitState::Pending);
+    if (sendOk) { sent.push_back(frame); if (asynchronous) txState = TransmitState::Pending; }
+    return sendOk;
+  }
+  TransmitState transmitState() const override { return txState; }
   bool receive(CanFrame& frame) override {
     if (incoming.empty()) return false;
     frame = incoming.front(); incoming.pop_front(); return true;
@@ -48,11 +55,13 @@ struct FakeEeprom : ByteStorage {
   int calls = 0;
   uint16_t capacity = 512;
   int ignoredAddress = -1;
+  bool readyNow = true;
   FakeEeprom() { bytes.fill(0xff); }
   uint16_t length() const override { return capacity; }
-  uint8_t read(uint16_t i) const override { CHECK(i < capacity && i < bytes.size()); return bytes[i]; }
+  bool ready() const override { return readyNow; }
+  uint8_t read(uint16_t i) const override { CHECK(readyNow && i < capacity && i < bytes.size()); return bytes[i]; }
   void update(uint16_t i, uint8_t v) override {
-    CHECK(i < capacity && i < bytes.size());
+    CHECK(readyNow && i < capacity && i < bytes.size());
     if (stopAfter >= 0 && calls++ == stopAfter) throw PowerCut();
     if (i != ignoredAddress) bytes[i] = v;
   }
@@ -61,7 +70,14 @@ struct FakeSerial : Stream {
   std::deque<char> input;
   std::string output;
   bool observing = true; // UART still transmits with no terminal to capture it.
-  size_t write(uint8_t b) override { if (observing) output.push_back(char(b)); return 1; }
+  bool throttled = false;
+  int room = 64;
+  unsigned written = 0;
+  int availableForWrite() override { return throttled ? room : 64; }
+  size_t write(uint8_t b) override {
+    CHECK(!throttled || room > 0); if (throttled) --room;
+    ++written; if (observing) output.push_back(char(b)); return 1;
+  }
   int available() override { return input.size(); }
   int read() override { if (input.empty()) return -1; char c = input.front(); input.pop_front(); return uint8_t(c); }
   void feed(const std::string& s) { input.insert(input.end(), s.begin(), s.end()); }
@@ -114,26 +130,39 @@ struct FakeRegisters {
 void boundedCanTransmit() {
   const auto frame = protocol::setting(2, 3, 512);
   FakeRegisters io;
+  mcp2515::Transmitter tx;
   io.bytes[mcp2515::interruptFlags] = 0x07; // Stale TX completion + pending RX.
-  CHECK(mcp2515::transmit(io, frame, 20));
+  CHECK(tx.start(io, frame, 100));
+  CHECK(tx.state() == TransmitState::Pending && io.reads == 1);
+  tx.poll(io, 101, 20); CHECK(tx.state() == TransmitState::Sent);
   CHECK(io.bytes[0x31] == 0x84 && io.bytes[0x32] == 0x0a);
   CHECK(io.bytes[0x33] == 0x80 && io.bytes[0x34] == 0xfe);
   CHECK(io.bytes[0x35] == 8);
   for (unsigned i = 0; i < 8; ++i) CHECK(io.bytes[0x36 + i] == frame.data[i]);
   CHECK(io.bytes[mcp2515::interruptFlags] == 3); // Preserve RX flags.
   io = FakeRegisters(); io.outcome = FakeRegisters::ArbitrationThenSuccess;
-  CHECK(mcp2515::transmit(io, frame, 20));
+  CHECK(tx.start(io, frame, 100)); tx.poll(io, 101, 20);
+  CHECK(tx.state() == TransmitState::Sent);
   for (const auto result : {FakeRegisters::Error, FakeRegisters::Aborted, FakeRegisters::NoCompletion}) {
     io = FakeRegisters(); io.outcome = result;
     io.bytes[mcp2515::interruptFlags] = mcp2515::txComplete;
-    CHECK(!mcp2515::transmit(io, frame, 20)); // Stale flag cannot imply success.
+    CHECK(tx.start(io, frame, 100)); tx.poll(io, 101, 20);
+    CHECK(tx.state() == TransmitState::Failed); // Stale flag cannot imply success.
   }
   for (const uint32_t start : {0U, 0xfffffff8U}) {
     io = FakeRegisters(); io.outcome = FakeRegisters::Stuck; io.clock = start;
-    CHECK(!mcp2515::transmit(io, frame, 20));
-    CHECK(uint32_t(io.clock - start) == 21 && io.aborts == 1);
+    CHECK(tx.start(io, frame, start));
+    const auto before = io.writes;
+    CHECK(!tx.start(io, frame, start) && io.writes == before && io.aborts == 0);
+    for (uint8_t elapsed = 0; elapsed < 20; ++elapsed) {
+      const auto reads = io.reads;
+      tx.poll(io, start + elapsed, 20);
+      CHECK(io.reads == reads + 1 && tx.state() == TransmitState::Pending);
+    }
+    tx.poll(io, start + 20, 20);
+    CHECK(tx.state() == TransmitState::Failed && io.aborts == 1);
     const auto written = io.writes;
-    CHECK(!mcp2515::transmit(io, frame, 20));
+    CHECK(!tx.start(io, frame, start + 21));
     CHECK(io.writes == written && io.aborts == 2); // Busy buffer not overwritten.
   }
   for (unsigned variant = 0; variant < 4; ++variant) {
@@ -142,7 +171,7 @@ void boundedCanTransmit() {
     if (variant == 1) invalid.rtr = true;
     if (variant == 2) invalid.length = 7;
     if (variant == 3) invalid.id = 0x20000000;
-    io = FakeRegisters(); CHECK(!mcp2515::transmit(io, invalid, 20));
+    io = FakeRegisters(); CHECK(!tx.start(io, invalid, 0));
     CHECK(io.reads == 0 && io.writes == 0);
   }
 }
@@ -496,6 +525,94 @@ void schedulerAndBounds() {
   Psu unit = {}; unit.occupied = true; unit.lastSeen = 0xfffffff0U;
   CHECK(unit.fresh(20, 100) && !unit.fresh(200, 100));
 }
+void cooperativeCan() {
+  // A transport still arbitrating does not prevent telemetry processing or
+  // permit a second send. A later hardware failure belongs to its original job.
+  for (bool failIdentity : {true, false}) {
+    Rig r(installation(1)); r.can.asynchronous = true;
+    CHECK(r.c.queue(r.c.preview(Operation::All, -1, r.now), false, r.now) == Result::Ok);
+    r.c.tick(r.now);
+    CHECK(r.can.txState == TransmitState::Pending);
+    CHECK(protocol::command(r.can.sent.back().id) == protocol::infoCommand);
+    const auto requests = r.can.sent.size();
+    r.can.incoming.push_back(info(1, identity(1)));
+    r.can.incoming.push_back(data(1, 0x7f, 65 * 1024));
+    r.c.tick(r.now + 1);
+    float temperature; CHECK(r.c.metric(0, protocol::OutputTemperature, temperature, r.now + 1));
+    close(temperature, 65); CHECK(r.can.sent.size() == requests && r.can.writes().empty());
+    if (!failIdentity) {
+      r.can.txState = TransmitState::Sent; r.c.tick(r.now + 2);
+      CHECK(r.can.writes().size() == 1 && r.can.txState == TransmitState::Pending);
+      CHECK(r.c.report().units[0].state == CommandState::Waiting);
+    }
+    r.can.txState = TransmitState::Failed; r.c.tick(r.now + 3);
+    CHECK(r.c.report().units[0].state == CommandState::TransportError);
+    CHECK(r.c.report().failed == 1 && !r.c.busy() && r.c.txFailures() == 1);
+    for (const auto& f : r.can.writes()) CHECK(f.data[1] == protocol::OnlineVoltage);
+  }
+  Rig success(installation(1)); success.can.asynchronous = true;
+  CHECK(success.c.queue(success.c.preview(Operation::Voltage, -1, success.now), false, success.now) == Result::Ok);
+  success.c.tick(success.now);
+  success.can.txState = TransmitState::Sent;
+  success.can.incoming.push_back(info(1, identity(1))); success.c.tick(success.now + 1);
+  CHECK(success.can.writes().size() == 1);
+  success.can.txState = TransmitState::Sent;
+  success.can.incoming.push_back(ack(success.can.writes().back())); success.c.tick(success.now + 2);
+  CHECK(!success.c.busy() && success.c.report().succeeded == 1 && success.c.voltageSynchronized(0));
+
+  Rig all(installation(8)); const size_t before = all.can.sent.size();
+  CHECK(all.c.requestPoll(0xff, all.now) == Result::Ok && all.can.sent.size() == before);
+  CHECK(all.c.requestPoll(1, all.now) == Result::Busy);
+  size_t seen = before; uint8_t polled = 0; uint32_t lastPoll = 0;
+  for (unsigned n = 0; n < 300; ++n) {
+    all.step(1);
+    for (; seen < all.can.sent.size(); ++seen) {
+      const auto& f = all.can.sent[seen];
+      if (protocol::command(f.id) != protocol::dataCommand) continue;
+      CHECK(!lastPoll || uint32_t(all.now - lastPoll) >= limits::readRequestGapMs);
+      lastPoll = all.now; polled |= 1U << (protocol::address(f.id) - 1);
+    }
+  }
+  CHECK(polled == 0xff);
+  // At eight members, INFO and DATA both retain their schedules while an
+  // address sweep progresses. No setting writes are generated by this work.
+  uint32_t lastData[8] = {}, lastInfo[8] = {};
+  unsigned dataCount[8] = {};
+  for (unsigned n = 0; n < 4000; ++n) {
+    all.step(5);
+    for (; seen < all.can.sent.size(); ++seen) {
+      const auto& f = all.can.sent[seen]; const auto address = protocol::address(f.id);
+      if (address < 1 || address > 8) continue;
+      const auto command = protocol::command(f.id); const uint8_t i = address - 1;
+      if (command == protocol::dataCommand) {
+        CHECK(!lastData[i] || uint32_t(all.now - lastData[i]) <= 1250);
+        lastData[i] = all.now; ++dataCount[i];
+      } else if (command == protocol::infoCommand) {
+        CHECK(!lastInfo[i] || uint32_t(all.now - lastInfo[i]) <= 3250);
+        lastInfo[i] = all.now;
+      }
+    }
+  }
+  CHECK(!all.c.scanning() && all.can.writes().empty());
+  for (auto count : dataCount) CHECK(count >= 15);
+  // An operator repeatedly requesting all data must not starve identity refresh.
+  unsigned refreshed[8] = {};
+  for (unsigned n = 0; n < 700; ++n) {
+    const auto result = all.c.requestPoll(0xff, all.now);
+    CHECK(result == Result::Ok || result == Result::Busy);
+    all.step(10);
+    for (; seen < all.can.sent.size(); ++seen) {
+      const auto& f = all.can.sent[seen]; const auto address = protocol::address(f.id);
+      if (address >= 1 && address <= 8 && protocol::command(f.id) == protocol::infoCommand) ++refreshed[address - 1];
+    }
+  }
+  for (auto count : refreshed) CHECK(count >= 2);
+
+  Rig gone; CHECK(gone.c.requestPoll(3, gone.now) == Result::Ok);
+  gone.live = 1; gone.now += 6000; gone.heartbeat(); gone.c.tick(gone.now);
+  for (unsigned i = 0; i < 10; ++i) gone.step(25);
+  CHECK(gone.c.readFailures() == 1);
+}
 void put16(uint8_t* p, uint16_t n) { p[0] = n; p[1] = n >> 8; }
 void recordCrc(uint8_t* bytes, uint16_t size) {
   uint16_t crc = 0xffff;
@@ -607,11 +724,16 @@ struct Terminal {
   SerialConsole console;
   explicit Terminal(Rig& r) : rig(r), memory(bytes), console(io, r.c, memory) {
     console.begin(StorageResult::NoValidRecord); console.finishStartup();
+    drain(30);
+  }
+  void drain(unsigned count = 1000) {
+    for (unsigned i = 0; i < count; ++i) { memory.stepSave(); console.tick(rig.now); }
   }
   std::string input(const std::string& text, bool drain = true) {
     io.output.clear(); io.feed(text);
-    do { console.tick(rig.now); } while (io.available());
-    if (drain) for (unsigned i = 0; i < 130; ++i) console.tick(rig.now);
+    unsigned passes = 0;
+    do { this->drain(1); CHECK(++passes < 2000); } while (io.available());
+    this->drain(drain ? 1000 : 2);
     return io.output;
   }
 };
@@ -668,19 +790,34 @@ void serialLifecycleAndParity() {
   t.input("apply all", false); t.input("\x18\r\n"); CHECK(!r.c.busy());
   t.input("raw on\n"); t.input("set current GROUP1 4", false); t.io.output.clear();
   r.can.incoming.push_back(data(1, 0x75, 55296)); r.c.tick(r.now);
+  t.drain();
   CHECK(t.io.output.find("\r\n1081407F ") == 0);
   CHECK(t.io.output.find("> set current GROUP1 4") != std::string::npos);
   t.input("\x15" "hello\n");
-  t.input("describe 1\n"); t.io.output.clear();
+  const auto describe = [&]() {
+    size_t seen = r.can.sent.size(); bool requested = false;
+    CHECK(t.input("describe 1\n").find("DESCRIPTION QUEUED") != std::string::npos);
+    for (unsigned tries = 0; !requested && tries < 40; ++tries) {
+      r.step(25);
+      for (; seen < r.can.sent.size(); ++seen)
+        if (protocol::command(r.can.sent[seen].id) == protocol::descriptionCommand) requested = true;
+    }
+    CHECK(requested); t.io.output.clear();
+  };
+  describe();
   auto first = protocol::request(1, protocol::descriptionCommand); first.id = 0x1081d27f;
   std::memcpy(first.data + 2, "Huawei", 6); auto last = first; last.id = 0x1081d27e;
   std::memcpy(last.data + 2, "R4850!", 6); r.can.incoming.push_back(first); r.can.incoming.push_back(last); r.c.tick(r.now);
+  t.drain();
   CHECK(t.io.output == "\r\nHuaweiR4850!\r\n> ");
-  t.input("describe 1\n"); t.io.output.clear(); last.data[2] = 27; r.can.incoming.push_back(last); r.c.tick(r.now);
+  describe(); last.data[2] = 27; r.can.incoming.push_back(last); r.c.tick(r.now);
+  t.drain();
   CHECK(t.io.output.find('?') != std::string::npos && t.io.output.find(char(27)) == std::string::npos);
   t.io.output.clear(); r.can.incoming.push_back(ack(protocol::setting(1, 3, 512))); r.c.tick(r.now);
+  t.drain();
   CHECK(t.io.output.find("accepted raw=512 A=25.00") != std::string::npos);
   r.can.incoming.push_back(ack(protocol::setting(1, 2, 60 * 1024), true)); r.c.tick(r.now);
+  t.drain();
   CHECK(t.io.output.find("rejected raw=61440 V=60.00") != std::string::npos);
   // Console reset does not cancel a command already submitted to the backend.
   t.input("apply all\n"); CHECK(r.c.busy()); t.input("\x18"); CHECK(r.c.busy());
@@ -694,6 +831,132 @@ void serialLifecycleAndParity() {
     CHECK(terminal.input("\r\n").find("Input expired") != std::string::npos && idle.can.writes().empty());
   }
 }
+void cooperativeSerialAndStorage() {
+  Rig r(installation(8)); Terminal t(r);
+  t.input("raw on\nwatch on\n"); t.io.output.clear(); t.io.feed("diag bus\n");
+  t.io.throttled = true; t.io.room = 0;
+  for (unsigned i = 0; i < 200; ++i) {
+    r.step(1); t.drain(1);
+    CHECK(r.can.incoming.empty() && t.io.output.empty());
+  }
+  // Even with no UART space, the controller consumes every telemetry burst.
+  for (uint8_t i = 0; i < 8; ++i) CHECK(r.c.issue(i, r.now) == Issue::None);
+  t.io.feed("raw off\nwatch off\n");
+  for (unsigned i = 0; i < 1200; ++i) {
+    t.io.room = 3; const auto written = t.io.written;
+    r.step(1); t.drain(1); CHECK(t.io.written - written <= 3);
+  }
+  CHECK(!t.io.available()); t.io.throttled = false; t.drain();
+  const auto diagnostic = t.input("diag bus\n");
+  CHECK(diagnostic.find("trace-drops=0") == std::string::npos);
+  CHECK(diagnostic.find("output-overruns=0") != std::string::npos);
+  CHECK(diagnostic.find("hw-overflow-events=") != std::string::npos);
+  CHECK(diagnostic.find("rx-high-water=") != std::string::npos);
+
+  t.io.feed("save\n"); t.drain(1); // Snapshot only; no synchronous byte writes.
+  CHECK(t.memory.saving()); const auto snapshot = t.bytes.bytes;
+  t.bytes.readyNow = false;
+  for (unsigned i = 0; i < 50; ++i) { r.step(1); t.drain(1); }
+  CHECK(t.memory.saving() && t.bytes.bytes == snapshot);
+  CHECK(t.input("load\n").find("save in progress") != std::string::npos);
+  CHECK(t.input("apply all\n").find("save in progress") != std::string::npos);
+  CHECK(r.c.setCurrent(0, 1234) == Result::Ok);
+  t.bytes.readyNow = true; t.io.output.clear();
+  for (unsigned i = 0; i < 500; ++i) {
+    const auto previous = t.bytes.bytes; r.step(1); t.drain(1);
+    unsigned changed = 0;
+    for (unsigned a = 0; a < previous.size(); ++a) changed += previous[a] != t.bytes.bytes[a];
+    CHECK(changed <= 1);
+  }
+  CHECK(!t.memory.saving() && t.io.output.find("EEPROM OK") != std::string::npos);
+  CHECK(t.io.output.find("newer RAM changes remain unsaved") != std::string::npos);
+  Configuration saved; CHECK(t.memory.load(saved) == StorageResult::Ok && saved.groups[0].current == 5500);
+  const auto completed = t.memory.completedToken();
+  CHECK(t.memory.startSave(r.c.configuration()) == StorageResult::Ok);
+  CHECK(t.memory.saveToken() != completed && t.memory.completedToken() == completed);
+  CHECK(t.memory.completedResult() == StorageResult::Ok);
+  t.drain();
+
+  // A queued manual read that fails later gets an explicit operator error.
+  r.can.asynchronous = true; r.can.txState = TransmitState::Sent;
+  CHECK(t.input("poll all\n").find("POLL QUEUED") != std::string::npos);
+  for (unsigned i = 0; !r.c.readFailures() && i < 30; ++i) {
+    r.step(25); CHECK(r.can.txState == TransmitState::Pending);
+    r.can.txState = TransmitState::Failed; r.c.tick(r.now + 1);
+  }
+  CHECK(r.c.readFailures() != 0); t.io.output.clear(); t.drain();
+  CHECK(t.io.output.find("ERR queued poll/describe failed") != std::string::npos);
+
+  // Every startup message and bounded view must fit even while the UART is full.
+  for (const auto result : {StorageResult::NoValidRecord, StorageResult::LegacyNeedsReview,
+                           StorageResult::Migrated, StorageResult::WrongDeployment}) {
+    Rig startup; FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io;
+    SerialConsole serial(io, startup.c, memory);
+    serial.begin(result); serial.displayStatus(false); serial.finishStartup();
+    for (unsigned i = 0; i < 30; ++i) serial.tick(startup.now);
+    CHECK(io.output.find("Startup complete") != std::string::npos);
+    CHECK(io.output.find("truncated") == std::string::npos);
+    io.feed("diag bus\n");
+    for (unsigned i = 0; i < 300; ++i) serial.tick(startup.now);
+    CHECK(io.output.find("output-overruns=0") != std::string::npos);
+  }
+  // Retain the first complete command under backpressure; discard extra input
+  // through its EOL, including a partial prefix whose suffix arrives later.
+  for (bool cancel : {false, true}) {
+    Rig blocked; FakeEeprom bytes; MemoryManager memory(bytes); FakeSerial io;
+    io.throttled = true; io.room = 0;
+    SerialConsole serial(io, blocked.c, memory);
+    serial.begin(StorageResult::NoValidRecord); serial.displayStatus(false); serial.finishStartup();
+    io.feed("set current GROUP1 12\r\nignored prefix ");
+    for (unsigned i = 0; i < 10; ++i) serial.tick(blocked.now);
+    CHECK(!io.available() && io.output.empty() && blocked.c.configuration().groups[0].current == 5500);
+    // Cancellation arriving just as TX space becomes available still wins
+    // over a command retained during the earlier output stall.
+    if (cancel) io.feed("\x18");
+    io.throttled = false;
+    for (unsigned i = 0; i < 100; ++i) serial.tick(blocked.now);
+    CHECK(blocked.c.configuration().groups[0].current == (cancel ? 5500 : 1200));
+    if (!cancel) {
+      CHECK(io.output.find("input backlog") != std::string::npos);
+      io.feed("set voltage 56\n"); // Suffix of a previously discarded prefix.
+      for (unsigned i = 0; i < 50; ++i) serial.tick(blocked.now);
+      CHECK(blocked.c.configuration().voltage == 5400);
+      CHECK(io.output.find("incomplete/invalid line; discarded") != std::string::npos);
+    }
+    io.feed("hello\r\n"); io.output.clear();
+    for (unsigned i = 0; i < 50; ++i) serial.tick(blocked.now);
+    CHECK(io.output.find("console ready") != std::string::npos);
+    CHECK(io.output.find("> \r\n> ") == std::string::npos);
+  }
+}
+void boundedFrameChanges() {
+  UiFrame frame, painted; frame.clear(); painted.clear(); FrameChanges changes;
+  uint16_t index = 0; UiCell cell = {}; uint8_t budget = 32;
+  CHECK(!changes.next(frame, painted, budget, index, cell) && budget == 32);
+  frame.cell(UiFrame::cells - 1, {'A', Good}); changes.invalidate();
+  unsigned passes = 0;
+  while (changes.pending()) {
+    budget = 32; ++passes;
+    if (changes.next(frame, painted, budget, index, cell)) {
+      CHECK(index == UiFrame::cells - 1 && cell.character == 'A'); painted.cell(index, cell);
+    }
+    CHECK(passes <= 13);
+  }
+  CHECK(passes == 13);
+  for (unsigned i = 0; i < 100; ++i) {
+    budget = 32; CHECK(!changes.next(frame, painted, budget, index, cell) && budget == 32);
+  }
+  frame.cell(0, {'A', Text}); changes.invalidate(); budget = 32;
+  CHECK(changes.next(frame, painted, budget, index, cell) && index == 0);
+  // The scene changes while an old glyph is only partially painted.
+  frame.cell(0, {'B', Error}); changes.invalidate(); painted.cell(index, cell);
+  unsigned repaints = 0;
+  for (unsigned i = 0; i < 20; ++i) {
+    budget = 32;
+    while (changes.next(frame, painted, budget, index, cell)) { painted.cell(index, cell); ++repaints; }
+  }
+  CHECK(!changes.pending() && repaints == 1 && painted.cell(0).character == 'B');
+}
 struct UiRig {
   Rig& r;
   FakeEeprom bytes;
@@ -703,7 +966,7 @@ struct UiRig {
   void turn(int16_t n) { ui.input({n, false, false}, r.now); }
   void click() { ui.input({0, true, false}, r.now); }
   void hold() { ui.input({0, false, true}, r.now); }
-  void tick(uint32_t ms = 1, bool refresh = true) { r.step(ms, true, refresh); ui.tick(r.now); }
+  void tick(uint32_t ms = 1, bool refresh = true) { r.step(ms, true, refresh); memory.stepSave(); ui.tick(r.now); }
   void finish() {
     for (unsigned n = 0; ui.working() && n < 2000; ++n) tick(10);
     CHECK(!ui.working());
@@ -817,6 +1080,15 @@ void uiPartialAndFailures() {
   CHECK(concurrent.c.setCurrent(0, 1000) == Result::Ok); changed.finish();
   CHECK(changed.ui.notice() == UiNotice::SavedOlder);
   CHECK(changed.memory.load(saved) == StorageResult::Ok && saved.groups[0].current == 5500);
+  // A new save may start before the UI observes its own completed snapshot.
+  Rig owner; owner.apply(); UiRig pending(owner);
+  pending.hold(); pending.click(); pending.click();
+  for (unsigned i = 0; pending.ui.notice() == UiNotice::Applying && i < 1000; ++i) pending.tick(10);
+  CHECK(pending.ui.notice() == UiNotice::Saving);
+  while (pending.memory.saving()) pending.memory.stepSave();
+  CHECK(pending.memory.startSave(owner.c.configuration()) == StorageResult::Ok);
+  pending.ui.tick(owner.now);
+  CHECK(pending.ui.notice() == UiNotice::Saved && pending.memory.saving());
 }
 void presentationAndSessions() {
   auto cfg = installation(3); cfg.units[1].ratedCurrent = 1001;
@@ -903,9 +1175,9 @@ void uiLayouts() {
 }
 int main() {
   try {
-    boundedCanTransmit(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
+    boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
-    eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity();
+    eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();
     uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

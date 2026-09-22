@@ -58,13 +58,13 @@ void UiModel::tick(uint32_t now) {
     if (r.failed || r.succeeded != plan_.recipients) { result(UiNotice::ApplyFailed); return; }
     storageResult_ = memory_.startSave(c_.configuration());
     if (storageResult_ != StorageResult::Ok) { result(UiNotice::SaveFailed); return; }
+    saveToken_ = memory_.saveToken();
     notice_ = UiNotice::Saving;
     return; // Let the display show SAVING before the first EEPROM byte.
   }
   if (notice_ == UiNotice::Saving) {
-    memory_.stepSave();
-    if (!memory_.saving()) {
-      storageResult_ = memory_.saveResult();
+    if (memory_.completedToken() == saveToken_) {
+      storageResult_ = memory_.completedResult();
       result(storageResult_ != StorageResult::Ok ? UiNotice::SaveFailed :
           c_.configurationRevision() != operationRevision_ ? UiNotice::SavedOlder :
           plan_.missing ? UiNotice::PartialSaved : UiNotice::Saved);
