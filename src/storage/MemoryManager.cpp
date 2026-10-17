@@ -79,7 +79,7 @@ bool MemoryManager::readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uin
   LegacyConfiguration old; return decodeLegacy(bytes, size, old);
 }
 StorageResult MemoryManager::load(Configuration& c) const {
-  if (saving_ || !storage_.ready()) return StorageResult::Busy;
+  if (saving() || !storage_.ready()) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
   uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
@@ -105,7 +105,7 @@ StorageResult MemoryManager::load(Configuration& c) const {
   c = next; return StorageResult::Migrated; // Unbound, unauthorized, auto-resume off.
 }
 bool MemoryManager::legacy(LegacyConfiguration& c) const {
-  if (saving_ || !storage_.ready()) return false;
+  if (saving() || !storage_.ready()) return false;
   uint8_t b[slotSize]; uint16_t size = 0; uint32_t seq = 0, best = 0; int8_t slot = -1;
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && b[1] == 1 && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
   if (slot < 0) return false;
@@ -118,7 +118,7 @@ StorageResult MemoryManager::save(const Configuration& c) {
   return saveResult_;
 }
 StorageResult MemoryManager::startSave(const Configuration& c) {
-  if (saving_ || !storage_.ready()) return StorageResult::Busy;
+  if (saving() || !storage_.ready()) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
   if (!validConfig(c)) return StorageResult::InvalidConfig;
   if (c.deploymentId != deployment::id) return StorageResult::WrongDeployment;

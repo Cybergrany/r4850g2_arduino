@@ -41,3 +41,16 @@ class Stream : public Print {
   virtual int available() = 0;
   virtual int read() = 0;
 };
+
+// Implemented by hardware-adapter tests when LocalUi is compiled on the host.
+uint32_t millis();
+uint32_t micros();
+class TestHardwareSerial : public Stream {
+ public:
+  std::string input, output;
+  void begin(uint32_t) {}
+  int available() override { return int(input.size()); }
+  int read() override { if (input.empty()) return -1; const uint8_t c=input[0]; input.erase(0,1); return c; }
+  size_t write(uint8_t c) override { output.push_back(char(c)); return 1; }
+};
+extern TestHardwareSerial Serial;

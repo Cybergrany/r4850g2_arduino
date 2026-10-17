@@ -24,7 +24,9 @@ class MemoryManager {
   // Synchronous save is for offline callers/tests, not the runtime UI/console.
   StorageResult startSave(const Configuration& config);
   void stepSave();
-  bool saving() const { return saving_; }
+  bool saving() const { return saving_ || auxiliaryBusy_; }
+  // Calibration uses the same byte device and acquires this single-writer gate.
+  void auxiliaryBusy(bool busy) { auxiliaryBusy_ = busy; }
   StorageResult saveResult() const { return saveResult_; }
   // Completion belongs to a particular snapshot, even if another caller starts
   // a new save before the UI/serial consumer observes the previous completion.
@@ -38,10 +40,10 @@ class MemoryManager {
   uint8_t pending_[recordSize] = {};
   uint16_t saveBase_ = 0, saveAt_ = 0;
   uint32_t saveSequence_ = 0;
-  bool saving_ = false;
+  bool saving_ = false, auxiliaryBusy_ = false;
   StorageResult saveResult_ = StorageResult::Ok;
   uint16_t saveToken_ = 0, completedToken_ = 0;
   StorageResult completedResult_ = StorageResult::Ok;
 };
-static_assert(MemoryManager::recordSize <= MemoryManager::slotSize, "EEPROM journal overflow");
+static_assert(MemoryManager::recordSize <= 216, "EEPROM journal overflow");
 }

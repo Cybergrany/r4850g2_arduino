@@ -10,6 +10,7 @@ class Ili9341Display : public Display {
   bool begin() override;
   void invalidate() override { changes_.invalidate(); }
   void service(const UiFrame& frame) override;
+  bool pending() const override { return changes_.pending() || scanRow_ != ui::cellHeight; }
   bool canDim() const override;
   void dim(bool dimmed) override;
  private:

@@ -2,10 +2,11 @@
 #include "../psu/Presentation.h"
 #include "../storage/MemoryManager.h"
 #include "../config/UiConfig.h"
+#include "UiAction.h"
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
-enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result };
-enum class UiField : uint8_t { Voltage, Current };
+enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios };
+enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
   None, Changed, Busy, Blocked, Applying, Saving, Saved, PartialSaved,
   ApplyFailed, SaveFailed, SavedOlder, Cancelled
@@ -15,6 +16,11 @@ class UiModel {
   UiModel(PsuController& controller, MemoryManager& memory) : c_(controller), memory_(memory) {}
   void tick(uint32_t now);
   void input(UiInput event, uint32_t now);
+  void action(UiAction action, uint32_t now);
+  void resetNavigation();
+  UiAction takeRequest() { const auto r = request_; request_ = {}; return r; }
+  uint8_t toolSelection() const { return toolSelection_; }
+  uint8_t scenarioSelection() const { return scenarioSelection_; }
   void nextGroupPage(); // Screen-only builds cycle the overview without issuing commands.
   UiPage page() const { return page_; }
   UiField field() const { return field_; }
@@ -32,6 +38,7 @@ class UiModel {
   uint8_t groupRank() const;
   int8_t groupAt(uint8_t rank) const;
   uint8_t unitRank() const;
+  uint8_t unitCount() const { return group_ < 0 ? 0 : population(c_.configuration().groups[group_].members); }
   uint8_t unitAt(uint8_t rank) const;
   const ApplyPlan& plan() const { return plan_; }
   StorageResult storageResult() const { return storageResult_; }
@@ -57,5 +64,7 @@ class UiModel {
   uint16_t edit_ = 0, saveToken_ = 0;
   uint32_t editRevision_ = 0, operationSequence_ = 0, operationRevision_ = 0;
   bool editing_ = false, confirmYes_ = false;
+  uint8_t toolSelection_ = 0, scenarioSelection_ = 0;
+  UiAction request_;
 };
 }

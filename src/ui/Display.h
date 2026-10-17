@@ -9,6 +9,7 @@ class Display {
   // Call after composing a new scene; an idle renderer must do no scanning.
   virtual void invalidate() = 0;
   virtual void service(const UiFrame& frame) = 0;
+  virtual bool pending() const = 0; // True until the submitted scene is fully painted.
   virtual bool canDim() const = 0;
   virtual void dim(bool dimmed) = 0;
   virtual ~Display() = default;

@@ -1,3 +1,5 @@
+#include "../config/BuildOptions.h"
+#if !PSU_UI_DEBUG
 #include "Mcp2515Transport.h"
 #include "Mcp2515Transmit.h"
 #include <CAN.h>
@@ -85,3 +87,5 @@ void Mcp2515Transport::service(uint32_t now) {
   }
 }
 }
+
+#endif

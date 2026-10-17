@@ -16,6 +16,10 @@ class SerialConsole {
   void finishStartup();
   void displayStatus(bool available);
   void tick(uint32_t now);
+  using Extension = bool (*)(void*, uint8_t, char**, Print&, uint32_t);
+  void extension(Extension callback, void* context) { extension_ = callback; extensionContext_ = context; }
+  void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; controller_.observeFrames(onFrame,this); }
+
  private:
   enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy };
   void execute();
@@ -31,6 +35,8 @@ class SerialConsole {
   void printUnit(uint8_t slot, uint8_t field, uint32_t now);
   void printFrame(int8_t index, const CanFrame& frame);
   static void onFrame(void* context, int8_t index, const CanFrame& frame);
+  Extension extension_ = nullptr;
+  void* extensionContext_ = nullptr;
   Stream& stream_;
   BufferedOutput io_;
   PsuController& controller_;

@@ -78,3 +78,15 @@ void formatValue(char* out, uint8_t size, float value, const char* unit, uint8_t
   snprintf(out, size, "OVF");
 }
 }
+
+namespace psu {
+void UiFrame::largeNumber(uint8_t row, const char* value, uint8_t style) {
+  const uint8_t n = strlen(value); if (n > 8 || row + 1 >= ui::rows) return;
+  const uint8_t first = (ui::columns - n * 2) / 2;
+  for (uint8_t i = 0; i < n; ++i) {
+    const char c = value[i]; const uint8_t digit = c >= '0' && c <= '9' ? c - '0' : c == '.' ? 10 : 11;
+    for (uint8_t q = 0; q < 4; ++q)
+      cell(uint16_t(row + q / 2) * ui::columns + first + 2 * i + q % 2, {char(128 + digit * 4 + q),style});
+  }
+}
+}

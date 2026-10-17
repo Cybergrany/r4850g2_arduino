@@ -1,18 +1,25 @@
 # Validation
 
-Target: Arduino Mega 2560, eight-slot capacity. Parallel-backend, ILI9341 UI and cooperative scheduling validation was
-performed on 2026-09-22. No firmware upload or physical multi-PSU test was performed.
+Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
+touch/calibration, CAN-free simulation and cooperative scheduling validation was
+performed on 2026-10-17. No firmware upload or physical touch/multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
+python3 tools/test_touch.py
 PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560 -e mega2560_serial -e mega2560_display \
-  -e mega2560_local -e mega2560_minimal -j 4
+  -e mega2560_local -e mega2560_minimal \
+  -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
+  -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local -j 4
+python3 tools/check_debug_build.py
 git diff --check
 ```
 
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
-omit it or choose another writable cache. All five profiles build successfully
+omit it or choose another writable cache. Pass the same cache to
+`check_debug_build.py --core-dir PATH` when using a different location.
+All eleven profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -20,17 +27,31 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6482 | 79342 |
-| `mega2560_serial` | 4719 | 51160 |
-| `mega2560_display` | 6457 | 76288 |
-| `mega2560_local` | 5280 | 54070 |
-| `mega2560_minimal` | 3469 | 22138 |
+| `mega2560` | 6534 | 82868 |
+| `mega2560_serial` | 4734 | 52156 |
+| `mega2560_display` | 6509 | 79608 |
+| `mega2560_local` | 5312 | 57290 |
+| `mega2560_minimal` | 3470 | 22160 |
+| `mega2560_touch` | 6844 | 92368 |
+| `mega2560_touch_wheel` | 6869 | 93804 |
+| `mega2560_ui_debug` | 6522 | 81222 |
+| `mega2560_touch_debug` | 6832 | 90578 |
+| `mega2560_touch_local` | 5596 | 64530 |
+| `mega2560_touch_debug_local` | 5566 | 62870 |
 
-The full UI build uses 79.1% static RAM and 31.2% flash, leaving 1710 bytes
-for stack/runtime use. Static RAM excludes worst-case stack/interrupt nesting.
+The touch/serial build uses 83.5% static RAM and 36.4% flash, leaving 1348 bytes
+for stack/runtime use (1323 bytes with touch and wheel). Omitting serial leaves
+2596 bytes in the production touch profile. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
+Touch calibration adds independent 40-byte records in the unused slot tails;
+the charger record format remains compatible.
+
+All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
+present; physical CAN/MCP2515 and EEPROM access symbols are absent. Their
+dependency graphs also omit CAN. This verifies software isolation, not touch
+hardware or production CAN timing.
 
 ## Host coverage
 
@@ -40,7 +61,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-The suite passes. UI navigation, formatting and persistence use the production
+Both suites pass. UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
 access and interruption boundary, not hundreds of thousands of independent cases.
@@ -112,10 +133,23 @@ Meaningful scenarios include:
   from a subsequent in-progress save.
 - Display comparison work is bounded per pass, stops completely when idle, and
   finds a new value even when a scene changes during an older glyph's rendering.
+- Five-target affine calibration, unstable samples, timeout rollover and mapped
+  bounds; every interrupted calibration write preserves the previous transform
+  and charger record. Calibration and charger saves cannot overlap.
+- Captured touch targets, drag cancellation, stable press/release qualification,
+  held adjustment repeats, page-paint gating and simultaneous wheel input. Real
+  local apply/ACK/save works through raw touch samples, with inert diagnostics.
+- The production application and serial extension select all simulator scenarios;
+  missing-member confirmation, rejection, timeout, transport/partial failure,
+  failed save, changed edit and earlier saved snapshot reach their UI results.
+  Simulated save/restart/reset and disabled auto-resume retain their semantics.
 
 The [generated preview](ui-preview.html) uses frames exported from those tests
-and the pinned Adafruit GFX font. Its pixel layout was inspected; its six screens'
-JavaScript drawing paths execute with bounded coordinates. It is not an LCD test.
+and the pinned Adafruit GFX font. Its pixel layout was inspected; all 22 captured
+screens' JavaScript drawing paths execute, including enlarged editor digits and
+readable text equivalents. It is not an LCD test. Touch host tests substitute
+raw coordinates and display/time/serial adapters; they do not emulate the ADC,
+electrical SPI transactions or physical display response.
 
 ## Physical bench checks still required
 
@@ -173,3 +207,13 @@ power tests only after commissioning appropriate limits and defaults.
     readback, no unexpected settings and CAN drop/error counters. Measure loop
     timing and free stack under this load; bounded transfer size alone does not
     prove hardware interrupt latency or electrical bus behavior.
+14. Follow [touch wiring and calibration](TOUCH.md). Test corners, center, light
+    contact, dragging, held +/- and release on the actual panel. Verify a contact
+    cannot carry through to Apply/Yes on a new page. Check wheel/touch coexistence
+    and dim/wake if those options are enabled. Save calibration, power-cycle a
+    production build and verify both calibration and charger configuration.
+15. Start `mega2560_touch_debug` without an MCP2515: exercise Tools, scenarios,
+    faults and RAM save/restart. Confirm the SIM mark on every screen and volatile
+    saves after physical reset. Then use a production touch profile with every
+    PSU broadcasting; monitor `touch status` and `diag bus` during sustained input,
+    calibration and saving. Record actual stack margin and receive/loop counters.

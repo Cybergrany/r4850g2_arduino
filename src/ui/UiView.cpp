@@ -1,5 +1,6 @@
 #include "UiView.h"
 #include "UiText.h"
+#include "UiLayout.h"
 #include <stdio.h>
 #include <string.h>
 namespace psu {
@@ -87,7 +88,7 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     const int8_t g = m.groupAt(first + pos); if (g < 0) continue;
     const auto& group = c.configuration().groups[g]; const uint8_t col = pos * 9;
     const uint8_t bg = g == m.group() ? selectedStyle : 0;
-    for (uint8_t row = 2; row <= 13; ++row) f.text(row, col, 8, UI_TEXT(""), bg);
+    for (uint8_t row = 2; row <= (PSU_ENABLE_TOUCH ? 11 : 13); ++row) f.text(row, col, 8, UI_TEXT(""), bg);
     f.text(2, col, 8, group.name, bg | Accent);
     f.text(3, col, 8, UI_TEXT("LIVE/REQ"), bg | Muted);
     reading(f, 4, col, 8, summarize(c, group.members, protocol::OutputCurrent, Aggregate::Sum, now), "A", bg);
@@ -95,20 +96,20 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     if ((c.configuration().operating.currentMask & group.members) == group.members) {
       char b[9]; b[0] = '/'; formatValue(b + 1, 8, state.authorizedCurrent / 100.0f, "A"); f.text(5, col, 8, b, bg | Muted, true);
     } else f.text(5, col, 8, UI_TEXT("/--A"), bg | Warning, true);
-    f.text(6, col, 8, UI_TEXT("MAX TEMP"), bg | Muted);
-    reading(f, 7, col, 8, summarize(c, group.members, protocol::OutputTemperature, Aggregate::Maximum, now), "C", bg, 0);
-    reading(f, 8, col, 8, sessionTotal(c, group.members), "Ah", bg);
-    f.text(9, col, 8, UI_TEXT("SESSION~"), bg | Muted);
-    reading(f, 10, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
+    if (!PSU_ENABLE_TOUCH) f.text(6, col, 8, UI_TEXT("MAX TEMP"), bg | Muted);
+    reading(f, PSU_ENABLE_TOUCH ? 6 : 7, col, 8, summarize(c, group.members, protocol::OutputTemperature, Aggregate::Maximum, now), "C", bg, 0);
+    reading(f, PSU_ENABLE_TOUCH ? 7 : 8, col, 8, sessionTotal(c, group.members), "Ah", bg);
+    if (!PSU_ENABLE_TOUCH) f.text(9, col, 8, UI_TEXT("SESSION~"), bg | Muted);
+    reading(f, PSU_ENABLE_TOUCH ? 8 : 10, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
     uint8_t errors = 0, active = 0;
     for (uint8_t i = 0; i < c.count(); ++i) if (group.members & (1U << i)) {
       if (displayIssue(c, i, now) != Issue::None || commandFailed(c.report().units[i].state)) ++errors;
       if (commandActive(c.report().units[i].state)) ++active;
     }
     char b[12];
-    if (errors) { snprintf(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(12, col, 8, b, bg | Error); }
-    else f.text(12, col, 8, active ? UI_TEXT("APPLYING") : UI_TEXT("OK"), bg | (active ? Warning : Good));
-    if (pendingSettings(c, group.members)) f.text(13, col, 8, UI_TEXT("PENDING"), bg | Warning);
+    if (errors) { snprintf(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Error); }
+    else f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, active ? UI_TEXT("APPLYING") : UI_TEXT("OK"), bg | (active ? Warning : Good));
+    if (pendingSettings(c, group.members)) f.text(PSU_ENABLE_TOUCH ? 11 : 13, col, 8, UI_TEXT("PENDING"), bg | Warning);
   }
   line(f, 14, UI_TEXT("Click:PSUs  Hold:Config"), Muted);
 }
@@ -117,7 +118,7 @@ void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const uint8_t count = population(c.configuration().groups[m.group()].members);
   const uint8_t first = m.unitRank() / ui::unitsPerPage * ui::unitsPerPage;
   for (uint8_t pos = 0; pos < ui::unitsPerPage && first + pos < count; ++pos) {
-    const uint8_t slot = m.unitAt(first + pos), row = 2 + pos * 6;
+    const uint8_t slot = m.unitAt(first + pos), row = 2 + pos * (PSU_ENABLE_TOUCH ? 5 : 6);
     const uint8_t bg = slot == m.unit() ? selectedStyle : 0;
     for (uint8_t r = row; r < row + 5; ++r) line(f, r, UI_TEXT(""), bg);
     char b[27]; snprintf(b, sizeof(b), "PSU%u", unsigned(slot + 1)); f.text(row, 0, 8, b, bg | Accent);
@@ -184,7 +185,8 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     f.text(row + 1, 14, 1, UI_TEXT("-"), Muted);
     number(f, row + 1, 15, 11, (voltage ? limits::maxVoltage : c.groupCurrentMaximum(m.group())) / 100.0f, voltage ? "V" : "A", Muted, 2);
   }
-  if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
+  if (PSU_UI_DEBUG && !PSU_ENABLE_TOUCH) line(f, 11, UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
+  else if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
   line(f, 12, UI_TEXT("EEPROM saved after ACKs"), Muted);
   line(f, 14, m.editing() ? UI_TEXT("Click:Apply  Hold:Cancel") : UI_TEXT("Click:Edit  Hold:Groups"), Muted);
 }
@@ -231,7 +233,22 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
     case UiPage::Config: config(f, m, c, now); break;
     case UiPage::Confirm: confirmation(f, m); break;
     case UiPage::Result: result(f, m); break;
+    default: UiLayout::extras(f,m,c,now); break;
   }
+#if PSU_ENABLE_TOUCH
+  UiLayout::controls(f,m);
+#else
+  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios) UiLayout::controls(f,m);
+#endif
+#if PSU_UI_DEBUG
+  f.text(0,23,3,UI_TEXT("SIM"),Warning);
+  // Preserve pagination alongside the permanent SIM mark.
+  if (m.page()==UiPage::Groups || m.page()==UiPage::Units) {
+    char page[14]; const uint8_t rank=m.page()==UiPage::Groups ? m.groupRank()/3+1 : m.unitRank()/2+1;
+    const uint8_t pages=m.page()==UiPage::Groups ? (m.groupCount()+2)/3 : (m.unitCount()+1)/2;
+    snprintf(page,sizeof(page),"Page %u/%u",unsigned(rank),unsigned(pages)); f.text(1,18,8,page,Muted);
+  }
+#endif
   if (m.page() != UiPage::Result && m.working()) line(f, 14,
       m.notice() == UiNotice::Saving ? UI_TEXT("Saving EEPROM...") : UI_TEXT("Applying settings..."), Warning);
 }

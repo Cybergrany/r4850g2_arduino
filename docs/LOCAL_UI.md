@@ -1,9 +1,12 @@
 # ILI9341 display and wheel
 
-The local interface targets a **3.2-inch, 320x240 ILI9341 SPI module**, landscape.
+The local interface targets a **320x240 ILI9341 SPI module (2.8 or 3.2 inches)**, landscape.
 It shows three groups per overview page and two PSUs per detail page. The
 [screen preview](ui-preview.html) is generated from the implemented layout's
 host tests; download/open that HTML file in a browser. Its readings are simulated.
+
+See [touch input, calibration and CAN-free debugging](TOUCH.md) for the optional
+XPT2046 interface and fullscreen editor. The wheel controls below remain available.
 
 SSD1306 support is removed. Serial, display and encoder remain build options;
 the encoder only controls settings when an enabled display initializes.
@@ -157,7 +160,7 @@ or alter the PSU's own nonvolatile offline defaults.
 
 ## Other builds and future displays
 
-`mega2560_display` omits the wheel and cycles overview pages every five seconds.
+`mega2560_display` omits wheel/touch and cycles overview pages every five seconds.
 `mega2560_local` retains editing but omits serial; commission identities/groups
 with a serial build first. Headless profiles have no display dependencies.
 
@@ -172,7 +175,8 @@ tick). It uses character/style caches and one glyph raster, not a full pixel
 framebuffer. Initialization and its full clear happen before CAN reception starts.
 Each new scene schedules a bounded comparison pass (32 cells per tick); an
 unchanged, completed scene causes no further scans. A new renderer must implement
-`Display::invalidate()` as well as `service()`. Application advances EEPROM saves
+`Display::invalidate()`, `service()` and `pending()`. New-page touch targets
+are armed only after pending drawing completes. Application advances EEPROM saves
 for both UI and serial, even when the display is absent; the UI observes results.
 
 Regenerate the preview from real layout tests after installing the display libraries:
@@ -180,6 +184,7 @@ Regenerate the preview from real layout tests after installing the display libra
 ```sh
 mkdir -p /tmp/r4850-ui
 PSU_UI_SNAPSHOTS=/tmp/r4850-ui python3 tools/test_host.py
+PSU_UI_SNAPSHOTS=/tmp/r4850-ui python3 tools/test_touch.py
 python3 tools/render_ui.py /tmp/r4850-ui docs/ui-preview.html
 ```
 

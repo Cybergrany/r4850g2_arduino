@@ -1,3 +1,5 @@
+#include "../config/BuildOptions.h"
+#if !PSU_UI_DEBUG
 #pragma once
 #include "CanTransport.h"
 #include "Mcp2515Transmit.h"
@@ -27,3 +29,5 @@ class Mcp2515Transport : public CanTransport {
   mcp2515::Transmitter transmitter_;
 };
 }
+
+#endif

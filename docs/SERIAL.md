@@ -113,3 +113,14 @@ jobs. They do not emulate the USB bridge, OS port events, power loss, or DTR.
 
 Group commissioning, discovery, apply confirmation, and persistence are covered
 in [the serial group guide](GETTING_STARTED.md).
+
+
+## Touch and UI simulation commands
+
+Optional `touch status`, `touch calibrate`, `touch debug on/off` and
+`touch calibration export` are handled through the console's bounded extension
+hook. Debug builds add `ui-debug status`, `ui-debug scenario NAME`,
+`ui-debug restart` and `ui-debug reset`. The same buffered output and input
+backpressure rules apply. See [TOUCH.md](TOUCH.md) for the full workflow.
+`PSU_UI_DEBUG` excludes hardware CAN and uses volatile RAM instead of EEPROM;
+startup and storage replies identify simulation explicitly.

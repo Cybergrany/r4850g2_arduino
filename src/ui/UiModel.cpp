@@ -1,4 +1,5 @@
 #include "UiModel.h"
+#include "../debug/Simulator.h"
 namespace psu {
 namespace {
 uint8_t move(uint8_t current, int16_t delta, uint8_t count) {
@@ -105,7 +106,27 @@ void UiModel::commit(uint32_t now) {
 }
 void UiModel::input(UiInput event, uint32_t now) {
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
+  if (page_ == UiPage::Tools || page_ == UiPage::Scenarios) {
+    if (event.held) { action({ActionKind::Back}, now); return; }
+    if (page_ == UiPage::Scenarios) {
+#if PSU_UI_DEBUG
+      if (event.delta) scenarioSelection_ = move(scenarioSelection_, event.delta, uint8_t(DebugScenario::Count) + 2);
+      if (event.clicked) action({ActionKind::ScenarioStart}, now);
+#endif
+    } else {
+      const uint8_t count = (PSU_ENABLE_TOUCH ? 2 : 0) + (PSU_UI_DEBUG ? 1 : 0);
+      if (event.delta) toolSelection_ = move(toolSelection_, event.delta, count);
+      if (event.clicked && count) action({PSU_ENABLE_TOUCH && toolSelection_ == 0 ? ActionKind::Calibrate :
+          PSU_ENABLE_TOUCH && toolSelection_ == 1 ? ActionKind::TouchDebug : ActionKind::Scenarios}, now);
+    }
+    return;
+  }
+  if (page_ == UiPage::Calibration || page_ == UiPage::TouchDebug) {
+    if (event.held) action({ActionKind::Back}, now);
+    return;
+  }
   if (event.held) {
+    if (page_==UiPage::Groups && group_<0 && (PSU_UI_DEBUG || PSU_ENABLE_TOUCH)) { page_=UiPage::Tools; return; }
     editing_ = false;
     if (page_ == UiPage::Groups && group_ >= 0 && !working()) { page_ = UiPage::Config; notice_ = UiNotice::None; }
     else { page_ = UiPage::Groups; }
@@ -122,23 +143,89 @@ void UiModel::input(UiInput event, uint32_t now) {
     if (event.clicked) page_ = UiPage::Detail;
   } else if (page_ == UiPage::Detail) {
     if (event.clicked) page_ = UiPage::Units;
-  } else if (page_ == UiPage::Config) {
+  } else if (page_ == UiPage::Config || page_ == UiPage::Editor) {
     if (event.delta) {
       if (editing_) {
         int32_t value = int32_t(edit_) + int32_t(event.delta) * (field_ == UiField::Voltage ? ui::voltageStep : ui::currentStep);
         edit_ = value < minimum() ? minimum() : value > maximum() ? maximum() : value;
-      } else if (event.delta % 2) field_ = field_ == UiField::Voltage ? UiField::Current : UiField::Voltage;
+      } else field_ = UiField(move(uint8_t(field_), event.delta, (PSU_ENABLE_TOUCH || PSU_UI_DEBUG) ? 3 : 2));
     }
     if (event.clicked) {
+      if (!editing_ && field_ == UiField::Tools) { action({ActionKind::Tools}, now); return; }
       if (editing_) commit(now);
       else if (working() || c_.busy() || memory_.saving()) result(UiNotice::Busy);
-      else { edit_ = draft(); editRevision_ = c_.configurationRevision(); editing_ = true; notice_ = UiNotice::None; }
+      else { edit_ = draft(); editRevision_ = c_.configurationRevision(); editing_ = true; notice_ = UiNotice::None;
+#if PSU_ENABLE_TOUCH
+        page_ = UiPage::Editor;
+#endif
+      }
     }
   } else if (page_ == UiPage::Confirm) {
     if (event.delta % 2) confirmYes_ = !confirmYes_;
     if (event.clicked) { if (confirmYes_) queue(now, true); else result(UiNotice::Cancelled); }
   } else if (page_ == UiPage::Result && event.clicked && !working()) {
     page_ = group_ < 0 ? UiPage::Groups : UiPage::Config;
+  }
+}
+}
+
+namespace psu {
+void UiModel::resetNavigation() {
+  page_ = UiPage::Groups; field_ = UiField::Current; notice_ = UiNotice::None;
+  group_ = -1; unit_ = toolSelection_ = 0; editing_ = confirmYes_ = false; request_ = {};
+}
+void UiModel::action(UiAction a, uint32_t now) {
+  refresh(now);
+  switch (a.kind) {
+    case ActionKind::OpenGroup:
+      if (a.value < 0 || a.value >= groupCount()) return;
+      editing_ = false; group_ = groupAt(a.value); unit_ = unitAt(0); page_ = UiPage::Units; break;
+    case ActionKind::OpenUnit:
+      if (group_ < 0 || a.value < 0 || a.value >= population(c_.configuration().groups[group_].members)) return;
+      unit_ = unitAt(a.value); page_ = UiPage::Detail; break;
+    case ActionKind::Previous: case ActionKind::Next: {
+      const int8_t direction = a.kind == ActionKind::Next ? 1 : -1;
+      if (page_ == UiPage::Groups && groupCount()) {
+        const uint8_t pages = (groupCount()+ui::groupsPerPage-1)/ui::groupsPerPage;
+        group_ = groupAt(move(groupRank()/ui::groupsPerPage, direction, pages)*ui::groupsPerPage);
+      } else if (page_ == UiPage::Units && group_ >= 0) {
+        const uint8_t pages = (population(c_.configuration().groups[group_].members)+ui::unitsPerPage-1)/ui::unitsPerPage;
+        unit_ = unitAt(move(unitRank()/ui::unitsPerPage, direction, pages)*ui::unitsPerPage);
+      }
+      break;
+    }
+    case ActionKind::Configure:
+      if (group_ >= 0 && !working()) { page_ = UiPage::Config; field_ = UiField::Current; editing_ = false; } break;
+    case ActionKind::EditVoltage: case ActionKind::EditCurrent:
+      if (group_ < 0 || working()) return;
+      editing_ = false; page_ = UiPage::Config;
+      field_ = a.kind == ActionKind::EditVoltage ? UiField::Voltage : UiField::Current;
+      input({0,true,false}, now); break;
+    case ActionKind::Adjust: if (editing_) input({a.value,false,false}, now); break;
+    case ActionKind::Apply: if (editing_) commit(now); break;
+    case ActionKind::Cancel: editing_ = false; page_ = group_ < 0 ? UiPage::Groups : UiPage::Config; break;
+    case ActionKind::ConfirmNo: if (page_ == UiPage::Confirm) result(UiNotice::Cancelled); break;
+    case ActionKind::ConfirmYes: if (page_ == UiPage::Confirm) queue(now,true); break;
+    case ActionKind::Back:
+      editing_ = false;
+      page_ = page_ == UiPage::Detail ? UiPage::Units :
+          (page_ == UiPage::Calibration || page_ == UiPage::TouchDebug || page_ == UiPage::Scenarios) ? UiPage::Tools : UiPage::Groups;
+      break;
+    case ActionKind::Tools: editing_ = false; page_ = UiPage::Tools; break;
+    case ActionKind::Calibrate: case ActionKind::TouchDebug:
+      if (working()) return; // Preserve ownership of an active apply/save completion.
+      if (c_.busy() || memory_.saving()) { result(UiNotice::Busy); return; }
+      editing_ = false; page_ = a.kind == ActionKind::Calibrate ? UiPage::Calibration : UiPage::TouchDebug;
+      request_ = a; break;
+    case ActionKind::Scenarios: editing_ = false; page_ = UiPage::Scenarios; break;
+#if PSU_UI_DEBUG
+    case ActionKind::ScenarioNext: case ActionKind::ScenarioPrevious:
+      scenarioSelection_ = move(scenarioSelection_, a.kind == ActionKind::ScenarioNext ? 1 : -1, uint8_t(DebugScenario::Count)+2); break;
+    case ActionKind::ScenarioStart:
+      request_ = scenarioSelection_ == uint8_t(DebugScenario::Count) ? UiAction{ActionKind::DebugRestart} :
+          scenarioSelection_ > uint8_t(DebugScenario::Count) ? UiAction{ActionKind::DebugReset} : UiAction{ActionKind::ScenarioStart,scenarioSelection_}; break;
+#endif
+    default: break;
   }
 }
 }

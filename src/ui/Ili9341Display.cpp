@@ -1,6 +1,7 @@
 #include "Ili9341Display.h"
 #if PSU_ENABLE_DISPLAY
 #include "../config/BoardConfig.h"
+#include "../config/TouchConfig.h"
 #include <string.h>
 namespace psu {
 namespace {
@@ -17,6 +18,9 @@ uint16_t color(uint8_t style) {
 }
 Ili9341Display::Ili9341Display() : tft_(board::displayChipSelect, board::displayDataCommand, board::displayReset) {}
 bool Ili9341Display::begin() {
+#if PSU_ENABLE_TOUCH
+  pinMode(touch::chipSelect, OUTPUT); digitalWrite(touch::chipSelect, HIGH);
+#endif
   pinMode(board::canChipSelect, OUTPUT); digitalWrite(board::canChipSelect, HIGH);
   if (board::displayBacklight >= 0) { pinMode(board::displayBacklight, OUTPUT); analogWrite(board::displayBacklight, 0); }
   tft_.begin(board::displaySpiHz); tft_.setRotation(board::displayRotation);
@@ -34,7 +38,15 @@ void Ili9341Display::Glyph::drawPixel(int16_t x, int16_t y, uint16_t value) {
   if (x < 0 || y < 0 || x >= ui::cellWidth || y >= ui::cellHeight) return;
   if (value) rows[y] |= uint16_t(1U << x); else rows[y] &= uint16_t(~(1U << x));
 }
-void Ili9341Display::Glyph::prepare(char c) { memset(rows, 0, sizeof(rows)); drawChar(0, 0, c, 1, 0, 2); }
+void Ili9341Display::Glyph::prepare(char c) {
+  memset(rows, 0, sizeof(rows));
+  const uint8_t code = uint8_t(c);
+  if (code >= 128 && code < 176) {
+    const uint8_t digit = (code-128)/4, q = (code-128)%4;
+    drawChar(-int16_t(q%2)*ui::cellWidth, -int16_t(q/2)*ui::cellHeight,
+        digit < 10 ? '0'+digit : digit == 10 ? '.' : '-', 1, 0, 4);
+  } else drawChar(0, 0, c, 1, 0, 2);
+}
 void Ili9341Display::service(const UiFrame& frame) {
   if (!available_) return;
   uint8_t searchBudget = ui::scanCellsPerTick;

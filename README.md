@@ -11,9 +11,9 @@ creating groups, checking responses and broadcasts, applying settings, saving,
 and handling missing or replaced units.
 
 The MCP2515 interface is unchanged. Screen, wheel, and serial support are
-optional. The local UI targets a **3.2-inch 320x240 ILI9341 SPI display** with
-three group columns, two chargers per detail page, and wheel-based voltage/current
-editing. SSD1306 support has been removed. A display is required for local edits;
+optional. The local UI targets a **320x240 landscape ILI9341 SPI display (2.8 or 3.2 inches)** with
+three group columns, two chargers per detail page, and optional wheel/touch voltage/current
+editing. [Touch, calibration and CAN-free UI debug builds](docs/TOUCH.md) are available. SSD1306 support has been removed. A display is required for local edits;
 serial-only operation remains supported.
 
 See [local UI, wiring and controls](docs/LOCAL_UI.md) and the
@@ -38,6 +38,12 @@ See [serial connection behaviour](docs/SERIAL.md).
 | `mega2560_display` | Group overview, automatic paging | No | Yes |
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
 | `mega2560_minimal` | No | No | No |
+| `mega2560_touch` | Touch dashboard/editor | No | Yes |
+| `mega2560_touch_wheel` | Touch dashboard/editor | Navigate/edit | Yes |
+| `mega2560_ui_debug` | SIM dashboard/editor; no CAN | Navigate/edit | Yes |
+| `mega2560_touch_debug` | SIM touch/editor; no CAN | No | Yes |
+| `mega2560_touch_local` | Touch dashboard/editor | No | No |
+| `mega2560_touch_debug_local` | SIM touch/editor; no CAN | No | No |
 
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Reboot restoration is separately opt-in. Dependencies
@@ -63,6 +69,7 @@ is empty; `src/main.cpp` supplies `setup`/`loop`. Validation uses PlatformIO.
 | [`Deployment.h`](src/config/Deployment.h) | Installation ID, starting voltage, slot count, optional group/identity/rating template |
 | [`BoardConfig.h`](src/config/BoardConfig.h) | CAN crystal, bitrate, wiring, serial, peripheral timeouts |
 | [`ChargerConfig.h`](src/config/ChargerConfig.h) | Configuration types, limits, discovery/apply timing |
+| [`TouchConfig.h`](src/config/TouchConfig.h) | XPT2046 wiring, calibration profile, sampling and gesture timings |
 | [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–8) |
 | [`ConsoleConfig.h`](src/config/ConsoleConfig.h) | Serial input budget and idle expiry |
 | [`UiConfig.h`](src/config/UiConfig.h) | UI timing, edit increments, paging, dimming and drawing budget |

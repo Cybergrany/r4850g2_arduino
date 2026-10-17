@@ -97,7 +97,11 @@ void SerialConsole::begin(StorageResult loaded) {
   resetSession(); promptVisible_ = descriptionOpen_ = false;
   controller_.observeFrames(onFrame, this);
   io_.println(F("R4850 parallel controller; help / help diagnostics")); storageReply(loaded);
+#if PSU_UI_DEBUG
+  io_.println(F("SIM: physical CAN excluded; EEPROM writes use volatile RAM only"));
+#else
   io_.println(controller_.ready() ? F("CAN ready; discovering identities (not proof of PSU presence)") : F("CAN failed; console available"));
+#endif
 }
 void SerialConsole::finishStartup() { io_.println(F("Startup complete; Enter submits, Ctrl-X resets console")); prompt(); }
 void SerialConsole::displayStatus(bool available) {
@@ -105,6 +109,9 @@ void SerialConsole::displayStatus(bool available) {
 }
 void SerialConsole::reply(Result r) { io_.println(resultName(r)); }
 void SerialConsole::storageReply(StorageResult r) {
+#if PSU_UI_DEBUG
+  io_.print(F("SIM RAM: "));
+#endif
   switch (r) {
     case StorageResult::Ok: io_.println(F("EEPROM OK; saved drafts and authorized profile are separate")); break;
     case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; no settings applied")); break;
@@ -135,7 +142,9 @@ void SerialConsole::execute() {
     if (argc == 6) { reply(Result::Invalid); return; } args[argc++] = word;
   }
   if (!argc) return;
-  view_ = View::None; uint16_t n = 0, value = 0; uint8_t mask = 0;
+  view_ = View::None;
+  if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
+  uint16_t n = 0, value = 0; uint8_t mask = 0;
   if (memory_.saving() && (!strcmp(args[0], "save") || !strcmp(args[0], "load") ||
       !strcmp(args[0], "defaults") || !strcmp(args[0], "legacy") || !strcmp(args[0], "apply") ||
       !strcmp(args[0], "offline") || !strcmp(args[0], "confirm"))) {
@@ -487,6 +496,8 @@ void SerialConsole::outputRow(uint32_t now) {
       case 10: io_.println(F("save / load = controller EEPROM; autoresume on/off; defaults = RAM template")); break;
       case 11: io_.println(F("legacy = inspect preserved schema-1 records before migration/save")); break;
       case 12: io_.println(F("poll <all|GROUP>; describe <CAN-address>; interval <1000..10000>; reset-ah")); break;
+      case 14: io_.println(F("touch status/calibrate/debug on/off/calibration export (touch builds)")); break;
+      case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
     }
@@ -511,8 +522,12 @@ void SerialConsole::outputRow(uint32_t now) {
     ++row_;
   } else if (view_ == View::Bus) {
     if (row_ == 0) {
+#if PSU_UI_DEBUG
+      io_.println(F("SIM transport; hardware CAN absent; hardware counters are not measurements"));
+#else
       io_.print(F("CAN init=")); io_.print(controller_.ready()); io_.print(F(" bitrate=")); io_.print(board::canBitrate);
       io_.print(F(" crystal=")); io_.print(board::canCrystalHz); io_.print(F(" CS/INT=")); io_.print(board::canChipSelect); io_.print('/'); io_.println(board::canInterrupt);
+#endif
     } else if (row_ == 1) {
       io_.print(F("tx-errors=")); io_.print(controller_.txFailures()); io_.print(F(" rx-drops=")); io_.print(controller_.droppedFrames());
       io_.print(F(" discovery-overflow=")); io_.print(controller_.discovery().overflow()); io_.print(F(" ignored=")); io_.print(controller_.discovery().ignored());

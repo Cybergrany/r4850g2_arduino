@@ -1,7 +1,7 @@
 # Firmware boundaries and UI contracts
 
-`Application` composes adapters and optional UIs. Its loop services serial,
-controller, then local display/input. Core configuration, protocol, discovery,
+`Application` composes adapters and optional UIs. Its loop services the
+controller, storage, serial, then local display/input. Core configuration, protocol, discovery,
 controller, and storage code are ordinary C++11 without Arduino dependencies.
 
 | Directory | Responsibility |
@@ -11,7 +11,8 @@ controller, and storage code are ordinary C++11 without Arduino dependencies.
 | `src/protocol/` | Huawei frame classification, registers, numeric encoding |
 | `src/psu/` | Discovered physical devices, stable slot bindings, group allocation, apply/recovery state machines |
 | `src/storage/` | Versioned journal over `ByteStorage`; Arduino adapter uses standard EEPROM |
-| `src/ui/` | Serial commands, diagnostic rendering, ILI9341 layout/renderer and wheel navigation/editing |
+| `src/ui/` | Serial commands, diagnostic rendering, ILI9341 layout/renderer, wheel/touch navigation and calibration |
+| `src/debug/` | Optional simulated PSU transport and volatile byte storage |
 | `src/app/` | Startup composition and cooperative scheduling |
 | `test/` | Production code exercised with simulated hardware/time |
 
@@ -269,7 +270,8 @@ even when the operator leaves the progress screen. See [local UI](LOCAL_UI.md).
 ## EEPROM schema 2 and migration
 
 `ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Only
-serial `save` or a successful local apply/save writes. Two 256-byte journal slots reserve bytes 0–511;
+serial `save` or a successful local apply/save writes charger records; touch
+calibration has separate records in the reserved tails. Two 256-byte journal slots reserve bytes 0–511;
 integer encoding is explicit little-endian and independent of struct padding.
 At eight-slot capacity the record is **216 bytes**, whether one or eight slots
 are active. Telemetry, observations, sessions, pending jobs and ACK history are
@@ -297,8 +299,8 @@ Save invalidates the older destination slot, writes payload/checksum, commits
 last, then verifies. Load validates CRC, schema and semantic configuration,
 selecting the newest complete record. A failed read leaves caller RAM unchanged,
 except that WrongDeployment deliberately returns an inspectable, gated profile.
-No fallback case silently erases EEPROM. Save is synchronous and disallowed by
-the serial UI during an apply.
+No fallback case silently erases EEPROM. Runtime saves are incremental and
+disallowed by the serial UI during an apply.
 
 Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
 unauthorized GROUP1 in RAM, with auto-resume off. Incompatible per-unit drafts
@@ -308,3 +310,38 @@ saves still recover the old record. A later save may overwrite that legacy
 backup, so export it if it is needed. All supplied builds use the same capacity;
 changing `PSU_MAX_UNITS` changes the record length and requires manual export/
 recommissioning. This firmware does not reinterpret a different-size layout.
+
+
+## Touch and simulation boundaries
+
+`UiAction` expresses semantic navigation/edit actions shared by the wheel and
+XPT2046. `UiLayout` supplies the same cell rectangles to rendering and hit tests.
+The full-screen editor uses four cached character cells per enlarged digit;
+`Ili9341Display` clips a scaled flash-font glyph into each cell. RAM scene size
+and bounded pixel slices are unchanged. `Display::pending()` gates newly drawn
+screens; `TouchGesture` captures a target, cancels dragging and consumes input
+across page changes or simultaneous wheel events.
+
+`Touch.cpp` contains hardware-independent mapping, five-point calibration,
+gesture handling and the separate two-record calibration journal. `Xpt2046Input`
+samples a fixed SPI burst in the main loop. `TouchConfig.h` owns wiring/timings.
+`MemoryManager::auxiliaryBusy` gates the one shared byte writer; application
+services both storage jobs, but at most one is active. Charger records occupy
+at most the first 216 bytes of each 256-byte slot; calibration owns the last 40.
+The charger schema stays at version 2. Calibration has its own version/CRC,
+sequence, hardware profile and rotation, independent of deployment identity.
+
+With `PSU_UI_DEBUG`, Application instantiates `SimulatedCan` and `RamStorage`.
+No hardware CAN or Arduino EEPROM adapter is compiled into these builds. The
+simulator synthesizes bounded INFO/DATA/current/ACK traffic for the actual
+controller and discovery state machines. It stores only operating V/A and a
+single pending response; no large receive history or heap is needed. Scenario
+selection resets the simulated controller only after pending work finishes,
+primes healthy identities/operating settings, then introduces the selected fault.
+The UI and console hold stable controller references across this in-place reset;
+UI navigation and console observers are reset together. Calibration writes and
+ordinary settings use the same RAM byte device in debug builds.
+
+See `docs/TOUCH.md` for commands, timing, storage and reset semantics. A SIM mark
+is permanent on all debug screens, and hardware diagnostics are explicitly
+labelled simulated. `tools/check_debug_build.py` verifies linked isolation.

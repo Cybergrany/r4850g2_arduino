@@ -26,6 +26,7 @@ class UiFrame {
             uint8_t style = Text, bool right = false);
   void text(uint8_t row, uint8_t column, uint8_t width, FlashText value,
             uint8_t style = Text, bool right = false);
+  void largeNumber(uint8_t row, const char* value, uint8_t style = Text);
   void wrap(uint8_t row, uint8_t endRow, FlashText value, uint8_t style = Text);
  private:
   void put(uint8_t row, uint8_t column, uint8_t width, const char* value, bool flash, uint8_t style, bool right);
