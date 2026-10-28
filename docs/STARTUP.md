@@ -44,15 +44,25 @@ The sequence runs cooperatively; CAN, serial, UI and cooling keep being serviced
    and fresh measured current within ±0.5 A. Establish fan policy and the
    authorized common voltage (compiled voltage if none is authorized), then
    clear inherited standby. Enable OFF still permits awake zero holding.
-5. Require fresh ready and low-current observations after wake. Allow at least
-   **15 seconds**, or three poll periods if longer, for readiness. A fresh
+5. Require fresh broadcast and low-current observations after wake. Allow at least
+   **15 seconds**, or three poll periods if longer, for readiness. If a zero-limit
+   PSU still reports not-ready after that allowance, fresh benign `0x0183`
+   (only bits 9/10, or zero) can establish idle-at-zero instead. A fresh
    `0x0183` bit 29 reports `WAIT AC`; known AC absence waits without producing
    a startup timeout. Missing/stale status means AC unknown, not AC absent.
-6. After readiness, reassert zero, fan mode and voltage, then observe readiness
-   and low current again. Pre-ready ACKs alone cannot release charging.
+6. After readiness or verified idle-at-zero, reassert zero, fan mode and voltage,
+   then observe ready/benign status and low current again. Pre-startup ACKs alone
+   cannot release charging. Zero-limit readiness changes do not repeat wake.
 7. Restore the authorized profile only with enable ON and all required
    participants reconciled. Drafts are not charging authorization. Excluded
    identities remain held at zero even when ready.
+
+On a nonzero current write, require a matching ACK and a fresh output-ready
+broadcast within the same 15-second/three-poll allowance. Only the requested
+current is sent. If output readiness never follows, stop and latch a fault;
+do not restart indefinitely. [CONTROL.md](CONTROL.md) describes the idle-status
+guard and diagnostics. AC changes, missing identities, stale measurements,
+unknown status bits and unexpected held current retain their checks.
 
 The readiness allowance does not relax the stop deadline. Observed nonzero
 current still uses max(5 seconds, three poll periods). A failed INFO query sent

@@ -559,6 +559,16 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.print(F(" reason=")); io_.println(fanReasonName(u.fanReason));
     io_.print(F("  override=")); io_.print(fanOverrideName(u.fanOverride)); io_.println(F("; ACK is mode acceptance, not RPM."));
     if (u.standbyConfirmed) io_.println(F("  FAULT fallback: hardware standby confirmed; explicit reconcile required"));
+  } else if (field == 6) {
+    // Keep readiness on its own bounded row, including on a backpressured UART.
+    const auto& u = controller_.unitControl(i);
+    io_.print(F("  broadcast-ready="));
+    if (d && d->telemetry.broadcastSeen && uint32_t(now - d->telemetry.lastBroadcast) <= controller_.staleMs()) io_.print(d->telemetry.ready);
+    else io_.print(F("unknown"));
+    io_.print(F(" current-state="));
+    io_.println(u.fault != CommandState::Idle ? F("fault") :
+        u.outputDemand == OutputDemand::Zero ? F("zero") : u.outputDemand == OutputDemand::Starting ? F("waiting-for-output-ready") :
+        u.outputDemand == OutputDemand::Active ? F("active") : u.outputDemand == OutputDemand::Stopping ? F("waiting-for-zero-ACK") : F("unknown"));
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
@@ -662,7 +672,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 0: io_.println(F("BUS / GROUP DIAGNOSTICS (read only; no battery/load needed)")); break;
       case 1: io_.println(F("discover: INFO sweep 1..127; diag bus: responders, identities, current addresses, broadcasts, CAN errors")); break;
       case 2: io_.println(F("diag group NAME / diag psu N: bindings, readiness, ages, authorized shares and last failures")); break;
-      case 3: io_.println(F("Ready requires unique verified identity, fresh telemetry AND unsolicited broadcast, PSU ready status.")); break;
+      case 3: io_.println(F("Ready requires verified identity, fresh data/broadcasts and output-ready OR confirmed benign zero hold.")); break;
       case 4: io_.println(F("poll all/NAME; telemetry all/NAME; watch on/off. CAN ready alone does not prove a PSU is present.")); break;
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
@@ -768,7 +778,7 @@ void SerialConsole::outputRow(uint32_t now) {
     while (row_ < c.count && !(viewMask_ & (1U << row_))) ++row_;
     if (row_ < c.count) {
       printUnit(row_, field_, now);
-      if (++field_ == 6) { field_ = 0; ++row_; }
+      if (++field_ == 7) { field_ = 0; ++row_; }
     } else view_ = View::None;
   } else if (view_ == View::Plan) {
     if (row_ == 0) {

@@ -49,7 +49,12 @@ automatically treat every R48xx as electrically equivalent. Validate commands,
 reported current, and actual current on each supported model. `0x0183` is retained
 raw; nonzero is not automatically interpreted as a fault. Bit 29 is decoded
 separately as input-power failure, with fresh/present/absent/unknown state;
-all other bits remain available for inspection. This matches
+other bits remain available for inspection. The zero-hold readiness exception
+accepts only fresh status with bits 9/10 (shutdown/fan-MAX) or zero; other set
+bits block that exception. These operating/settings bits come from Appendix A
+of the [related Huawei protocol reference](https://github.com/patagonaa/huawei-r48xx/blob/main/doc/Huawei%20R100030G1%20(R4850G2)%20charging%20module%20CAN%20communication%20protocol%20-%20%E5%85%85%E7%94%B5%E6%A8%A1%E5%9D%97CAN%E9%80%9A%E8%AE%AF%E5%8D%8F%E8%AE%AE%E6%8C%87%E5%AF%BC%E4%B9%A6%20-%20translated%2Bocr.pdf),
+and match the G2 bench trace's `0x400`/`0x600`. This is not a full G2 alarm decoder
+or a guarantee across firmware variants. The AC interpretation matches
 [patagonaa's AC-present decoder](https://github.com/patagonaa/esphome-huawei-r4850/blob/main/components/huawei_r4850/huawei_r4850.cpp).
 The AVR mask uses an explicit 32-bit value, rather than a 16-bit `int` shift.
 

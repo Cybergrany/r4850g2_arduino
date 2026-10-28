@@ -208,6 +208,8 @@ struct Rig {
   uint16_t current[PSU_MAX_UNITS] = {};
   int16_t temperature = 40;
   bool reportAc = false;
+  bool notReadyAtZero = false;
+  uint32_t statusFlags = 0, outputReadyDelay = 0, outputReadyAt[PSU_MAX_UNITS] = {};
   uint8_t noAc = 0;
   uint32_t notReadyUntil = 0;
   uint8_t noTemperature = 0, noCurrent = 0, rejectRegister = 0xff, dropRegister = 0xff;
@@ -245,8 +247,9 @@ struct Rig {
       if (!(noCurrent & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x81, (standby & (1U<<i)) ? 0 :
           leaking || (leakOnWake && (woken & (1U<<i))) ? 2048 : uint32_t(current[i])*1024/100));
       if (!(noTemperature & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x7f, int32_t(temperature)*1024));
-      can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) && now >= notReadyUntil));
-      if (reportAc) can.incoming.push_back(data(addresses[i], 0x83, (noAc & (1U<<i)) ? (uint32_t(1)<<29) : 0));
+      can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) && now >= notReadyUntil &&
+          !(notReadyAtZero && current[i] == 0) && now >= outputReadyAt[i]));
+      if (reportAc) can.incoming.push_back(data(addresses[i], 0x83, statusFlags | ((noAc & (1U<<i)) ? protocol::statusAcAbsent : 0)));
     }
   }
   void step(uint32_t ms = 250, bool acknowledge = true, bool refresh = true) {
@@ -262,7 +265,11 @@ struct Rig {
             if(f.data[3]) standby |= 1U<<i;
             else { standby &= uint8_t(~(1U<<i)); woken |= 1U<<i; }
           }
-          if(f.data[1]==protocol::OnlineCurrent) current[i]=protocol::readBigEndian(f.data+4)*5000/1024;
+          if(f.data[1]==protocol::OnlineCurrent) {
+            const auto next=protocol::readBigEndian(f.data+4)*5000/1024;
+            if (!current[i] && next) outputReadyAt[i]=now+outputReadyDelay;
+            current[i]=next;
+          }
         }
         if(f.data[1]!=dropRegister) can.incoming.push_back(ack(f, f.data[1]==rejectRegister));
       }
@@ -288,6 +295,7 @@ struct Rig {
       bool pending=c.busy();
       for(uint8_t i=0;i<c.count();++i) {
         const auto phase=c.unitControl(i).phase;
+        pending |= c.unitControl(i).outputDemand==OutputDemand::Starting;
         pending |= phase!=ControlPhase::Held && phase!=ControlPhase::Online && phase!=ControlPhase::Fault && phase!=ControlPhase::AwaitIdentity;
         pending |= phase==ControlPhase::Fault && !c.unitControl(i).fanFailed && c.unitControl(i).fanAcknowledged!=c.unitControl(i).fanRequested && c.deviceForSlot(i,now);
         pending |= c.enableControl().enabled() && phase==ControlPhase::Held && c.configuration().operating.voltageMask==membersMask(c.count()) && c.controlStatus(now).blocker==Issue::None;
@@ -299,6 +307,12 @@ struct Rig {
   }
   void apply(Operation operation = Operation::All, int8_t group = -1) {
     const auto p = c.preview(operation, group, now);
+    if (p.blocker != Issue::None) {
+      std::cerr << "apply blocker=" << unsigned(p.blocker) << " op=" << unsigned(operation) << " now=" << now;
+      for (uint8_t i=0;i<c.count();++i) std::cerr << " slot=" << unsigned(i) << " phase=" << unsigned(c.unitControl(i).phase)
+          << " fault=" << unsigned(c.unitControl(i).fault) << " demand=" << unsigned(c.unitControl(i).outputDemand);
+      std::cerr << '\n';
+    }
     CHECK(p.blocker == Issue::None); CHECK(c.queue(p, false, now) == Result::Ok); finish();
     CHECK(c.report().failed == 0 && c.report().succeeded == p.recipients);
   }
@@ -428,7 +442,7 @@ void externalFanControl() {
     const auto duty=externalFanCurve(20+t/100.0f);
     CHECK(duty>=previous); previous=duty;
   }
-  Rig r; r.temperature=20; r.step(35000);
+  Rig r; r.c.setCurrent(0,5000); r.apply(); r.temperature=20; r.step(35000);
   auto s=r.c.externalFanStatus(r.now); CHECK(s.telemetryComplete && s.duty==0);
   r.temperature=30; r.step(); CHECK(r.c.externalFanStatus(r.now).duty==128);
   // One hot unit sets the common fan's demand; averaging would hide it.
@@ -1680,9 +1694,11 @@ void uiLayouts() {
   CHECK(rowText(frame, 4).find("54.00V") != std::string::npos && rowText(frame, 5).find("58.50V") != std::string::npos);
 }
 #include "test_availability.inc"
+#include "test_zero_hold.inc"
 }
 int main() {
   try {
+    zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();
     availabilityProtocol(); startupPowerPolicy(); acceptedAbsences(); availabilityDecisionsAndStorage(); availabilityRefreshAndSoak(); availabilityInterfaces();
     controlLifecycle(); zeroHoldEdges(); fanControl(); manualFanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();

@@ -3,8 +3,9 @@
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
 extended with AC-cutoff startup, source availability, remembered exclusions,
-post-ready reconciliation and volatile-setting refresh on 2026-10-28.
-No firmware upload or physical cutoff/fan/touch/multi-PSU test was performed.
+post-ready reconciliation and volatile-setting refresh on 2026-10-28. The
+zero-current readiness fix adds regressions for the reported G2 bench trace.
+No firmware upload or physical validation of this fix was performed here.
 
 ```sh
 python3 tools/test_host.py
@@ -33,27 +34,27 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6531 | 119542 |
-| `mega2560_serial` | 4864 | 79758 |
-| `mega2560_display` | 6506 | 114038 |
-| `mega2560_local` | 5500 | 82770 |
-| `mega2560_minimal` | 3745 | 35774 |
-| `mega2560_touch` | 6739 | 129228 |
-| `mega2560_touch_wheel` | 6764 | 130722 |
-| `mega2560_ui_debug` | 6533 | 121246 |
-| `mega2560_touch_debug` | 6741 | 130690 |
-| `mega2560_touch_local` | 5708 | 90078 |
-| `mega2560_touch_debug_local` | 5710 | 90508 |
-| `mega2560_touch_enable` | 6739 | 129518 |
-| `mega2560_touch_fan` | 6744 | 129900 |
-| `mega2560_serial_fan` | 4869 | 80020 |
-| `mega2560_serial_cutoff` | 4865 | 79846 |
-| `mega2560_touch_cutoff` | 6745 | 129988 |
+| `mega2560` | 6573 | 121774 |
+| `mega2560_serial` | 4906 | 81898 |
+| `mega2560_display` | 6548 | 116394 |
+| `mega2560_local` | 5542 | 85136 |
+| `mega2560_minimal` | 3785 | 37474 |
+| `mega2560_touch` | 6781 | 131006 |
+| `mega2560_touch_wheel` | 6806 | 132452 |
+| `mega2560_ui_debug` | 6575 | 123416 |
+| `mega2560_touch_debug` | 6783 | 132308 |
+| `mega2560_touch_local` | 5750 | 91986 |
+| `mega2560_touch_debug_local` | 5752 | 92414 |
+| `mega2560_touch_enable` | 6781 | 131248 |
+| `mega2560_touch_fan` | 6786 | 131630 |
+| `mega2560_serial_fan` | 4911 | 82182 |
+| `mega2560_serial_cutoff` | 4907 | 81986 |
+| `mega2560_touch_cutoff` | 6787 | 131716 |
 
-The full touch/serial/enable/fan/cutoff build uses 82.3% static RAM and 51.2% flash,
-leaving 1447 bytes for stack/runtime use. Touch and wheel leave 1428 bytes;
-omitting serial leaves 2484 bytes in the production touch profile. The serial-only
-cutoff build leaves 3327 bytes. Fixed UI/parser strings and deployment templates
+The full touch/serial/enable/fan/cutoff build uses 82.8% static RAM and 51.9% flash,
+leaving 1405 bytes for stack/runtime use. Touch and wheel leave 1386 bytes;
+omitting serial leaves 2442 bytes in the production touch profile. The serial-only
+cutoff build leaves 3285 bytes. Fixed UI/parser strings and deployment templates
 now live in flash on AVR. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
@@ -75,7 +76,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **630411 host checks** and **1004 touch/simulator checks** with
+Both suites pass: **638730 host checks** and **1004 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -162,7 +163,7 @@ Meaningful scenarios include:
 The [generated preview](ui-preview.html) uses frames exported from those tests
 and the pinned Adafruit GFX font. Zero-hold, pending-wake and failure layouts use
 that font; captured screens exercise enlarged editor digits and
-readable text equivalents. All 38 preview frames execute with bounded display
+readable text equivalents. All 41 preview frames execute with bounded display
 cells and accessible text in a Node canvas/DOM adapter. It is not an LCD test. Touch host tests substitute
 raw coordinates and display/time/serial adapters; they do not emulate the ADC,
 electrical SPI transactions or physical display response.
@@ -325,3 +326,29 @@ duty, full-duty cooling and cooling through an enable change. Confirm the fan's
 actual behavior at zero duty; not all models stop. The host harness proves
 register programming and requested demand, not electrical waveforms or motor
 operation. Check CAN/display/serial activity with the external fan running.
+
+## Zero-current readiness regression
+
+The G2 bench reported repeated zero/fan/voltage/wake sequences with fresh CAN,
+zero measured current, status `0x400`/`0x600` and a toggling output-ready flag.
+The production-controller harness now covers:
+
+- A cold not-ready PSU receives its full startup allowance before fresh benign
+  status can establish zero hold. Eighty seconds of readiness/status toggles
+  cause no repeat wake or MAX commands; fan cooldown completes normally.
+- A 5 A apply and saved-profile restore from zero wait for matched current ACK
+  and fresh output readiness. Only the requested current is written. Applying
+  zero or switching OFF during startup returns to confirmed zero hold.
+- Never-ready output latches the readiness timeout, without periodic current
+  retransmission; the existing standby fallback or fitted cutoff remains
+  latched. Missing/unknown status, actual AC absence and unexpected held current
+  retain their blocking or fault paths.
+- Serial diagnostics distinguish zero, waiting, active and fault; a slow UART
+  still receives complete fault messages without buffer overruns. UI snapshots
+  show the starting banner, pending output and complete reconciliation instruction.
+
+These are simulated observations, not measurements of loaded G2 behavior. The
+next bench run must establish stable `zero-confirmed=1 awake=1`, then accepted
+test limits, fresh output-ready status and actual current/voltage at the load.
+Check `diag control`, `telemetry GROUP1` and `diag bus`; do not treat a setting ACK
+as proof of delivered current. Finish with `autoresume off` and verify zero hold.

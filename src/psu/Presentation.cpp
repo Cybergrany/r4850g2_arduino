@@ -36,7 +36,8 @@ bool pendingSettings(const PsuController& c, uint8_t mask) {
 }
 bool commandFailed(CommandState s) {
   return s == CommandState::Incomplete || s == CommandState::Rejected || s == CommandState::Timeout ||
-      s == CommandState::IdentityTimeout || s == CommandState::TransportError || s == CommandState::Changed || s == CommandState::ObservationTimeout;
+      s == CommandState::IdentityTimeout || s == CommandState::TransportError || s == CommandState::Changed ||
+      s == CommandState::ObservationTimeout || s == CommandState::ReadinessTimeout;
 }
 bool commandActive(CommandState s) {
   return s == CommandState::Queued || s == CommandState::VerifyingIdentity || s == CommandState::Waiting;

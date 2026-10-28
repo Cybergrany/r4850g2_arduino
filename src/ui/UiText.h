@@ -22,6 +22,7 @@ inline const __FlashStringHelper* stateName(CommandState s) {
     case CommandState::IdentityTimeout: return F("identity query timeout; setting not sent");
     case CommandState::TransportError: return F("CAN transport failed"); case CommandState::Changed: return F("identity/address/readiness changed");
     case CommandState::ObservationTimeout: return F("ACK received; fresh stopped current/readiness not confirmed");
+    case CommandState::ReadinessTimeout: return F("output readiness timed out; explicit reconcile required");
   }
   return F("unknown");
 }
@@ -73,7 +74,7 @@ inline const __FlashStringHelper* activityName(Activity s) {
     case Activity::Reconciling: return F("RECONCILING");
     case Activity::Stopping: return F("STOPPING");
     case Activity::Holding: return F("ZERO CURRENT HOLD / AWAKE");
-    case Activity::Starting: return F("STARTING AT ZERO CURRENT");
+    case Activity::Starting: return F("STARTING / VERIFYING PSU");
     case Activity::Running: return F("ENABLED / RECONCILED");
     case Activity::StartBlocked: return F("START BLOCKED");
     case Activity::StopUnconfirmed: return F("STOP UNCONFIRMED");

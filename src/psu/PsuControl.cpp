@@ -7,6 +7,12 @@ namespace {
 bool after(uint32_t sample, uint32_t boundary, uint32_t now) {
   return uint32_t(now - sample) < uint32_t(now - boundary);
 }
+void preserveCooling(UnitControl& next, const UnitControl& previous, bool uncertainFan) {
+  next.coolSince = previous.coolSince; next.cooling = previous.cooling;
+  next.fanRequested = previous.fanRequested; next.fanReason = previous.fanReason;
+  next.fanOverride = previous.fanOverride;
+  next.fanAcknowledged = previous.fanFailed || uncertainFan ? FanMode::Unknown : previous.fanAcknowledged;
+}
 }
 Issue PsuController::routingIssue(uint8_t i, uint32_t now) const {
   if (discovery_.negotiating()) return Issue::IdentityPending;
@@ -47,9 +53,7 @@ void PsuController::reconcile() {
     auto& u = control_[i];
     clearFanOverride(i);
     UnitControl next;
-    next.coolSince = u.coolSince; next.cooling = u.cooling;
-    next.fanRequested = u.fanRequested; next.fanReason = u.fanReason;
-    next.fanAcknowledged = u.fanFailed || i == uncertainFan ? FanMode::Unknown : u.fanAcknowledged;
+    preserveCooling(next, u, i == uncertainFan);
     u = next;
   }
 }
@@ -95,7 +99,7 @@ Issue PsuController::fanOverrideIssue(uint8_t i, FanOverride mode, uint32_t now)
   if (mode == FanOverride::Auto) {
     const auto* d = deviceForSlot(i, now); float amps;
     if (enable_.enabled() || u.fault != CommandState::Idle || u.phase != ControlPhase::Held ||
-        !u.zeroConfirmed || !u.awakeConfirmed || !d || !d->telemetry.broadcastSeen || !d->telemetry.ready ||
+        !u.zeroConfirmed || !u.awakeConfirmed || !d || !d->telemetry.broadcastSeen || !readinessAcceptable(i, now) ||
         uint32_t(now - d->telemetry.lastBroadcast) > staleMs() ||
         !freshMetric(i, protocol::OutputCurrent, amps, now) || !isfinite(amps) || fabsf(amps) > control::stoppedCurrentAmps)
       return Issue::FanTestRequiresHold;
@@ -124,6 +128,40 @@ Result PsuController::setFanOverride(uint8_t mask, FanOverride mode, uint32_t no
 }
 uint16_t PsuController::reconciliationVoltage() const {
   return config_.operating.voltageAuthorized ? config_.operating.voltage : deployment::voltage;
+}
+bool PsuController::readinessAcceptable(uint8_t i, uint32_t now) const {
+  const auto* d = deviceForSlot(i, now);
+  if (!d) return false;
+  if (d->telemetry.ready) return true;
+  const auto& u = control_[i]; float amps;
+  // A zero limit can remove the PSU's output-ready indication without losing
+  // CAN or AC. Do not infer this exception from silence or arbitrary alarms.
+  if (!d->idleStatus(now, staleMs()) || !u.awakeConfirmed || !u.reconciled ||
+      (u.phase != ControlPhase::Held && u.phase != ControlPhase::Online) ||
+      !freshMetric(i, protocol::OutputCurrent, amps, now) || !isfinite(amps)) return false;
+  const uint32_t age = now - u.outputSince;
+  switch (u.outputDemand) {
+    case OutputDemand::Zero:
+      return u.zeroConfirmed ? fabsf(amps) <= control::stoppedCurrentAmps : age < staleMs();
+    case OutputDemand::Starting:
+      return age < (staleMs() > control::startupReadyMs ? staleMs() : control::startupReadyMs);
+    case OutputDemand::Stopping: return age < limits::ackTimeoutMs;
+    default: return false;
+  }
+}
+void PsuController::currentSent(uint8_t i, uint16_t raw, uint32_t now) {
+  auto& u = control_[i];
+  if (raw) {
+    if (u.outputDemand != OutputDemand::Active && u.outputDemand != OutputDemand::Starting) {
+      u.outputDemand = OutputDemand::Starting; u.outputSince = now;
+    }
+    u.zeroConfirmed = false;
+  } else if (u.outputDemand != OutputDemand::Zero) {
+    u.outputDemand = OutputDemand::Stopping; u.outputSince = now; u.zeroConfirmed = false;
+  }
+}
+void PsuController::currentAccepted(uint8_t i, uint16_t raw) {
+  if (!raw) control_[i].outputDemand = OutputDemand::Zero;
 }
 void PsuController::controlPhase(uint8_t slot, ControlPhase phase, uint32_t now) {
   auto& u = control_[slot]; u.phase = phase; u.since = now;
@@ -252,7 +290,7 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
         isfinite(amps) && fabsf(amps) <= control::stoppedCurrentAmps;
     held &= u.phase == ControlPhase::Held && u.awakeConfirmed;
     online &= u.phase == ControlPhase::Online;
-    starting |= u.phase == ControlPhase::Wake || u.phase == ControlPhase::Starting;
+    starting |= u.phase == ControlPhase::Wake || u.phase == ControlPhase::Starting || u.outputDemand == OutputDemand::Starting;
     if (s.blocker == Issue::None && (route != Issue::None || u.fault != CommandState::Idle)) {
       s.blocker = route != Issue::None ? route : Issue::ControlFault; s.slot = i;
     }
@@ -272,7 +310,7 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
   } else if (s.blocker != Issue::None) s.activity = Activity::StartBlocked;
   else if (!config_.operating.voltageAuthorized || config_.operating.voltageMask != membersMask(count())) {
     s.activity = Activity::StartBlocked; s.blocker = Issue::NoProfile;
-  } else if (online) s.activity = Activity::Running;
+  } else if (online && !starting) s.activity = Activity::Running;
   else s.activity = starting ? Activity::Starting : Activity::Reconciling;
   return s;
 }
@@ -308,11 +346,13 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
     return;
   }
   u.attempts = 0;
+  if (controlRegister_ == protocol::OnlineCurrent) currentAccepted(controlSlot_, controlValue_);
   if (refresh) {
     if (controlRegister_ == protocol::OnlineVoltage) {
       if (controlValue_ == protocol::encodeVoltage(reconciliationVoltage())) voltageSynced_ |= 1U << controlSlot_;
       refreshCurrent_ = true; refreshSlot_ = controlSlot_;
     } else {
+      if (controlValue_) currentSynced_ |= 1U << controlSlot_;
       refreshed_[controlSlot_] = now; refreshCurrent_ = false;
       refreshIndex_ = (controlSlot_ + 1) % count();
     }
@@ -361,28 +401,52 @@ void PsuController::controlTick(uint32_t now) {
     }
     if (!epoch) { updateFan(i, now); continue; }
     if (u.phase == ControlPhase::AwaitIdentity) controlPhase(i, ControlPhase::Zero, now);
-    // An unexpected AC/readiness loss invalidates volatile settings even if CAN
-    // stays powered from the DC bus, including while held awake at zero.
-    if ((u.phase == ControlPhase::Online || u.phase == ControlPhase::Held) &&
-        d->telemetry.broadcastSeen && !d->telemetry.ready) {
-      u = {}; controlPhase(i, ControlPhase::Zero, now);
-      if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
-      voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
-      restorePending_ |= running_ & (1U << i);
+    if (u.phase == ControlPhase::Online && u.outputDemand == OutputDemand::Starting) {
+      if ((currentSynced_ & (1U << i)) && d->telemetry.ready &&
+          uint32_t(now - d->telemetry.lastBroadcast) <= staleMs() &&
+          after(d->telemetry.lastBroadcast, u.outputSince, now)) u.outputDemand = OutputDemand::Active;
+      else if (uint32_t(now - u.outputSince) >= startupObservation)
+        latchControlFault(i, CommandState::ReadinessTimeout, protocol::OnlineCurrent, now);
     }
+    if (u.phase == ControlPhase::Online && u.outputDemand == OutputDemand::Zero && !u.zeroConfirmed) {
+      float amps;
+      if (freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) &&
+          after(d->telemetry.updated[protocol::OutputCurrent], u.outputSince, now) &&
+          fabsf(amps) <= control::stoppedCurrentAmps) u.zeroConfirmed = true;
+      else if (uint32_t(now - u.outputSince) >= observation)
+        latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now);
+    }
+    // Check a violated zero hold before readiness recovery can clear its proof.
     float heldCurrent;
     if ((u.zeroConfirmed || u.standbyConfirmed) && u.fault == CommandState::Idle && freshMetric(i, protocol::OutputCurrent, heldCurrent, now) &&
         isfinite(heldCurrent) && fabsf(heldCurrent) > control::stoppedCurrentAmps) {
       u.zeroConfirmed = u.standbyConfirmed = false;
       latchControlFault(i, CommandState::Changed, protocol::OnlineCurrent, now);
     }
+    // Known AC transitions still invalidate the discovery epoch. Output-ready
+    // alone may drop at a confirmed zero limit without restarting reconciliation.
+    if ((u.phase == ControlPhase::Online || u.phase == ControlPhase::Held) &&
+        d->telemetry.broadcastSeen && !readinessAcceptable(i, now)) {
+      UnitControl next;
+      preserveCooling(next, u, controlActive_ && controlWaiting_ && controlSlot_ == i && controlRegister_ == protocol::FanMode);
+      u = next; controlPhase(i, ControlPhase::Zero, now);
+      if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
+      voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
+      restorePending_ |= running_ & (1U << i);
+    }
     if (u.phase == ControlPhase::Stopping || u.phase == ControlPhase::Starting || u.phase == ControlPhase::VerifyStandby) {
       float amps;
       const bool observed = freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) &&
           after(d->telemetry.updated[protocol::OutputCurrent], u.since, now);
       const bool zero = observed && fabsf(amps) <= control::stoppedCurrentAmps;
+      // Some G2s remain not-ready at zero. A cold startup still gets its full
+      // allowance before fresh benign status can stand in for output readiness.
+      // The post-startup pass then reasserts zero/voltage without restarting wake.
+      const bool idle = d->idleStatus(now, staleMs()) && after(d->telemetry.lastAlarm, u.since, now) &&
+          (u.postReady || uint32_t(now - u.since) >= startupObservation);
       if (zero && (u.phase != ControlPhase::Starting || (d->acState(now, staleMs()) != AcState::Absent &&
-          d->telemetry.ready && after(d->telemetry.lastBroadcast, u.since, now)))) {
+          uint32_t(now - d->telemetry.lastBroadcast) <= staleMs() &&
+          (d->telemetry.ready || idle) && after(d->telemetry.lastBroadcast, u.since, now)))) {
         if (u.phase == ControlPhase::VerifyStandby) {
           u.standbyConfirmed = true;
           controlPhase(i, ControlPhase::Fault, now);
@@ -445,6 +509,7 @@ void PsuController::controlTick(uint32_t now) {
       if (controlRegister_ == protocol::Standby) u.zeroConfirmed = u.awakeConfirmed = u.standbyConfirmed = false;
       controlStarted_ = lastSend_ = now; controlWaiting_ = true;
       if (!send(frame, TxPurpose::Control)) controlComplete(CommandState::TransportError, now);
+      else if (controlRegister_ == protocol::OnlineCurrent) currentSent(controlSlot_, controlValue_, now);
     }
     return;
   }
@@ -476,7 +541,8 @@ void PsuController::controlTick(uint32_t now) {
     controlPhase(i, ControlPhase::Wake, now); controlCommand(i, protocol::Standby, 0, now); return;
   }
   if (releaseAllowed(now)) for (uint8_t i = 0; i < count(); ++i) if ((participants() & (1U << i)) && control_[i].phase == ControlPhase::Held) {
-    control_[i].zeroConfirmed = false; controlPhase(i, ControlPhase::Online, now);
+    // Still physically at the accepted zero limit until an actual current write.
+    controlPhase(i, ControlPhase::Online, now);
   }
 }
 void PsuController::refreshSettings(uint32_t now) {
@@ -486,6 +552,7 @@ void PsuController::refreshSettings(uint32_t now) {
     const uint8_t i = refreshCurrent_ ? refreshSlot_ : uint8_t((refreshIndex_ + n) % count());
     const auto* d = deviceForSlot(i, now); const auto& u = control_[i];
     if ((restoreBlocked_ & (1U << i)) || issue(i, now) != Issue::None ||
+        u.outputDemand == OutputDemand::Starting || u.outputDemand == OutputDemand::Stopping ||
         (u.phase != ControlPhase::Held && u.phase != ControlPhase::Online)) {
       if (refreshCurrent_) { refreshCurrent_ = false; return; }
       continue;

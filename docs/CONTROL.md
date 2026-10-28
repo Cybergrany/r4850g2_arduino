@@ -2,7 +2,8 @@
 
 This firmware controls one parallel DC bus. Normal OFF means **zero-current hold
 with the PSU awake for cooling**, not hardware standby. Managed units reconcile
-this way at boot, on explicit retry and when they return or lose readiness.
+this way at boot, on explicit retry, after an observed AC/identity change, and
+after readiness loss while delivering current.
 Discovery itself remains read-only; unbound, ambiguous and wrong-deployment
 devices receive no setting writes.
 
@@ -12,7 +13,8 @@ devices receive no setting writes.
    and group actual identities. Binding makes a unit managed: background control
    starts zero-current reconciliation. `bind` itself does not transmit.
 2. Run `diag control` and `diag group GROUP1`. Wait for `held-at-zero-awake`,
-   `zero-confirmed=1 awake=1`, fresh telemetry and a ready broadcast.
+   `zero-confirmed=1 awake=1` and fresh telemetry. `broadcast-ready=0` can be
+   normal while `current-state=zero`; output readiness is a separate check.
 3. Stage `set voltage 54` and `set current GROUP1 55` (example values only).
 4. Run `autoresume on`, `preview all`, then `apply all`. With no authorized
    profile yet, ON stays blocked until apply authorizes one. If an older profile
@@ -52,15 +54,36 @@ The controller performs these cooperative steps without waiting loops:
    profile exists. A staged voltage edit is never substituted here.
 4. Clear any inherited hardware standby (`0x0132`, flag 0), only after that
    unit has accepted zero current and voltage and met the fan policy. Require
-   a fresh ready broadcast and a fresh low-current sample after the wake ACK.
-   Readiness allows max(15 seconds, three poll periods); a fresh AC-absent flag
-   waits without a readiness fault. Reassert zero/fan/voltage after readiness,
-   then require fresh ready/low-current observations again. The unit is now
-   held at zero and awake, even if effective enable is OFF.
+   a fresh broadcast and a fresh low-current sample after the wake ACK.
+   A ready broadcast normally completes this observation. Some G2s report
+   not-ready at a zero limit: after max(15 seconds, three poll periods), fresh
+   `0x0183` containing only the shutdown/fan-MAX status bits (bits 9/10, or zero)
+   can complete the zero hold instead. Missing/stale status or any other set bit
+   cannot use this exception. A fresh AC-absent flag waits without a readiness
+   fault. Reassert zero/fan/voltage after this startup allowance, then require
+   new low-current, broadcast and ready-or-benign-status observations again.
+   The unit is held at zero and awake, even if effective enable is OFF.
 5. Restore authorized charging current only when enable is ON, the complete
    common-voltage profile is authorized, and **all required participants** pass
-   identity, telemetry, readiness, voltage and fan checks. Every returning
+   identity, telemetry, verified zero-hold/output-readiness, voltage and fan checks. Every returning
    recipient must have completed the zero/wake observations first.
+
+The unsolicited output-ready flag may toggle while the accepted current limit
+is zero. With fresh benign status and confirmed low current, this does not
+repeat wake or erase fan cooldown. A stable zero hold can cool to AUTO after
+the normal 30-second release interval. Voltage/current refresh continues;
+the persistent fan mode is written only when needed.
+
+An online apply or authorized restore sends **the requested current limit**;
+there is no extra startup current or hidden redistribution. A nonzero write
+from zero starts a bounded max(15 seconds, three poll periods) output-readiness
+observation. `current-state=waiting-for-output-ready` and the serial/UI starting
+banner distinguish it from confirmed operation. A matching current ACK and
+fresh ready broadcast complete it. Repeated commands or periodic refresh do
+not extend this deadline. A timeout latches `output readiness timed out` and
+uses the existing stop fallback/cutoff; explicit `reconcile` is required.
+An accepted apply report still means command acceptance, not measured delivery;
+check `diag control` and measured voltage/current before increasing a load.
 
 A missing member does not prevent reachable units from staying awake at zero
 for cooling. Without an explicit absence acceptance, it still blocks initial

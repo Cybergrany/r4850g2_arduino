@@ -118,6 +118,33 @@ and wait for `held-at-zero-awake` with
 `zero-confirmed=1 awake=1` before the first apply. Normal OFF keeps units awake
 with a zero current limit; it does not request hardware standby.
 
+On some G2s `broadcast-ready=0` is expected at a zero limit. The controller can
+establish `current-state=zero` from fresh low-current and benign PSU status
+after the startup allowance; it must then stay in hold without repeated
+zero/fan/voltage/wake cycles. A subsequent requested nonzero current starts a
+bounded output-readiness check. See [CONTROL.md](CONTROL.md).
+
+For a serial-only single-PSU bench test, keep using `mega2560_serial`. Before
+reflashing, `autoresume off` then `save` retains the binding/group with boot
+enable OFF; wait for `EEPROM OK`. After flashing, check `config`, `diag bus`
+and `diag control`. With the configured load and voltage suitable for the test,
+send each command separately:
+
+```text
+set voltage 54
+set current GROUP1 1
+autoresume on
+preview all
+apply all
+```
+
+Wait for accepted commands and `current-state=active`, then inspect
+`diag control`, `telemetry GROUP1` and optionally `watch on`. A 1 A request is
+a current **limit**; the load may draw less. If a previous authorized profile
+exists, ON can restore it first: inspect it before enabling and let the restore
+finish before applying new drafts. Finish with `watch off`, `autoresume off`,
+and verify stable zero hold; `save` retains the final OFF preference.
+
 ### Test the fans without charging
 
 Keep `autoresume off` and wait for the confirmed awake zero hold above. Then:

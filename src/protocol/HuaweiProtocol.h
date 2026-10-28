@@ -8,6 +8,10 @@ constexpr uint8_t setCommand = 0x80;
 constexpr uint8_t descriptionCommand = 0xd2;
 constexpr uint8_t currentCommand = 0x11;
 constexpr uint16_t fixedPointScale = 1024;
+// 0x0183 contains operating/settings bits as well as alarms (Huawei Appendix A).
+// Only these two benign bits may accompany an idle-at-zero readiness exception.
+constexpr uint32_t statusShutdown = uint32_t(1) << 9, statusFanMax = uint32_t(1) << 10;
+constexpr uint32_t statusAcAbsent = uint32_t(1) << 29;
 constexpr float ahCurrentDivisor = 20.0f;
 constexpr float ahSampleSeconds = 0.377f;
 enum Register : uint8_t {

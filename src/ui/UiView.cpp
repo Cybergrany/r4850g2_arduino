@@ -66,6 +66,7 @@ FlashText shortCommand(CommandState state) {
     case CommandState::TransportError: return UI_TEXT("CAN TX FAILED");
     case CommandState::Changed: return UI_TEXT("DEVICE CHANGED");
     case CommandState::Incomplete: return UI_TEXT("INCOMPLETE APPLY");
+    case CommandState::ReadinessTimeout: return UI_TEXT("OUTPUT NOT READY");
     default: return UI_TEXT("APPLYING");
   }
 }
@@ -77,6 +78,7 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   else if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
   else if (commandFailed(state)) line(f, row, shortCommand(state), background | Error);
   else if (commandActive(state)) line(f, row, UI_TEXT("APPLYING"), background | Warning);
+  else if (c.unitControl(slot).outputDemand == OutputDemand::Starting) line(f, row, UI_TEXT("WAIT OUTPUT READY"), background | Warning);
   else line(f, row, UI_TEXT("OK"), background | Good);
 }
 void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
@@ -179,6 +181,8 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     PSU_SNPRINTF(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
   } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
+  else if (control.outputDemand == OutputDemand::Starting) f.wrap(5, 8,
+      UI_TEXT("Current sent; waiting for output-ready status. Timeout stops and latches a fault."), Warning);
   else if (control.zeroConfirmed) f.wrap(5, 8, control.awakeConfirmed ?
       UI_TEXT("Awake at zero current for cooling. Zero ACK and fresh low current confirmed. Profile retained.") :
       UI_TEXT("Zero current confirmed. Preparing fan/voltage and verifying awake state. Profile retained."));
@@ -265,7 +269,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
       e.source() == EnableSource::Serial ? UI_TEXT("ZERO A: SERIAL OFF") : UI_TEXT("ZERO A: BOOT OFF");
   else if (s.activity == Activity::Stopping) text = UI_TEXT("STOPPING...");
   else if (s.activity == Activity::StopUnconfirmed) text = UI_TEXT("STOP UNCONFIRMED");
-  else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING AT ZERO A");
+  else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING / VERIFYING PSU");
   else if (s.activity == Activity::StartBlocked) text = s.blocker == Issue::NoProfile ? UI_TEXT("START: NEEDS PROFILE") : UI_TEXT("START BLOCKED");
   if (s.blocker == Issue::NoParticipants) text = UI_TEXT("NO ACTIVE PSUS");
   if (s.blocker == Issue::Cutoff) text = c.startupStatus().permit == PermitState::Fault ? UI_TEXT("AC CUTOFF: RETRY NEEDED") : UI_TEXT("AC INHIBITED: STARTUP");

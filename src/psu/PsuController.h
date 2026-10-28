@@ -151,6 +151,9 @@ class PsuController {
   void controlPhase(uint8_t slot, ControlPhase phase, uint32_t now);
   void updateFan(uint8_t slot, uint32_t now);
   void clearFanOverride(uint8_t slot);
+  bool readinessAcceptable(uint8_t slot, uint32_t now) const;
+  void currentSent(uint8_t slot, uint16_t raw, uint32_t now);
+  void currentAccepted(uint8_t slot, uint16_t raw);
   bool wakeAllowed(uint8_t slot, uint32_t now) const;
   bool releaseAllowed(uint32_t now) const;
   bool controlsOnline(uint8_t mask) const;

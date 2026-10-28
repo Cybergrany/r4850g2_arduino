@@ -152,7 +152,7 @@ Issue PsuController::issue(uint8_t i, uint32_t now) const {
   const auto& t = d->telemetry;
   if (!t.dataSeen || uint32_t(now - t.lastData) > staleMs()) return Issue::NoTelemetry;
   if (!t.broadcastSeen || uint32_t(now - t.lastBroadcast) > staleMs()) return Issue::NoTelemetry;
-  if (!t.ready) return Issue::NotReady;
+  if (!readinessAcceptable(i, now)) return Issue::NotReady;
   return Issue::None;
 }
 GroupStatus PsuController::groupStatus(uint8_t g, uint32_t now) const {
@@ -346,7 +346,10 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
         voltageSynced_ |= 1U << jobSlot_;
         if ((voltageSynced_ & participants()) == participants()) voltageCommissioned_ = true;
       }
-      if (ok && f.data[1] == protocol::OnlineCurrent) currentSynced_ |= 1U << jobSlot_;
+      if (ok && f.data[1] == protocol::OnlineCurrent) {
+        currentSynced_ |= 1U << jobSlot_;
+        currentAccepted(jobSlot_, expected_);
+      }
       advance(ok);
     }
   }
@@ -444,6 +447,7 @@ void PsuController::runJob(uint32_t now) {
   report_.units[jobSlot_] = {CommandState::Waiting, reg, expected_};
   lastSend_ = now; waiting_ = send(protocol::setting(d->address, reg, expected_), TxPurpose::Job);
   if (!waiting_) { report_.units[jobSlot_].state = CommandState::TransportError; advance(false); }
+  else if (reg == protocol::OnlineCurrent) currentSent(jobSlot_, expected_, now);
 }
 void PsuController::restore(uint32_t now) {
   if (!enable_.enabled() || !powerAvailable() || busy() || availabilitySaving() || !restorePending_ ||

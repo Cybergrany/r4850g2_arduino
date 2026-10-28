@@ -3,7 +3,7 @@
 #include "../protocol/HuaweiProtocol.h"
 namespace psu {
 enum class AcState : uint8_t { Unknown, Absent, Present };
-enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed, ObservationTimeout };
+enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed, ObservationTimeout, ReadinessTimeout };
 struct CommandStatus { CommandState state; uint8_t reg; uint32_t rawValue; };
 struct Telemetry {
   float values[protocol::MetricCount];
@@ -23,9 +23,13 @@ struct Psu {
   void receive(const CanFrame& frame, uint32_t now);
   bool fresh(uint32_t now, uint32_t timeout) const;
   bool verified(uint32_t now) const;
+  bool idleStatus(uint32_t now, uint32_t timeout) const {
+    return telemetry.alarmSeen && uint32_t(now - telemetry.lastAlarm) <= timeout &&
+        !(telemetry.alarmBits & ~(protocol::statusShutdown | protocol::statusFanMax));
+  }
   AcState acState(uint32_t now, uint32_t timeout) const {
     if (!telemetry.alarmSeen || uint32_t(now - telemetry.lastAlarm) > timeout) return AcState::Unknown;
-    return telemetry.alarmBits & (uint32_t(1) << 29) ? AcState::Absent : AcState::Present;
+    return telemetry.alarmBits & protocol::statusAcAbsent ? AcState::Absent : AcState::Present;
   }
 };
 }

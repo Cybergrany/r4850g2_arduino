@@ -6,6 +6,7 @@ enum class ControlPhase : uint8_t { AwaitIdentity, Zero, Stopping, Fan, Voltage,
 enum class FanMode : uint8_t { Unknown, Auto, Max };
 enum class FanOverride : uint8_t { Policy, Auto, Max };
 enum class FanReason : uint8_t { Startup, Temperature, RequestedCurrent, MeasuredCurrent, InvalidTelemetry, Cooling, Cool, ManualAuto, ManualMax };
+enum class OutputDemand : uint8_t { Unknown, Zero, Starting, Active, Stopping };
 enum class Activity : uint8_t { Reconciling, Stopping, Holding, Starting, Running, StartBlocked, StopUnconfirmed };
 struct ExternalFanStatus {
   float maximumTemperature = 0;
@@ -15,6 +16,8 @@ struct ExternalFanStatus {
 };
 struct UnitControl {
   uint32_t since = 0, coolSince = 0;
+  uint32_t outputSince = 0;
+  OutputDemand outputDemand = OutputDemand::Unknown;
   ControlPhase phase = ControlPhase::AwaitIdentity;
   FanMode fanAcknowledged = FanMode::Unknown, fanRequested = FanMode::Max;
   FanOverride fanOverride = FanOverride::Policy;
