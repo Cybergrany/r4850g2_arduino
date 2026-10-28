@@ -128,6 +128,7 @@ class PsuController {
   void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now);
   void controlPhase(uint8_t slot, ControlPhase phase, uint32_t now);
   void updateFan(uint8_t slot, uint32_t now);
+  bool wakeAllowed(uint8_t slot, uint32_t now) const;
   bool releaseAllowed(uint32_t now) const;
   bool controlsOnline(uint8_t mask) const;
   uint16_t reconciliationVoltage() const;

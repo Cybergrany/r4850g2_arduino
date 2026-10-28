@@ -154,7 +154,7 @@ current. Other faults remain blocking. A partial success is labelled
 `PARTIAL APPLY SAVED`, never complete group success. Cancelling after that
 warning retains the staged draft in RAM without issuing the partial writes.
 
-`autoresume on/off` now controls live enable/standby and `save` persists that
+`autoresume on/off` now controls live enable/zero-current hold and `save` persists that
 preference. Local apply/save does not bypass a disabled enable request
 or alter the PSU's own nonvolatile offline defaults.
 
@@ -194,11 +194,15 @@ compatibility, worst-case interrupt timing, or PSU behavior on a loaded CAN bus.
 
 ## Enable and control status
 
-The spare row below the V/A/W header shows intentional standby and its winning
+The spare row below the V/A/W header shows intentional zero-current hold and its winning
 control source in amber. Reconciliation and zero-current startup are also
 visible. A failed or unknown stop is red and is never labelled confirmed
-standby. Charger/config title rows show compact OFF/source or fault tags.
+zero hold. Charger/config title rows show compact OFF/source or fault tags.
 PSU details include requested/ACKed fan mode and control failure/register.
 Existing per-unit errors and measured telemetry remain visible. SIM pagination
 uses the last three cells of the status row and retains the permanent SIM mark.
 See [CONTROL.md](CONTROL.md) for examples, diagnostics and enable semantics.
+
+Successful OFF now shows `ZERO A: SERIAL OFF` / `ZERO A: ENABLE_IN OFF` /
+`ZERO A: BOOT OFF`; units remain awake for cooling. Hardware standby is only a
+latched fault fallback, visible in `diag control`.

@@ -39,7 +39,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::Busy: return F("operation in progress"); case Issue::Invalid: return F("invalid operation or CAN not initialized");
     case Issue::Capacity: return F("per-PSU current share exceeds capability");
     case Issue::Disabled: return F("disabled by effective enable control; diag control; autoresume on or switch edge to enable");
-    case Issue::Reconciling: return F("reconciling standby/zero/wake; wait and inspect diag control");
+    case Issue::Reconciling: return F("reconciling zero/fan/voltage/wake; wait and inspect diag control");
     case Issue::ControlFault: return F("control fault latched; diag control/psu; correct cause then reconcile");
     case Issue::NoProfile: return F("no complete authorized voltage profile; stage settings then apply all/voltage");
   }
@@ -52,7 +52,7 @@ inline const __FlashStringHelper* activityName(Activity s) {
   switch (s) {
     case Activity::Reconciling: return F("RECONCILING");
     case Activity::Stopping: return F("STOPPING");
-    case Activity::Standby: return F("STANDBY");
+    case Activity::Holding: return F("ZERO CURRENT HOLD / AWAKE");
     case Activity::Starting: return F("STARTING AT ZERO CURRENT");
     case Activity::Running: return F("ENABLED / RECONCILED");
     case Activity::StartBlocked: return F("START BLOCKED");
@@ -63,12 +63,14 @@ inline const __FlashStringHelper* activityName(Activity s) {
 inline const __FlashStringHelper* phaseName(ControlPhase s) {
   switch (s) {
     case ControlPhase::AwaitIdentity: return F("await-identity");
-    case ControlPhase::Standby: return F("request-standby");
+    case ControlPhase::EmergencyStandby: return F("fault-request-standby");
+    case ControlPhase::VerifyStandby: return F("verify-fault-standby");
     case ControlPhase::Stopping: return F("verify-stopped-current");
     case ControlPhase::Fan: return F("require-fan-policy");
     case ControlPhase::Voltage: return F("prepare-voltage");
     case ControlPhase::Zero: return F("prepare-zero-current");
-    case ControlPhase::Prepared: return F("held-in-standby");
+    case ControlPhase::Prepared: return F("prepared-at-zero");
+    case ControlPhase::Held: return F("held-at-zero-awake");
     case ControlPhase::Wake: return F("release-standby");
     case ControlPhase::Starting: return F("verify-wake-at-zero");
     case ControlPhase::Online: return F("reconciled");

@@ -143,10 +143,7 @@ Issue PsuController::issue(uint8_t i, uint32_t now) const {
   const auto& t = d->telemetry;
   if (!t.dataSeen || uint32_t(now - t.lastData) > staleMs()) return Issue::NoTelemetry;
   if (!t.broadcastSeen || uint32_t(now - t.lastBroadcast) > staleMs()) return Issue::NoTelemetry;
-  // A confirmed intentional standby is not a failed unit and must not prevent
-  // its own release. Readiness is checked again after the wake ACK.
-  if (!t.ready && !control_[i].standbyConfirmed && control_[i].phase != ControlPhase::Starting &&
-      control_[i].phase != ControlPhase::Wake) return Issue::NotReady;
+  if (!t.ready) return Issue::NotReady;
   return Issue::None;
 }
 GroupStatus PsuController::groupStatus(uint8_t g, uint32_t now) const {
@@ -218,7 +215,7 @@ ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool 
   if (p.blocker == Issue::None) {
     for (uint8_t i = 0; i < count(); ++i) if (p.recipients & (1U << i)) {
       if (control_[i].fault != CommandState::Idle) { p.blocker = Issue::ControlFault; break; }
-      if (control_[i].phase != ControlPhase::Prepared && control_[i].phase != ControlPhase::Online)
+      if (control_[i].phase != ControlPhase::Held && control_[i].phase != ControlPhase::Online)
         p.blocker = Issue::Reconciling;
       if (op == Operation::GroupCurrent && control_[i].phase != ControlPhase::Online) p.blocker = Issue::Reconciling;
     }
@@ -355,7 +352,7 @@ void PsuController::runJob(uint32_t now) {
     }
     const auto state = controlStatus(now);
     if (state.blocker != Issue::None) { cancelJob(); return; }
-    return; // Reconciliation owns standby/zero/wake; user jobs cannot bypass it.
+    return; // Reconciliation owns zero/fan/voltage/wake; user jobs cannot bypass it.
   }
   if (waiting_) {
     const auto* d = deviceForSlot(jobSlot_, now);

@@ -31,12 +31,13 @@ FlashText scenarioName(DebugScenario s) {
     case DebugScenario::Changed: return UI_TEXT("changed");
     case DebugScenario::Extremes: return UI_TEXT("extremes");
     case DebugScenario::WrongDeployment: return UI_TEXT("wrong-deployment");
-    case DebugScenario::Standby: return UI_TEXT("standby");
+    case DebugScenario::ZeroHold: return UI_TEXT("zero-hold");
     case DebugScenario::Hot: return UI_TEXT("fan-hot");
     case DebugScenario::Cool: return UI_TEXT("fan-cool");
     case DebugScenario::SensorFault: return UI_TEXT("fan-sensor-fault");
     case DebugScenario::FanReject: return UI_TEXT("fan-reject");
-    case DebugScenario::StandbyReject: return UI_TEXT("standby-reject");
+    case DebugScenario::ZeroReject: return UI_TEXT("zero-reject");
+    case DebugScenario::StopUnconfirmed: return UI_TEXT("stop-unconfirmed");
     case DebugScenario::WakeCurrent: return UI_TEXT("wake-current");
     default: return UI_TEXT("unknown");
   }
@@ -59,13 +60,13 @@ void RamStorage::clear() { memset(bytes_, 0xff, sizeof(bytes_)); failWrites = fa
 void SimulatedCan::reset() {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { voltage_[i] = 5400; current_[i] = 1000; }
   pending_ = cycling_ = false; slot_ = field_ = budget_ = 0; lastCycle_ = 0;
-  standby_ = fanMax_ = 0;
+  standby_ = fanMax_ = wakeSeen_ = 0;
   scenario_ = DebugScenario::Healthy;
 }
 bool SimulatedCan::present(uint8_t i) const { return !(scenario_ == DebugScenario::Missing && i == 1); }
 uint16_t SimulatedCan::measuredCurrent(uint8_t i) const {
   if (standby_ & (1U << i)) return 0;
-  if (scenario_ == DebugScenario::WakeCurrent && !current_[i]) return 200;
+  if (scenario_ == DebugScenario::WakeCurrent && !current_[i] && (wakeSeen_ & (1U << i))) return 200;
   return scenario_==DebugScenario::Extremes && current_[i] ? 6000 : current_[i]*9UL/10;
 }
 CanFrame SimulatedCan::identityFrame(uint8_t i) const {
@@ -114,14 +115,17 @@ bool SimulatedCan::send(const CanFrame& f) {
     response_ = f; response_.id &= ~0x80UL;
     const bool reject = scenario_ == DebugScenario::Reject || (scenario_ == DebugScenario::Partial && a == 2) ||
         (scenario_ == DebugScenario::FanReject && f.data[1] == protocol::FanMode) ||
-        (scenario_ == DebugScenario::StandbyReject && f.data[1] == protocol::Standby);
+        ((scenario_ == DebugScenario::ZeroReject || scenario_ == DebugScenario::StopUnconfirmed) &&
+            f.data[1] == protocol::OnlineCurrent && protocol::readBigEndian(f.data + 4) == 0) ||
+        (scenario_ == DebugScenario::StopUnconfirmed && f.data[1] == protocol::Standby);
     response_.data[0] = reject ? 0x21 : 1;
     if (!reject) {
       const uint16_t value = uint16_t(f.data[6]) << 8 | f.data[7];
       if (f.data[1] == protocol::OnlineVoltage) voltage_[a - 1] = uint32_t(value) * 100 / 1024;
       if (f.data[1] == protocol::OnlineCurrent) current_[a - 1] = uint32_t(value) * 5000 / 1024;
       if (f.data[1] == protocol::Standby) {
-        if (f.data[3]) standby_ |= 1U << (a - 1); else standby_ &= uint8_t(~(1U << (a - 1)));
+        if (f.data[3]) standby_ |= 1U << (a - 1);
+        else { standby_ &= uint8_t(~(1U << (a - 1))); wakeSeen_ |= 1U << (a - 1); }
       }
       if (f.data[1] == protocol::FanMode) {
         if (f.data[3]) fanMax_ |= 1U << (a - 1); else fanMax_ &= uint8_t(~(1U << (a - 1)));

@@ -110,7 +110,8 @@ void Application::debugTick(uint32_t now) {
   }
   if (priming_ && !controller_.busy() && controller_.report().succeeded == membersMask(controller_.count())) {
     priming_ = false; can_.scenario(desiredScenario_);
-    if (desiredScenario_ == DebugScenario::Standby || desiredScenario_ == DebugScenario::StandbyReject) controller_.setAutoResume(false);
+    if (desiredScenario_ == DebugScenario::ZeroHold || desiredScenario_ == DebugScenario::ZeroReject ||
+        desiredScenario_ == DebugScenario::StopUnconfirmed) controller_.setAutoResume(false);
     // A software reconcile preserves an accepted fan mode. Model a fresh
     // controller startup here so the rejection scenario actually needs a write.
     if (desiredScenario_ == DebugScenario::FanReject) scenarioResult_ = controller_.configure(controller_.configuration(),true);

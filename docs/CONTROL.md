@@ -1,80 +1,93 @@
 # Enable control, reconciliation and fans
 
-This firmware controls one parallel DC bus. It now requests standby on every
-verified **bound** PSU at controller boot, on explicit reconciliation, and when
-that unit returns or loses readiness. Discovery itself remains read-only;
-unbound, ambiguous and wrong-deployment devices receive no setting writes.
+This firmware controls one parallel DC bus. Normal OFF means **zero-current hold
+with the PSU awake for cooling**, not hardware standby. Managed units reconcile
+this way at boot, on explicit retry and when they return or lose readiness.
+Discovery itself remains read-only; unbound, ambiguous and wrong-deployment
+devices receive no setting writes.
 
 ## Commission and start
 
 1. Follow [GETTING_STARTED.md](GETTING_STARTED.md) to discover, inspect, bind,
-   and group the actual identities. Binding makes the unit managed: background
-   reconciliation will request standby, evaluate the fan policy, set common voltage and zero
-   current. `bind` itself does not transmit.
-2. Run `diag control` and `diag group GROUP1`. Wait for `held-in-standby`,
-   `standby-confirmed=1`, fresh telemetry and broadcasts. A deliberate standby
-   can report not-ready in the raw broadcast; it is not itself a fault.
+   and group actual identities. Binding makes a unit managed: background control
+   starts zero-current reconciliation. `bind` itself does not transmit.
+2. Run `diag control` and `diag group GROUP1`. Wait for `held-at-zero-awake`,
+   `zero-confirmed=1 awake=1`, fresh telemetry and a ready broadcast.
 3. Stage `set voltage 54` and `set current GROUP1 55` (example values only).
 4. Run `autoresume on`, `preview all`, then `apply all`. With no authorized
-   profile yet, ON alone stays blocked; apply authorizes the staged profile.
+   profile yet, ON stays blocked until apply authorizes one. If an older profile
+   exists, ON can restore it immediately: inspect it first and allow that restore
+   to finish before applying new drafts. Use an unloaded output for initial tests.
 5. Wait for the complete accepted result. Check `diag control`,
    `diag group GROUP1`, and measured `telemetry GROUP1`, then `save` if this
    configuration and enable preference should survive a reboot.
 
-`autoresume off` is now a **live stop request**, even during an apply. It cancels
-unfinished operating writes and requests standby from reachable managed units.
-`autoresume on` permits the authorized profile to run after reconciliation; it
-never applies uncommitted drafts. `set` remains staging only. Online apply while
-OFF is blocked with an enable-control explanation; offline defaults remain an
-explicit, separate operation. An enable event invalidates pending UI edits and
-serial confirmations so an old Apply cannot defeat a later stop.
+`autoresume off` is a **live zero-current request**, even during an apply. It
+cancels unfinished operating writes, sends zero current to reachable managed
+units, and requires new low-current telemetry. A unit already known awake stays
+awake: a normal OFF/ON edge sends no standby command. Fan modes, acknowledged
+settings and elapsed cooldown survive the edge. Repeating OFF does not reset
+faults or restart reconciliation. Authorized charging currents remain intact.
+
+`autoresume on` permits the authorized profile after the installation-wide
+release checks; it never applies uncommitted drafts. Online apply while OFF is
+blocked; offline defaults are an explicit, separate operation. Enable events
+invalidate pending UI edits and serial confirmations.
 
 ## Startup and returning units
 
-The cooperative controller does the following, without blocking CAN reception,
-serial, input or drawing:
+The controller performs these cooperative steps without waiting loops:
 
-1. Corroborate stable identity and resolve the temporary CAN address. Recheck
-   identity immediately before every write, including standby and fan writes.
-2. Request standby (`0x0132`, flag 1), require its matching ACK, and observe a
-   **new** output-current sample within ±0.5 A. The measurement window is the
-   greater of 5 seconds and three poll periods. Cooling continues while waiting.
-   An ACK alone does not establish that output stopped.
-3. Evaluate cooling and require its requested fan mode acceptance (`0x0134`);
-   prepare the authorized
-   common voltage and temporary zero online current while held in standby.
-   Before the first authorized profile, use the compiled deployment voltage,
-   not a staged edit. Preparation does not replace saved authorized currents.
-4. Hold until effective enable is ON, all configured members have verified
-   identity/fresh telemetry/broadcasts, all required preparation succeeded,
-   and the common voltage is explicitly authorized across the installation.
-5. Release standby at zero current. Require a new ready broadcast and a new
-   low-current sample after the wake ACK from every returning recipient before
-   restoring its authorized profile. No positive-current write precedes this
-   barrier. A failed or unconfirmed wake triggers another standby attempt and
-   latches the failure.
-6. Restore authorized voltage/current through the normal ACK-checked job.
-   Existing healthy units keep their shares when another unit disappears;
-   returning units reconcile before rejoining. No load is redistributed.
+1. Corroborate the bound identity and resolve its temporary CAN address.
+   Recheck identity immediately before every write.
+2. Send **zero online current** (`0x0103`), require its matching ACK, and observe
+   a **new** output-current sample within ±0.5 A. The observation window is the
+   greater of 5 seconds and three poll periods. Zero requests take priority over
+   voltage/wake preparation. An ACK alone does not confirm zero output current.
+3. Evaluate cooling and require the requested fan mode ACK (`0x0134`). Set the
+   authorized common voltage, or the compiled deployment voltage before a
+   profile exists. A staged voltage edit is never substituted here.
+4. Clear any inherited hardware standby (`0x0132`, flag 0), only after that
+   unit has accepted zero current and voltage and met the fan policy. Require
+   a fresh ready broadcast and a fresh low-current sample after the wake ACK.
+   The unit is now held at zero and awake, even if effective enable is OFF.
+5. Restore authorized charging current only when enable is ON, the complete
+   common-voltage profile is authorized, and **all configured members** pass
+   identity, telemetry, readiness, voltage and fan checks. Every returning
+   recipient must have completed the zero/wake observations first.
 
-A missing member blocks initial release and automatic recovery. The existing
-confirmed `apply GROUP1 partial` override is only for already reconciled online
-recipients; it retains their original shares and does not bypass startup.
+A missing member does not prevent reachable units from staying awake at zero
+for cooling. It still blocks initial charging and automatic current restoration.
+Existing healthy online units keep their shares when another unit disappears;
+no load is redistributed. A confirmed `apply GROUP1 partial` remains limited to
+already reconciled online recipients and cannot bypass initial charging checks.
 
-Timeouts/transport failures receive at most two command attempts in one control
-step; rejected settings latch immediately. There is no periodic fault-clearing
-write loop. Diagnose the cause, then use **`reconcile`** to cancel an apply,
-request standby and retry from the beginning. A genuine identity/connection
-recovery also creates a new reconciliation attempt. A fresh unexpected current
-while confirmed in standby invalidates that confirmation, requests standby again,
-and latches a fault for review.
+## Failures and explicit recovery
 
-A controller cannot prevent output before it obtains a verified address and
-successfully communicates. Standby is volatile and applies while CAN-connected;
-PSU offline defaults still govern PSU startup and communication-loss fallback.
-This is not a hardware interlock, output contactor, or electrical isolation.
-Validate standby/zero/wake ordering on the actual G2 firmware without a battery
-before loaded commissioning. See [protocol evidence](PARITY.md).
+Timeouts/transport failures receive at most two attempts for a control command;
+rejections latch immediately. A phase change does not reset an in-flight fan
+command's retry budget. There is no periodic fault-clearing write loop.
+
+If zero current cannot be confirmed, wake fails, or unexpected current exceeds
+±0.5 A while held, the controller makes a **bounded hardware-standby fallback**
+(`0x0132`, flag 1). This is a fault path, not the normal OFF behavior. Its ACK
+also requires fresh low-current telemetry. Diagnostics keep the original fault
+and identify confirmed hardware fallback separately; failed/unobserved stopping
+shows `STOP UNCONFIRMED`. A fan/voltage failure while zero is already confirmed
+can remain held in a latched fault without a standby request. Cooling policy
+continues; a fan-command failure itself suppresses further fan writes until retry.
+
+Fix the cause, then use **`reconcile`** to cancel an apply and retry from zero
+current while retaining the authorized profile and fan hysteresis. ON alone
+cannot clear a latched fault or wake a unit from the emergency fallback. A genuine
+identity/connection recovery also creates a new reconciliation attempt.
+
+The output can remain electrically live while held at zero. A zero-current
+limit is not isolation, and this controller has no contactor/hardware interlock.
+Before verified CAN communication, or after communication loss, PSU offline
+defaults can govern output. Validate zero acceptance, wake retention, measured
+current and fault fallback on the actual G2 hardware without a battery before
+loaded commissioning. See [protocol evidence](PARITY.md).
 
 ## Optional ENABLE_IN switch
 
@@ -119,8 +132,8 @@ allocated authorized current, never the whole group total:
 - MAX when output temperature is **≥40°C**, requested operating current is
   **≥30 A**, or fresh measured output current is **≥30 A**.
 - Start at MAX when the physical unit is unknown. MAX when required telemetry
-  is missing, stale, nonfinite or implausible. A new high-current apply requires the MAX ACK
-  before its current increase can be sent.
+  is missing, stale, nonfinite or implausible. A new high-current apply requires
+  the MAX ACK before its current increase can be sent.
 - Return to AUTO only after temperature is **≤35°C** and both requested and
   measured current are **≤25 A**, continuously for **30 seconds**. Within the
   hysteresis band retain the previous requested mode.
@@ -143,20 +156,32 @@ A required fan failure instead produces an explicit latched fault and stop.
 
 ## Optional external PWM fan
 
-Set **`PSU_FAN_PWM_PIN=6`** to enable a fan-driver output on Mega D6; `-1`
-(default) disables the physical output. `mega2560_touch_fan` supplies an example
-touch + ENABLE_IN + external fan build. Keep the other flags when extending a
-different environment. `PSU_FAN_PWM_INVERTED=1` supports an inverting driver;
-default 0 means a higher electrical duty requests more cooling.
+Set **`PSU_FAN_PWM_PIN=6`** to enable the external fan's control output; `-1`
+(default) disables physical output. Use `mega2560_serial_fan` for serial + fan
+with no screen, wheel or switch, or `mega2560_touch_fan` for touch + ENABLE_IN +
+fan. Existing serial-only builds remain available without the external output.
 
-Use a suitable powered fan driver with a common ground. The GPIO is a logic
-signal, not a fan power supply. This adapter uses ordinary Arduino `analogWrite`
-(approximately 490 Hz on D6), not the 25 kHz control waveform expected by many
-four-wire PC fans. Check the selected driver's input requirements. The
-[Arduino AVR Mega mapping](https://github.com/arduino/ArduinoCore-avr/blob/master/variants/mega/pins_arduino.h)
-places D6 on Timer4; the adapter does not reconfigure timers or add interrupts.
-Compile-time checks reject conflicts with CAN, display, touch, ENABLE_IN, wheel
-pins, and the wheel's Timer1 PWM channels D11/D12.
+This is **25 kHz hardware PWM for a four-wire computer fan's control input**.
+Supply the fan continuously from its rated supply; connect its ground to Mega
+GND and its 5 V-compatible PWM input to D6 (or a suitable logic buffer). The
+power and PWM wires are separate: never put the fan's supply voltage on the
+PWM input. The tachometer wire is not used by this firmware.
+
+Default `PSU_FAN_PWM_INVERTED=0` makes HIGH/100% at the fan input full speed.
+Use `=1` only if an external buffer inverts that signal. Verify the selected
+fan's pinout and input specification. Noctua documents 25 kHz, an internally
+pulled-up PWM input, and CMOS/push-pull drive; it cautions that open-collector
+waveforms can be degraded by weak pull-ups. Its low-duty behavior is model
+specific: **0% duty does not guarantee that every fan stops**. The firmware
+requests zero below the curve's lower endpoint; use a fan supporting zero-RPM
+operation if a physical stop is required. [Fan interface reference](https://cdn.noctua.at/media/Noctua_PWM_specifications_white_paper.pdf).
+
+Supported pins are **D6/D7/D8 (Timer4)** and **D44/D45/D46 (Timer5)**. The chosen
+timer is dedicated to this output; backlight PWM on any channel of that timer
+is rejected at compile time. CAN/display/touch/switch pin conflicts are also
+rejected. Timer0 (`millis`/`micros`) and Timer1 (wheel) are untouched. Mode 10,
+ICR TOP=320, clock=16 MHz and prescaler=1 produce 25 kHz without an ISR; compare
+values 0/TOP produce constant LOW/HIGH at the endpoints. [ATmega2560 timer documentation](https://ww1.microchip.com/downloads/en/devicedoc/atmega640-1280-1281-2560-2561-datasheet-ds40002211a.pdf).
 
 The backend computes one demand across **all configured PSU members**:
 
@@ -182,8 +207,8 @@ The backend computes one demand across **all configured PSU members**:
 
 The implementation uses fixed-point integer smoothstep, no allocation or
 transcendental math. The output starts at full duty before display/CAN setup,
-re-evaluates at most every 100 ms, and writes GPIO only when duty changes. Enable
-events do not turn it off. `diag control` shows whether a physical pin is enabled,
+re-evaluates at most every 100 ms, and updates the timer compare only when duty
+changes. Enable events do not turn it off. `diag control` shows whether a physical pin is enabled,
 logical demand `/255`, maximum temperature and the demand reason. Demand is a
 command, not measured fan speed. Debug builds compute/display it without
 accessing the fan GPIO, even if the pin is configured. No EEPROM layout changes.
@@ -191,27 +216,28 @@ accessing the fan GPIO, even if the pin is configured. No EEPROM layout changes.
 ## Operator and UI hooks
 
 `diag control` shows effective enable, winning source, raw/debounced switch,
-thresholds, per-unit phase, standby confirmation, last control result/register,
+thresholds, per-unit phase, zero confirmation, awake state, last control result/register,
 latched failure/register, requested fan mode, ACKed mode and decision reason.
 `diag group NAME` and `diag psu N` include the per-unit fields. Serial announces
 changes in global control state without continuous telemetry spam.
 
 The group overview keeps the V/A/W header and three columns. Its spare row shows
-amber intentional standby/reconciliation messages or red faults. Labels include
-`STANDBY: SERIAL OFF` (the `autoresume` command), `STANDBY: ENABLE_IN OFF`, `STOPPING...`,
+amber intentional zero-hold/reconciliation messages or red faults. Labels include
+`ZERO A: SERIAL OFF` (the `autoresume` command), `ZERO A: ENABLE_IN OFF`, `STOPPING...`,
 `STOP UNCONFIRMED`, and `START BLOCKED` with the affected PSU. Charger/config
 screens share their title line with a compact source/status tag. Details show
 fan request/ACK and the exact failed control register. Fresh measurements keep
-updating while held. A stop request is never presented as confirmed standby.
+updating while held. A stop request is never presented as confirmed zero hold.
+Fault standby is explicit in diagnostics.
 
 Future UIs can consume `enableControl()`, `controlStatus(now)`,
 `unitControl(slot)`, and `externalFanStatus(now)` directly; policy belongs to the
 backend. External fan status includes logical duty, maximum temperature,
 telemetry completeness, and the PSU/reason causing a full-duty override.
 
-`PSU_UI_DEBUG` models standby, fan acceptance and zero-current wake, with no
-physical CAN, EEPROM or ENABLE_IN GPIO access. Additional scenarios are
-`standby`, `fan-hot`, `fan-cool`, `fan-sensor-fault`, `fan-reject`,
-`standby-reject`, and `wake-current`. Use `ui-debug enable-input on/off` to
-exercise normal debounce/latest-wins handling virtually. Scenario priming now
+`PSU_UI_DEBUG` models zero holding, inherited/fault standby, fan acceptance and
+wake observations, with no physical CAN, EEPROM, ENABLE_IN or fan GPIO access.
+Scenarios include `zero-hold`, `fan-hot`, `fan-cool`, `fan-sensor-fault`,
+`fan-reject`, `zero-reject`, `stop-unconfirmed`, and `wake-current`. Use
+`ui-debug enable-input on/off` to exercise normal debounce/latest-wins handling virtually. Scenario priming now
 includes the entire multi-unit reconciliation and may take tens of seconds.

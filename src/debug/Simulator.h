@@ -9,7 +9,7 @@ enum class DebugScenario : uint8_t {
   Healthy, Empty, Missing, Stale, Unbound, Conflict, Replacement, NotReady,
   VoltageUnsynced, Reject, Timeout, IdentityTimeout, Transport, Partial, SaveFailed, Changed,
   Extremes, WrongDeployment, Unassigned, IdentityPending, SaveChanged, BusOffline,
-  Standby, Hot, Cool, SensorFault, FanReject, StandbyReject, WakeCurrent, Count
+  ZeroHold, Hot, Cool, SensorFault, FanReject, ZeroReject, StopUnconfirmed, WakeCurrent, Count
 };
 FlashText scenarioName(DebugScenario scenario);
 Configuration debugConfiguration();
@@ -33,7 +33,7 @@ class SimulatedCan : public CanTransport {
   void service(uint32_t now) override;
   bool receive(CanFrame& frame) override;
   void reset();
-  void scenario(DebugScenario value) { scenario_ = value; }
+  void scenario(DebugScenario value) { scenario_ = value; if (value == DebugScenario::WakeCurrent) wakeSeen_ = 0; }
   DebugScenario scenario() const { return scenario_; }
  private:
   bool present(uint8_t slot) const;
@@ -46,7 +46,7 @@ class SimulatedCan : public CanTransport {
   uint32_t lastCycle_ = 0;
   uint8_t slot_ = 0, field_ = 0, budget_ = 0;
   bool pending_ = false, cycling_ = false;
-  uint8_t standby_ = 0, fanMax_ = 0;
+  uint8_t standby_ = 0, fanMax_ = 0, wakeSeen_ = 0;
   DebugScenario scenario_ = DebugScenario::Healthy;
 };
 }

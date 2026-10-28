@@ -98,7 +98,13 @@ marks `0x0114` and `0x0187` unsupported on G2; neither is used here.
 The [ESPHome component's persistence table](https://github.com/patagonaa/esphome-huawei-r4850#persistence)
 reports standby as volatile/CAN-connected and fan Auto/Max as persistent in the
 PSU, including when disconnected. This motivates transition-only fan writes and
-explicit commissioning of offline V/A defaults. The guarded standby/zero/wake
+explicit commissioning of offline V/A defaults. The guarded zero/fan/voltage/wake
 sequence is controller policy based on those operations, not a documented atomic
 G2 safe-start transaction. Verify register acceptance and retained settings on
 the actual hardware. [Implemented policy and limitations](CONTROL.md).
+
+Normal OFF now uses volatile online current `0x0103 = 0` and keeps the unit
+awake. Startup clears inherited standby (`0x0132 = OFF`) only after zero and
+voltage preparation. Hardware standby ON remains a bounded fault fallback when
+zero/wake cannot be confirmed. This changes controller policy, not register
+encoding; zero acceptance and wake retention still require real G2 testing.

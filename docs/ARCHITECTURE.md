@@ -33,7 +33,7 @@ online apply authorizes its intended values; the asynchronous result separately
 reports what was acknowledged. A partial apply authorizes only its recipients.
 Saving drafts never authorizes them. Changing membership/bindings invalidates
 affected current authorization without redistributing live peers' currents. A new
-binding also makes that unit managed and starts background standby reconciliation.
+binding also makes that unit managed and starts background zero-current reconciliation.
 There is no hidden total-current ceiling or feedback redistribution loop.
 Voltage is still one shared value; its per-slot authorization mask prevents a
 replacement or newly added slot inheriting reboot permission from an old profile.
@@ -68,7 +68,7 @@ controller.setGroup("GROUP1", 0x03);  // slots 0 and 1
 const int8_t group = controller.groupIndex("GROUP1");
 controller.setVoltage(5400);         // one global voltage
 controller.setCurrent(group, 5500);  // total 55 A, shares 27.50 A
-controller.setAutoResume(true);     // live enable; first wait for held-in-standby
+controller.setAutoResume(true);     // live enable; first wait for held-at-zero-awake
 
 const auto plan = controller.preview(psu::Operation::All, -1, now);
 // Render every plan.issues[i], its recipients, voltage and current[i].
@@ -186,7 +186,7 @@ loss/recovery transition. No offline defaults are written by recovery.
 
 `configure(config,true)` is for boot: it arms saved operating settings only if
 `autoResume` is enabled and deployment matches. Console load uses
-`configure(config,false)`, which holds the managed units through standby reconciliation
+`configure(config,false)`, which holds the managed units through zero-current reconciliation
 without replaying operating current. There is no automatic
 EEPROM write when applying or reconnecting; persistence is explicit.
 
@@ -366,7 +366,8 @@ the configuration revision, invalidating pending UI edits/confirmations.
 
 `controlStatus(now)` exposes global activity and the blocking slot/issue;
 `enableControl()` exposes effective request/source and raw/debounced input.
-`reconcile()` explicitly retries from held standby. No new persistent fields or
+`reconcile()` explicitly retries from zero current. Normal OFF preserves awake
+state; hardware standby is reserved for an unconfirmed-stop fault fallback. No new persistent fields or
 EEPROM schema are added: save snapshots the existing autoResume preference, and
 fan thresholds/pins live in `ControlConfig.h`. See [CONTROL.md](CONTROL.md) for
 ordering, exact thresholds, failure handling and hardware limits.
@@ -376,6 +377,16 @@ events; identity/connection changes invalidate them. Cooling is evaluated in
 every control phase. `externalFanStatus(now)` folds per-unit policy and the
 hottest fresh output temperature into one logical PWM demand, using the small
 fixed-point curve in `FanPolicy.h`. Missing telemetry requests full duty.
-`io/FanOutput` owns only the optional GPIO, polarity, 100 ms cadence and changed
-duty writes. Application initializes it before display/CAN setup; debug builds
+`io/FanOutput` owns the optional pin, dedicated Timer4/5 25 kHz PWM, polarity,
+100 ms policy cadence and changed-duty compare writes. It adds no ISR and leaves
+Timer0/time and Timer1/wheel untouched. Application initializes it before display/CAN setup; debug builds
 exclude physical fan access. Neither adapter nor policy modifies EEPROM.
+
+Wake-at-zero is a per-unit preparation step independent of effective enable.
+`wakeAllowed(slot,now)` requires that unit's verified route, zero observation and
+fan ACK before clearing inherited standby. `releaseAllowed(now)` separately
+requires complete installation readiness, awake/zero observations and common
+voltage before any held unit becomes Online. Every zero stop observes new
+current after its ACK; every initial wake also observes a new ready broadcast.
+`UnitControl::zeroConfirmed`, `awakeConfirmed` and `standbyConfirmed` distinguish
+normal holding, wake verification and exceptional hardware fallback.

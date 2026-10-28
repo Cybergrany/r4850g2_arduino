@@ -15,16 +15,18 @@
 #define PSU_ENABLE_IN_PULLUP 1
 #endif
 // Optional external fan driver. -1 disables physical output; policy/diagnostics
-// remain available. D6 is a free Mega PWM pin with the default wiring.
+// remain available. 25 kHz uses a dedicated Timer4 (D6/7/8) or Timer5 (D44/45/46).
 #ifndef PSU_FAN_PWM_PIN
 #define PSU_FAN_PWM_PIN -1
 #endif
 #ifndef PSU_FAN_PWM_INVERTED
+// The fan's control input is active HIGH. Set 1 only for an inverting buffer.
 #define PSU_FAN_PWM_INVERTED 0
 #endif
 namespace psu { namespace control {
 constexpr int8_t fanPwmPin = PSU_FAN_PWM_PIN;
 constexpr bool fanPwmInverted = PSU_FAN_PWM_INVERTED;
+constexpr uint16_t fanPwmHz = 25000;
 constexpr uint8_t enablePin = PSU_ENABLE_IN_PIN;
 constexpr bool enableActiveLow = PSU_ENABLE_IN_ACTIVE_LOW, enablePullup = PSU_ENABLE_IN_PULLUP;
 constexpr uint16_t enableDebounceMs = 50;
@@ -36,13 +38,13 @@ constexpr float externalFanOffTemp = 20.0f;
 constexpr uint16_t externalFanUpdateMs = 100;
 static_assert(externalFanOffTemp < fanOutputTempThreshold, "External fan curve requires a positive temperature span");
 constexpr float minimumTemperature = -40.0f, maximumTemperature = 150.0f;
-// Require a new output-current sample after a standby/wake ACK. This allows
+// Require a new output-current sample after a zero/wake/fault-standby ACK. This allows
 // sensor noise; it does not establish electrical isolation of a parallel bus.
 constexpr float stoppedCurrentAmps = 0.5f;
 constexpr uint32_t observationMs = 5000;
 constexpr uint8_t commandAttempts = 2; // Rejections latch immediately; no write loop.
-static_assert(PSU_FAN_PWM_PIN == -1 || (PSU_FAN_PWM_PIN >= 2 && PSU_FAN_PWM_PIN <= 13) ||
-    (PSU_FAN_PWM_PIN >= 44 && PSU_FAN_PWM_PIN <= 46), "External fan needs a Mega PWM pin (or -1)");
+static_assert(PSU_FAN_PWM_PIN == -1 || (PSU_FAN_PWM_PIN >= 6 && PSU_FAN_PWM_PIN <= 8) ||
+    (PSU_FAN_PWM_PIN >= 44 && PSU_FAN_PWM_PIN <= 46), "25 kHz fan requires Mega D6/7/8 or D44/45/46 (or -1)");
 #if PSU_FAN_PWM_PIN >= 0
 static_assert(fanPwmPin != board::canChipSelect && fanPwmPin != board::canInterrupt,
     "External fan conflicts with CAN");
@@ -51,6 +53,9 @@ static_assert(!PSU_ENABLE_ENCODER || (fanPwmPin != board::encoderClock && fanPwm
     "External fan conflicts with wheel pins or Timer1");
 static_assert(!PSU_ENABLE_DISPLAY || (fanPwmPin != board::displayChipSelect && fanPwmPin != board::displayDataCommand &&
     fanPwmPin != board::displayReset && fanPwmPin != board::displayBacklight), "External fan conflicts with display");
+static_assert(!PSU_ENABLE_DISPLAY || (fanPwmPin <= 8 ?
+    (board::displayBacklight < 6 || board::displayBacklight > 8) :
+    (board::displayBacklight < 44 || board::displayBacklight > 46)), "Fan timer conflicts with display backlight PWM");
 static_assert(!PSU_ENABLE_TOUCH || (fanPwmPin != touch::chipSelect && fanPwmPin != touch::interruptPin),
     "External fan conflicts with touch");
 static_assert(!PSU_ENABLE_ENABLE_IN || fanPwmPin != enablePin, "External fan conflicts with ENABLE_IN");

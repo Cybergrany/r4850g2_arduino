@@ -145,7 +145,7 @@ with its MIT notice retained in `Xpt2046Input.cpp`.
 Debug startup seeds eight bound units across four groups (3/2/2/1 members).
 It performs normal simulated identity checks and restores the fixture's
 operating settings before introducing a scenario. Reconciliation now includes
-standby, fan, voltage, zero current and wake checks; allow tens of seconds for
+zero-current, fan, voltage and wake checks; allow tens of seconds for
 this priming; `ui-debug status` reports it. No physical CAN or EEPROM is used.
 
 Select Tools > SIM scenarios, turn/use Previous/Next, then Run. The final two
@@ -181,10 +181,11 @@ starts from the same commissioned fixture. Names and expected exercises:
 | `extremes` | Large power readings, negative input temperature and an eight-character group name |
 | `wrong-deployment` | Fixture belongs to another deployment; writes blocked |
 | `identity-pending` | Identity responses cease; wait for the identity lease to expire |
-| `standby` | Intentional OFF banner; authorized profile retained |
+| `zero-hold` | OFF banner; awake at zero current; authorized profile retained |
 | `fan-hot`, `fan-cool`, `fan-sensor-fault` | MAX, cooldown to AUTO, or invalid-temperature fallback |
 | `fan-reject` | Required MAX rejected; startup blocked with per-unit fault |
-| `standby-reject` | Stop not acknowledged; red STOP UNCONFIRMED banner |
+| `zero-reject` | Zero rejected; latched fault with confirmed standby fallback |
+| `stop-unconfirmed` | Zero and fallback standby rejected; red STOP UNCONFIRMED banner |
 | `wake-current` | Nonzero current after wake at zero; standby requested and fault latched |
 
 For `identity-timeout`, submit an apply while the prior verified identity is

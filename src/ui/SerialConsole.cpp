@@ -114,7 +114,7 @@ void SerialConsole::storageReply(StorageResult r) {
 #endif
   switch (r) {
     case StorageResult::Ok: io_.println(F("EEPROM OK; saved drafts and authorized profile are separate")); break;
-    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled bindings reconcile in standby")); break;
+    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled bindings reconcile at zero current")); break;
     case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs 512 bytes")); break;
     case StorageResult::InvalidConfig: io_.println(F("ERR invalid configuration")); break;
     case StorageResult::WriteFailed: io_.println(F("ERR EEPROM verification failed")); break;
@@ -208,7 +208,7 @@ void SerialConsole::execute() {
       io_.println(F("BLOCKED different identity: verify replacement/physical wiring, then adopt <slot> <id> <rated-A>")); return;
     }
     const auto result = controller_.bind(n - 1, id, value, now_); reply(result);
-    if (result == Result::Ok) io_.println(F("Binding accepted; unit is now managed and will reconcile in standby. Check diag control before enable/apply."));
+    if (result == Result::Ok) io_.println(F("Binding accepted; unit is now managed and will reconcile at zero current. Check diag control before enable/apply."));
     else io_.println(F("Binding unchanged; diag bus must show a fresh verified unique identity. Check rating and existing bindings."));
     return;
   }
@@ -473,7 +473,8 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     else io_.println(F("unknown"));
   } else if (field == 4) {
     const auto& u = controller_.unitControl(i);
-    io_.print(F("  control=")); io_.print(phaseName(u.phase)); io_.print(F(" standby-confirmed=")); io_.println(u.standbyConfirmed);
+    io_.print(F("  control=")); io_.print(phaseName(u.phase));
+    io_.print(F(" zero-confirmed=")); io_.print(u.zeroConfirmed); io_.print(F(" awake=")); io_.println(u.awakeConfirmed);
     io_.print(F("  control-last=")); io_.print(stateName(u.last)); io_.print(F(" reg=0x")); io_.println(u.lastRegister, HEX);
     if (u.fault != CommandState::Idle) { io_.print(F("  LATCHED=")); io_.print(stateName(u.fault)); io_.print(F(" reg=0x")); io_.println(u.faultRegister, HEX); }
   } else if (field == 5) {
@@ -481,6 +482,7 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.print(F("  fan requested=")); io_.print(fanName(u.fanRequested)); io_.print(F(" acknowledged=")); io_.print(fanName(u.fanAcknowledged));
     io_.print(F(" reason=")); io_.println(fanReasonName(u.fanReason));
     io_.println(F("  Fan ACK confirms mode acceptance, not measured RPM."));
+    if (u.standbyConfirmed) io_.println(F("  FAULT fallback: hardware standby confirmed; explicit reconcile required"));
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
@@ -514,7 +516,7 @@ void SerialConsole::outputRow(uint32_t now) {
       const auto f = controller_.externalFanStatus(now);
       io_.print(F("External fan PWM pin=")); io_.print(control::fanPwmPin);
       io_.print(F(" physical=")); io_.print(control::fanPwmPin >= 0 && !PSU_UI_DEBUG);
-      io_.print(F(" inverted=")); io_.println(control::fanPwmInverted);
+      io_.print(F(" inverted=")); io_.print(control::fanPwmInverted); io_.print(F(" Hz=")); io_.println(control::fanPwmHz);
       io_.print(F("  demand=")); io_.print(f.duty); io_.print(F("/255 max-output-C="));
       if (f.telemetryComplete) io_.print(f.maximumTemperature); else io_.print(F("unknown"));
       io_.print(F(" reason=")); io_.println(fanReasonName(f.reason));
@@ -532,7 +534,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
-      case 8: io_.println(F("diag control: enable/source/switch, reconciliation, per-PSU standby and fan acceptance/failures. reconcile retries latched faults.")); break;
+      case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -552,7 +554,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 12: io_.println(F("poll <all|GROUP>; describe <CAN-address>; interval <1000..10000>; reset-ah")); break;
       case 14: io_.println(F("touch status/calibrate/debug on/off/calibration export (touch builds)")); break;
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
-      case 16: io_.println(F("autoresume on/off = LIVE enable/standby + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
+      case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
     }

@@ -24,6 +24,7 @@ then enter:
 hello
 watch off
 raw off
+autoresume off
 help diagnostics
 diag bus
 discover
@@ -31,7 +32,7 @@ discover
 
 Discovery also starts automatically at boot. `discover` restarts a bounded,
 read-only INFO sweep of addresses 1–127. It does not assign addresses or change
-PSU settings. Independently, bound units undergo [standby reconciliation](CONTROL.md),
+PSU settings. Independently, bound units undergo [awake zero-current reconciliation](CONTROL.md),
 even with autoresume OFF. Allow roughly 30 seconds for a complete idle sweep; responsive
 units are usually found sooner through their unsolicited traffic. Repeat:
 
@@ -107,9 +108,10 @@ letter; `all`, `voltage`, `current`, and `bus` are reserved. Membership accepts
 `1-2`, `1,2`, mixed selections such as `1,3-4`, or `all`. Groups cannot overlap.
 
 Check for `members=1,2 responding=1,2 ready=1,2 missing=-`. Each member must have
-fresh telemetry **and** unsolicited current/status broadcasts. Confirmed intentional
-standby is accepted while preparing release. Run `diag control` and wait for
-`held-in-standby` with `standby-confirmed=1` before the first apply.
+fresh telemetry **and** unsolicited current/status broadcasts. Run `diag control`
+and wait for `held-at-zero-awake` with
+`zero-confirmed=1 awake=1` before the first apply. Normal OFF keeps units awake
+with a zero current limit; it does not request hardware standby.
 
 ## 3. Stage and apply voltage and current
 
@@ -121,7 +123,10 @@ preview all
 ```
 
 `autoresume on` is a live enable request. Without an authorized profile, units
-remain held until the following apply. It does not commit drafts itself.
+remain held until the following apply. It does not commit drafts itself. If an
+older authorized profile exists, ON can restore it immediately; inspect it and
+let that restore finish before applying new drafts. Use an unloaded output for
+the first bench test.
 
 The preview should show the common 54 V and **27.50 A per member**. `set` and
 `preview` send no settings. Oversized shares are rejected with the limiting
@@ -137,9 +142,9 @@ Wait for `RESULT accepted slots=1,2 failed=- incomplete/skipped=-`. `OK` and
 `QUEUED` mean the job was accepted, not that a PSU accepted its settings. Every
 write first rechecks identity at the destination address. All voltage ACKs must
 succeed before the current phase begins. Initial startup also requires
-standby/fan/zero-current/wake reconciliation across all members. Configuration
+zero-current/fan/voltage/wake reconciliation across all members. Configuration
 changes and `save` are blocked while a job runs; `autoresume off` can always
-interrupt it and request standby.
+interrupt it and request zero-current holding.
 
 Then inspect:
 
@@ -232,16 +237,18 @@ if a known unit reconnects, it restores its last authorized voltage/current,
 not a later staged edit. `config` and `diag group` distinguish these values.
 
 During the same controller session, returning authorized units reconcile through
-standby, maximum fan, common voltage, zero current, and verified wake before
-restoring their shares. Missing members block release; unaffected healthy PSUs
-keep their shares. No current is increased to compensate for absence. Control
+zero current, checked fan mode, common voltage and verified wake before
+restoring their shares. Missing members block charging-current release;
+unaffected healthy PSUs keep their shares. No current is increased to compensate for absence. Control
 failures latch visibly; inspect `diag control`, fix the cause, and use `reconcile`
 to request a new attempt. Reconciliation never applies later staged drafts.
 
 Enable is OFF by default. **`autoresume on/off` now controls live operation**, as
-well as the preference saved for next boot. `autoresume off` requests standby
-immediately, even during an apply; wait for confirmed standby or inspect the
-reported failure. `save` persists the effective preference. A saved ON preference
+well as the preference saved for next boot. `autoresume off` requests zero current
+immediately, even during an apply; wait for `ZERO CURRENT HOLD / AWAKE` and
+`zero-confirmed=1 awake=1`, or inspect the reported failure. Cooling continues.
+Hardware standby is reserved for a latched fault fallback if holding fails.
+`save` persists the effective preference. A saved ON preference
 allows the authorized profile to start only after successful reconciliation.
 
 Optional `ENABLE_IN` uses a debounced latching switch with latest-event-wins
@@ -433,9 +440,9 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `interval MS` | Target telemetry request interval, 1000–10000 ms; identity refresh is independent |
 | `reset-ah` | Reset session estimates for all discovered devices |
 | `save`, `load`, `defaults`, `legacy` | Controller EEPROM/template/migration operations |
-| `autoresume on/off` | Live enable/standby request and boot preference; latest switch edge/serial wins; save explicitly |
-| `diag control` | Enable source/switch, reconciliation phases, standby/fan ACKs and faults |
-| `reconcile` | Cancel an apply, request standby and retry latched control faults |
+| `autoresume on/off` | Live enable/zero-current hold request and boot preference; latest switch edge/serial wins; save explicitly |
+| `diag control` | Enable source/switch, reconciliation phases, zero/awake/fan ACKs and faults |
+| `reconcile` | Cancel an apply, request zero current and retry latched control faults |
 
 ## Checking scheduling under load
 

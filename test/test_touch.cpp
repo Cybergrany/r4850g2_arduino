@@ -259,11 +259,11 @@ void applicationScenarios() {
     else if (DebugScenario(s)==DebugScenario::Extremes) CHECK(hasText(appFrame,"LONGGRP1"));
     CHECK(Serial.output.find("ERR console output truncated")==std::string::npos);
     switch (DebugScenario(s)) {
-      case DebugScenario::Standby:
-        CHECK(hasText(appFrame,"STANDBY: SERIAL OFF")); snapshot("touch-standby",appFrame); break;
-      case DebugScenario::StandbyReject:
+      case DebugScenario::ZeroHold:
+        CHECK(hasText(appFrame,"ZERO A: SERIAL OFF")); snapshot("touch-zero-hold",appFrame); break;
+      case DebugScenario::StopUnconfirmed:
         CHECK(hasText(appFrame,"STOP UNCONFIRMED")); snapshot("touch-stop-unconfirmed",appFrame); break;
-      case DebugScenario::FanReject: case DebugScenario::WakeCurrent:
+      case DebugScenario::FanReject: case DebugScenario::WakeCurrent: case DebugScenario::ZeroReject:
         CHECK(hasText(appFrame,"START BLOCKED")); snapshot("touch-control-fault",appFrame); break;
       case DebugScenario::Changed:
         editCurrent(); CHECK(hasText(appFrame,"CONFIG / DEVICES CHANGED")); snapshot("touch-changed",appFrame); break;
@@ -302,7 +302,7 @@ void applicationScenarios() {
   command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
   CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
   command("autoresume off"); tick(1000); command("diag control"); tick(150);
-  CHECK(Serial.output.find("enable=OFF source=autoresume/serial")!=std::string::npos && hasText(appFrame,"STANDBY: SERIAL OFF"));
+  CHECK(Serial.output.find("enable=OFF source=autoresume/serial")!=std::string::npos && hasText(appFrame,"ZERO A: SERIAL OFF"));
   command("ui-debug enable-input off"); tick(10); command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
   CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
 

@@ -166,8 +166,12 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     snprintf(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
   } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
-  else f.wrap(5, 8, control.standbyConfirmed ? UI_TEXT("Intentional standby confirmed by ACK and fresh low current. Profile retained.") :
-      UI_TEXT("Online, ready; no known command fault. Hardware alarms are not fully decoded."));
+  else if (control.zeroConfirmed) f.wrap(5, 8, control.awakeConfirmed ?
+      UI_TEXT("Awake at zero current for cooling. Zero ACK and fresh low current confirmed. Profile retained.") :
+      UI_TEXT("Zero current confirmed. Preparing fan/voltage and verifying awake state. Profile retained."));
+  else f.wrap(5, 8, control.phase == ControlPhase::Online ?
+      UI_TEXT("Online, ready; no known command fault. Hardware alarms are not fully decoded.") :
+      UI_TEXT("Reconciliation in progress. Zero current and awake state are not yet confirmed."));
   f.text(3, 0, 5, UI_TEXT("Fan:"), Muted);
   f.text(3, 5, 8, {reinterpret_cast<const char*>(fanName(control.fanRequested))}, Warning);
   f.text(3, 13, 4, UI_TEXT("ACK:"), Muted);
@@ -244,8 +248,8 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   const uint8_t color = fault ? Error : Warning;
   const bool full = m.page() == UiPage::Groups || m.page() == UiPage::Editor || m.page() == UiPage::Confirm || m.page() == UiPage::Result;
   FlashText text = UI_TEXT("RECONCILING...");
-  if (s.activity == Activity::Standby) text = e.source() == EnableSource::Switch ? UI_TEXT("STANDBY: ENABLE_IN OFF") :
-      e.source() == EnableSource::Serial ? UI_TEXT("STANDBY: SERIAL OFF") : UI_TEXT("STANDBY: BOOT OFF");
+  if (s.activity == Activity::Holding) text = e.source() == EnableSource::Switch ? UI_TEXT("ZERO A: ENABLE_IN OFF") :
+      e.source() == EnableSource::Serial ? UI_TEXT("ZERO A: SERIAL OFF") : UI_TEXT("ZERO A: BOOT OFF");
   else if (s.activity == Activity::Stopping) text = UI_TEXT("STOPPING...");
   else if (s.activity == Activity::StopUnconfirmed) text = UI_TEXT("STOP UNCONFIRMED");
   else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING AT ZERO A");

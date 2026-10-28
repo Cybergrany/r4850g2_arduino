@@ -45,8 +45,12 @@ See [serial connection behaviour](docs/SERIAL.md).
 | `mega2560_touch_local` | Touch dashboard/editor | No | No |
 | `mega2560_touch_debug_local` | SIM touch/editor; no CAN | No | No |
 
+Optional four-wire external fan: use `mega2560_serial_fan` for serial-only
+control with 25 kHz PWM on D6. Normal OFF holds zero current while keeping PSUs
+awake for cooling. See [wiring, zero-hold confirmation and fault fallback](docs/CONTROL.md).
+
 Commission identities/groups using a serial-enabled build before using
-`mega2560_local`; voltage/current editing is then available on the display. Live enable/standby and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
+`mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
 The supported target is Mega 2560, with a **512-byte EEPROM budget** even though
 Mega provides more. The original Nano was already at 99.7% flash.
@@ -108,9 +112,9 @@ outputs off when groups are deleted or members disappear.
 Controller EEPROM stores drafts **separately** from the authorized operating
 profile. `save` alone cannot activate drafts. A known returning unit can restore
 its authorized settings once the full installation is identified and ready.
-`autoresume on/off` controls live enable/standby; `save` persists the preference.
-Boot and returning units reconcile through standby, checked fan mode, common voltage,
-zero current and verified wake before restoring authorized current. Optional
+`autoresume on/off` controls live enable/zero-current hold; `save` persists the preference.
+Boot and returning units reconcile through zero current, checked fan mode, common
+voltage and verified wake before restoring authorized current. Optional
 ENABLE_IN is a latching switch with latest-event-wins semantics. See
 [control policy and wiring](docs/CONTROL.md). PSU nonvolatile defaults are a separate, explicit `offline all` operation.
 

@@ -2,7 +2,8 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended with continuous cooling and external PWM coverage on 2026-10-28. No firmware upload or physical touch/multi-PSU test was performed.
+extended with awake zero-current holding and four-wire 25 kHz fan coverage on
+2026-10-28. No firmware upload or physical fan/touch/multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
@@ -13,7 +14,7 @@ PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
   -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
-  -e mega2560_touch_enable -e mega2560_touch_fan -j 4
+  -e mega2560_touch_enable -e mega2560_touch_fan -e mega2560_serial_fan -j 4
 python3 tools/check_debug_build.py
 git diff --check
 ```
@@ -21,7 +22,7 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All thirteen profiles build successfully
+All fourteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -29,24 +30,26 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6829 | 95022 |
-| `mega2560_serial` | 5001 | 63778 |
-| `mega2560_display` | 6804 | 92264 |
-| `mega2560_local` | 5537 | 64598 |
-| `mega2560_minimal` | 3657 | 28060 |
-| `mega2560_touch` | 7139 | 104930 |
-| `mega2560_touch_wheel` | 7164 | 106398 |
-| `mega2560_ui_debug` | 6823 | 94490 |
-| `mega2560_touch_debug` | 7133 | 104872 |
-| `mega2560_touch_local` | 5821 | 72242 |
-| `mega2560_touch_debug_local` | 5783 | 72086 |
-| `mega2560_touch_enable` | 7139 | 105210 |
-| `mega2560_touch_fan` | 7144 | 106072 |
+| `mega2560` | 6849 | 96210 |
+| `mega2560_serial` | 5021 | 64884 |
+| `mega2560_display` | 6824 | 93450 |
+| `mega2560_local` | 5553 | 65420 |
+| `mega2560_minimal` | 3673 | 28640 |
+| `mega2560_touch` | 7159 | 106114 |
+| `mega2560_touch_wheel` | 7184 | 107582 |
+| `mega2560_ui_debug` | 6844 | 95958 |
+| `mega2560_touch_debug` | 7154 | 106340 |
+| `mega2560_touch_local` | 5837 | 73166 |
+| `mega2560_touch_debug_local` | 5800 | 73220 |
+| `mega2560_touch_enable` | 7159 | 106424 |
+| `mega2560_touch_fan` | 7164 | 106742 |
+| `mega2560_serial_fan` | 5026 | 65194 |
 
-The touch/serial build uses 87.1% static RAM and 41.3% flash, leaving 1053 bytes
-for stack/runtime use (1028 bytes with touch and wheel). Omitting serial leaves
-2371 bytes in the production touch profile. Enabling external PWM adds 5 bytes
-of static RAM (1048 bytes remain in the touch/enable/fan build). Static RAM excludes worst-case stack/interrupt nesting.
+The touch/serial build uses 87.4% static RAM and 41.8% flash, leaving 1033 bytes
+for stack/runtime use (1008 bytes with touch and wheel). Omitting serial leaves
+2355 bytes in the production touch profile. Enabling external PWM adds 5 bytes
+of static RAM (1028 bytes remain in the touch/enable/fan build). The serial-only
+fan build leaves 3166 bytes. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
@@ -66,7 +69,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **428723 host checks** and **952 touch/simulator checks** with
+Both suites pass: **428919 host checks** and **958 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -151,9 +154,10 @@ Meaningful scenarios include:
   Simulated save/restart/reset and disabled auto-resume retain their semantics.
 
 The [generated preview](ui-preview.html) uses frames exported from those tests
-and the pinned Adafruit GFX font. The new standby/failure pixel layouts were
-inspected with that font; captured screens exercise enlarged editor digits and
-readable text equivalents. It is not an LCD test. Touch host tests substitute
+and the pinned Adafruit GFX font. Zero-hold, pending-wake and failure layouts use
+that font; captured screens exercise enlarged editor digits and
+readable text equivalents. All 30 preview frames execute with bounded display
+cells and accessible text in a Node canvas/DOM adapter. It is not an LCD test. Touch host tests substitute
 raw coordinates and display/time/serial adapters; they do not emulate the ADC,
 electrical SPI transactions or physical display response.
 
@@ -227,37 +231,49 @@ power tests only after commissioning appropriate limits and defaults.
 ## Fan, enable and reconciliation coverage
 
 The host suite also verifies exact byte-3 standby/fan frames and complete echoed
-ACK payloads; first-boot standby even with autoresume OFF; all-unit zero/wake
-barriers before positive current; saved-profile versus draft isolation; live OFF
-preemption; boot OR and latest-wins/debounced switch handling, including millis
-wrap and a serial command during initial debounce. EEPROM interruption and
-calibration-tail coverage are retained without a schema change.
+ACK payloads; first-boot zero/fan/voltage/wake with autoresume OFF; per-unit wake
+at zero despite missing peers; and the all-unit barrier before positive current.
+It checks inherited standby, saved-profile versus draft isolation, live OFF
+preemption and rapid ON/OFF edges. Normal runtime OFF/ON sends no standby frame;
+an OFF during initial wake still completes fresh awake/zero observations. Boot
+OR and latest-wins/debounced switch coverage includes millis wrap and a serial
+command during initial debounce. EEPROM interruption and calibration-tail
+coverage are retained without a schema change.
 
 Fault injection covers missing/readdressed units and identity lease expiry;
-rejected standby/MAX; bounded missing ACKs and late ACKs; missing fresh current;
-nonzero current after zero-limit wake; unexpected output while held; explicit
+rejected zero/MAX/wake/fallback; bounded missing ACKs and late ACKs; missing fresh
+current; nonzero current after zero-limit wake; unexpected output while held,
+including during a pending wake identity check; explicit
 reconciliation recovery; fan temperature/requested/measured-current triggers;
 invalid/stale sensors; 30-second hysteresis; no repeat writes at steady demand;
-and a pending AUTO overtaken by a new hot reading. UI assertions check source
-labels, color, fault details and continued telemetry. Simulator tests run with
+and a pending AUTO overtaken by a new hot reading. A stop-to-held phase change
+cannot replenish the fan retry budget. UI assertions check source labels, color,
+fault details, pending versus confirmed wake, and continued telemetry. Simulator tests run with
 ENABLE_IN and external PWM enabled at compile time but without GPIO APIs,
 proving both debug application paths remain virtual. Fan tests cover preserved
 AUTO/MAX mode and cooldown time across serial/switch edges, maximum-temperature
 aggregation, stale/missing-member fallback, S-curve endpoints/monotonicity,
 per-unit current overrides and 30-second release. The physical adapter harness
-checks boot-full polarity, changed-only writes, 100 ms cadence and millis wrap;
-compile checks reject CAN, ENABLE_IN, non-PWM and encoder Timer1 conflicts.
+checks all six supported Mega pins, both polarities, all 256 duty commands,
+phase-correct mode/TOP/prescaler, DC endpoints, unselected timer/channel
+isolation, boot-full polarity, changed-only writes, 100 ms cadence and millis
+wrap. All six pin variants also compile against the real AVR register headers.
+Compile checks reject CAN, ENABLE_IN, unsupported PWM and encoder Timer1 conflicts.
 
-Before using the new sequence on hardware, verify `0x0132` and `0x0134` acceptance
-on the actual G2 firmware, actual standby current, zero-current retention across
-wake, readiness timing, and audible/physical Auto/Max fan response. Test live OFF
-during apply and loss of CAN during stop: no unconfirmed stop may appear as
-standby. Exercise the wired D26 switch, serial overrides and power cycling with
+Before using the new sequence on hardware, verify zero `0x0103`, `0x0132` and
+`0x0134` acceptance on the actual G2 firmware, actual zero/standby current,
+zero-current retention across wake, readiness timing, and audible/physical
+Auto/Max fan response. With `autoresume off`, wait for `held-at-zero-awake` and
+`zero-confirmed=1 awake=1`. Test live OFF during apply and loss of CAN during stop:
+no unconfirmed stop may appear as a successful zero hold. Check confirmed fault
+standby is reported separately. Exercise the wired D26 switch, serial overrides and power cycling with
 the switch held ON (boot OR deliberately permits restarting). Confirm absence
 and replacement cases with all intended PSUs, and measure stack/interrupt margin
 in the chosen Mega profile. Software simulation does not establish these results.
 
-External fan validation still requires the selected physical driver: confirm
-PWM frequency/polarity, zero-duty behavior, startup torque at low duty, full-duty
-cooling and cooling through an enable change. The host harness proves requested
-electrical values, not actual motor operation.
+External fan validation still requires the selected four-wire fan and its
+input interface: measure 25 kHz and polarity, check 0%/100% levels, startup at low
+duty, full-duty cooling and cooling through an enable change. Confirm the fan's
+actual behavior at zero duty; not all models stop. The host harness proves
+register programming and requested demand, not electrical waveforms or motor
+operation. Check CAN/display/serial activity with the external fan running.
