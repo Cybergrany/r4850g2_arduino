@@ -23,7 +23,7 @@ body = source.split("font[] PROGMEM = {", 1)[1].split("}", 1)[0]
 font = [int(n, 16) for n in re.findall(r"0x[0-9a-fA-F]+", body)]
 assert len(font) == 1280
 frames = {}
-for name in ["groups", "groups-page2", "chargers", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")):
+for name in ["groups", "groups-page2", "chargers", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")):
     lines = (args.frames / (name + ".txt")).read_bytes().decode("latin1").rstrip("\n").split("\n")
     assert len(lines) == 16 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
     frames[name] = {"rows": lines[:15], "styles": lines[15]}

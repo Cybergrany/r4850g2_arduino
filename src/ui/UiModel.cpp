@@ -1,4 +1,5 @@
 #include "UiModel.h"
+#include "UiLayout.h"
 #include "../debug/Simulator.h"
 namespace psu {
 namespace {
@@ -49,6 +50,29 @@ void UiModel::refresh(uint32_t now) {
 }
 void UiModel::tick(uint32_t now) {
   refresh(now);
+  if (page_ == UiPage::Availability && group_ >= 0 && !working()) {
+    auto action = AvailabilityAction::Accept;
+    for (uint8_t i = 0; i < c_.count(); ++i)
+      if ((c_.configuration().groups[group_].members & c_.excluded() & (1U << i)) &&
+          c_.availabilityReason(i, now) == AvailabilityReason::Ready) action = AvailabilityAction::Include;
+    if (action != availabilityAction_) { availabilityAction_ = action; selectAvailability(now); }
+  }
+  if (availabilityWorking_) {
+    const auto& r = c_.availabilityReport();
+    if (r.sequence != availabilitySequence_) { availabilityWorking_ = false; notice_ = UiNotice::Changed; availabilityResult_ = Result::Changed; return; }
+    if (r.saving) return;
+    availabilityWorking_ = false; notice_ = UiNotice::None;
+    availabilityResult_ = r.result; availabilityRemembered_ = r.remembered; storageResult_ = r.storage;
+    return;
+  }
+  if (page_ == UiPage::AvailabilityConfirm &&
+      (availabilityPlan_.configurationRevision != c_.configurationRevision() ||
+       availabilityPlan_.topologyRevision != c_.discovery().revision() ||
+       availabilityPlan_.availabilityRevision != c_.availabilityRevision() ||
+       uint32_t(now - availabilityPlan_.created) > limits::confirmationMs)) {
+    availabilityResult_ = Result::Changed; availabilityRemembered_ = false;
+    page_ = UiPage::AvailabilityResult; return;
+  }
   if (notice_ == UiNotice::Applying) {
     const auto& r = c_.report();
     if (r.sequence != operationSequence_ || c_.configurationRevision() != operationRevision_) {
@@ -68,7 +92,7 @@ void UiModel::tick(uint32_t now) {
       storageResult_ = memory_.completedResult();
       result(storageResult_ != StorageResult::Ok ? UiNotice::SaveFailed :
           c_.configurationRevision() != operationRevision_ ? UiNotice::SavedOlder :
-          plan_.missing ? UiNotice::PartialSaved : UiNotice::Saved);
+          (plan_.missing || plan_.excluded) ? UiNotice::PartialSaved : UiNotice::Saved);
     }
   }
 }
@@ -106,6 +130,15 @@ void UiModel::commit(uint32_t now) {
 }
 void UiModel::input(UiInput event, uint32_t now) {
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
+  if (availabilityPage() || page_ == UiPage::Tools) {
+    if (event.held) { action({ActionKind::Back}, now); return; }
+    UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
+    auto& selected = page_ == UiPage::Tools ? toolSelection_ : availabilitySelection_;
+    if (event.delta) selected = move(selected, event.delta, count);
+    if (selected >= count) selected = 0;
+    if (event.clicked && count) action(buttons[selected].action, now);
+    return;
+  }
   if (page_ == UiPage::Tools || page_ == UiPage::Scenarios) {
     if (event.held) { action({ActionKind::Back}, now); return; }
     if (page_ == UiPage::Scenarios) {
@@ -126,7 +159,7 @@ void UiModel::input(UiInput event, uint32_t now) {
     return;
   }
   if (event.held) {
-    if (page_==UiPage::Groups && group_<0 && (PSU_UI_DEBUG || PSU_ENABLE_TOUCH)) { page_=UiPage::Tools; return; }
+    if (page_==UiPage::Groups && group_<0) { page_=UiPage::Tools; return; }
     editing_ = false;
     if (page_ == UiPage::Groups && group_ >= 0 && !working()) { page_ = UiPage::Config; notice_ = UiNotice::None; }
     else { page_ = UiPage::Groups; }
@@ -148,7 +181,7 @@ void UiModel::input(UiInput event, uint32_t now) {
       if (editing_) {
         int32_t value = int32_t(edit_) + int32_t(event.delta) * (field_ == UiField::Voltage ? ui::voltageStep : ui::currentStep);
         edit_ = value < minimum() ? minimum() : value > maximum() ? maximum() : value;
-      } else field_ = UiField(move(uint8_t(field_), event.delta, (PSU_ENABLE_TOUCH || PSU_UI_DEBUG) ? 3 : 2));
+      } else field_ = UiField(move(uint8_t(field_), event.delta, 3));
     }
     if (event.clicked) {
       if (!editing_ && field_ == UiField::Tools) { action({ActionKind::Tools}, now); return; }
@@ -173,10 +206,69 @@ namespace psu {
 void UiModel::resetNavigation() {
   page_ = UiPage::Groups; field_ = UiField::Current; notice_ = UiNotice::None;
   group_ = -1; unit_ = toolSelection_ = 0; editing_ = confirmYes_ = false; request_ = {};
+  availabilityWorking_ = false; availabilitySelection_ = availabilitySelected_ = 0;
+}
+void UiModel::selectAvailability(uint32_t now) {
+  availabilitySelected_ = 0; availabilitySelection_ = 0; unit_ = unitAt(0);
+  if (group_ < 0) return;
+  const uint8_t members = c_.configuration().groups[group_].members;
+  for (uint8_t i = 0; i < c_.count(); ++i) if (members & (1U << i)) {
+    const auto reason = c_.availabilityReason(i, now);
+    if ((availabilityAction_ == AvailabilityAction::Accept && (reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc)) ||
+        (availabilityAction_ == AvailabilityAction::Include && (c_.excluded() & (1U << i)) && reason == AvailabilityReason::Ready) ||
+        (availabilityAction_ == AvailabilityAction::Require && (c_.acceptedAbsences() & (1U << i)))) availabilitySelected_ |= 1U << i;
+  }
+}
+void UiModel::reviewAvailability(uint8_t mask, uint32_t now) {
+  availabilityPlan_ = c_.previewAvailability(availabilityAction_, mask, false, now);
+  availabilitySelection_ = 0; page_ = UiPage::AvailabilityConfirm;
+}
+void UiModel::confirmAvailability(uint32_t now) {
+  const uint32_t previous = c_.availabilityReport().sequence;
+  availabilityResult_ = c_.confirmAvailability(availabilityPlan_, memory_, now);
+  availabilityRemembered_ = false;
+  storageResult_ = c_.availabilityReport().sequence == previous ? StorageResult::Ok : c_.availabilityReport().storage;
+  availabilitySequence_ = c_.availabilityReport().sequence;
+  availabilityWorking_ = availabilityResult_ == Result::Ok && c_.availabilitySaving();
+  if (availabilityResult_ == Result::Ok) availabilityRemembered_ = c_.availabilityReport().remembered;
+  notice_ = availabilityWorking_ ? UiNotice::Saving : UiNotice::None;
+  availabilitySelection_ = 0; page_ = UiPage::AvailabilityResult;
 }
 void UiModel::action(UiAction a, uint32_t now) {
   refresh(now);
+  if (availabilityWorking_ && a.kind != ActionKind::HardStop) return;
   switch (a.kind) {
+    case ActionKind::Startup:
+      if (working()) { page_ = UiPage::Result; return; }
+      editing_ = false; availabilityAction_ = AvailabilityAction::Accept;
+      if (group_ >= 0) for (uint8_t i = 0; i < c_.count(); ++i)
+        if ((c_.configuration().groups[group_].members & c_.excluded() & (1U << i)) && c_.availabilityReason(i, now) == AvailabilityReason::Ready)
+          availabilityAction_ = AvailabilityAction::Include;
+      selectAvailability(now); page_ = UiPage::Availability; notice_ = UiNotice::None; break;
+    case ActionKind::AvailabilityPrimary:
+      if (startupRetry()) { c_.reconcile(); break; }
+      if (startupProbe()) { availabilityAction_ = AvailabilityAction::Probe; reviewAvailability(0, now); break; }
+      if (group_ >= 0) reviewAvailability(c_.configuration().groups[group_].members, now);
+      break;
+    case ActionKind::AvailabilityIndividuals:
+      selectAvailability(now); page_ = UiPage::AvailabilityUnits; break;
+    case ActionKind::AvailabilityToggle:
+      if (a.value >= 0 && a.value < unitCount()) availabilitySelected_ ^= 1U << unitAt(a.value);
+      break;
+    case ActionKind::AvailabilityMode:
+      availabilityAction_ = AvailabilityAction((uint8_t(availabilityAction_) + 1) % 3);
+      selectAvailability(now); break;
+    case ActionKind::AvailabilityReview: reviewAvailability(availabilitySelected_, now); break;
+    case ActionKind::AvailabilityRemember:
+      if (availabilityPlan_.action == AvailabilityAction::Accept || availabilityPlan_.action == AvailabilityAction::Require)
+        availabilityPlan_.remember = !availabilityPlan_.remember;
+      break;
+    case ActionKind::AvailabilityConfirm: confirmAvailability(now); break;
+    case ActionKind::HardStop:
+      availabilityResult_ = c_.hardStop(); availabilityRemembered_ = false;
+      storageResult_ = StorageResult::Ok;
+      if (!availabilityWorking_) { notice_ = UiNotice::None; availabilitySelection_ = 0; page_ = UiPage::AvailabilityResult; }
+      break;
     case ActionKind::OpenGroup:
       if (a.value < 0 || a.value >= groupCount()) return;
       editing_ = false; group_ = groupAt(a.value); unit_ = unitAt(0); page_ = UiPage::Units; break;
@@ -185,6 +277,14 @@ void UiModel::action(UiAction a, uint32_t now) {
       unit_ = unitAt(a.value); page_ = UiPage::Detail; break;
     case ActionKind::Previous: case ActionKind::Next: {
       const int8_t direction = a.kind == ActionKind::Next ? 1 : -1;
+      if (page_ == UiPage::Availability && groupCount()) {
+        group_ = groupAt(move(groupRank(), direction, groupCount()));
+        action({ActionKind::Startup}, now); break;
+      }
+      if (page_ == UiPage::AvailabilityUnits && group_ >= 0) {
+        const uint8_t pages = (unitCount() + 1) / 2;
+        unit_ = unitAt(move(unitRank() / 2, direction, pages) * 2); break;
+      }
       if (page_ == UiPage::Groups && groupCount()) {
         const uint8_t pages = (groupCount()+ui::groupsPerPage-1)/ui::groupsPerPage;
         group_ = groupAt(move(groupRank()/ui::groupsPerPage, direction, pages)*ui::groupsPerPage);
@@ -208,6 +308,7 @@ void UiModel::action(UiAction a, uint32_t now) {
     case ActionKind::ConfirmYes: if (page_ == UiPage::Confirm) queue(now,true); break;
     case ActionKind::Back:
       editing_ = false;
+      if (availabilityPage()) { page_ = page_ == UiPage::Availability ? UiPage::Groups : UiPage::Availability; availabilitySelection_ = 0; notice_ = UiNotice::None; break; }
       page_ = page_ == UiPage::Detail ? UiPage::Units :
           (page_ == UiPage::Calibration || page_ == UiPage::TouchDebug || page_ == UiPage::Scenarios) ? UiPage::Tools : UiPage::Groups;
       break;

@@ -5,7 +5,8 @@
 #include "UiAction.h"
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
-enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios };
+enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios,
+  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult };
 enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
   None, Changed, Busy, Blocked, Applying, Saving, Saved, PartialSaved,
@@ -21,6 +22,17 @@ class UiModel {
   UiAction takeRequest() { const auto r = request_; request_ = {}; return r; }
   uint8_t toolSelection() const { return toolSelection_; }
   uint8_t scenarioSelection() const { return scenarioSelection_; }
+  uint8_t availabilitySelection() const { return availabilitySelection_; }
+  uint8_t availabilitySelected() const { return availabilitySelected_; }
+  AvailabilityAction availabilityAction() const { return availabilityAction_; }
+  const AvailabilityPlan& availabilityPlan() const { return availabilityPlan_; }
+  Result availabilityResult() const { return availabilityResult_; }
+  bool availabilityRemembered() const { return availabilityRemembered_; }
+  bool availabilityPage() const { return page_ >= UiPage::Availability; }
+  bool startupProbe() const { return c_.startupStatus().permit == PermitState::Inhibited && !c_.startupStatus().configurationReady; }
+  bool startupFault() const { return c_.startupStatus().permit == PermitState::Fault; }
+  bool startupRetry() const { return startupFault() || !c_.ready(); }
+  bool cutoffFitted() const { return c_.startupStatus().permit != PermitState::NotFitted; }
   void nextGroupPage(); // Screen-only builds cycle the overview without issuing commands.
   UiPage page() const { return page_; }
   UiField field() const { return field_; }
@@ -49,6 +61,9 @@ class UiModel {
   void commit(uint32_t now);
   void queue(uint32_t now, bool confirmed);
   void result(UiNotice notice, Issue issue = Issue::None);
+  void selectAvailability(uint32_t now);
+  void reviewAvailability(uint8_t mask, uint32_t now);
+  void confirmAvailability(uint32_t now);
   uint16_t draft() const;
   PsuController& c_;
   MemoryManager& memory_;
@@ -66,5 +81,11 @@ class UiModel {
   bool editing_ = false, confirmYes_ = false;
   uint8_t toolSelection_ = 0, scenarioSelection_ = 0;
   UiAction request_;
+  AvailabilityPlan availabilityPlan_;
+  AvailabilityAction availabilityAction_ = AvailabilityAction::Accept;
+  uint8_t availabilitySelected_ = 0, availabilitySelection_ = 0;
+  uint32_t availabilitySequence_ = 0;
+  Result availabilityResult_ = Result::Ok;
+  bool availabilityWorking_ = false, availabilityRemembered_ = false;
 };
 }

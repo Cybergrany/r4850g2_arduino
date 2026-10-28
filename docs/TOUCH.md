@@ -84,7 +84,7 @@ not an import command.
 Production calibration is independent of PSU/group/deployment configuration.
 Two 40-byte records occupy EEPROM addresses **216–255** and **472–511**, the
 unused tails of the existing slots. Version, CRC, sequence, panel profile and
-rotation validate the records. The charger record remains schema 2 and at most
+rotation validate the records. The charger record is schema 3 and at most
 216 bytes; old charger records remain readable. Compile-time bounds prevent
 future overlap. Both writers share one readiness-aware byte-write scheduler.
 This still uses only the first **512 EEPROM bytes**.
@@ -146,7 +146,9 @@ Debug startup seeds eight bound units across four groups (3/2/2/1 members).
 It performs normal simulated identity checks and restores the fixture's
 operating settings before introducing a scenario. Reconciliation now includes
 zero-current, fan, voltage and wake checks; allow tens of seconds for
-this priming; `ui-debug status` reports it. No physical CAN or EEPROM is used.
+this priming; `ui-debug status` reports it. No physical CAN, EEPROM, CHG_ALLOW or
+fan PWM adapter is used, even if those pins are configured. A simulated permit
+drives the fixture's AC/readiness state through the real startup backend.
 
 Select Tools > SIM scenarios, turn/use Previous/Next, then Run. The final two
 choices restart from a RAM save or reset fixtures. Serial equivalents:
@@ -157,6 +159,15 @@ ui-debug scenario missing
 ui-debug scenario healthy
 ui-debug restart
 ui-debug reset
+ui-debug source GROUP2 off
+ui-debug battery GROUP2 on
+diag startup
+startup accept GROUP2 remember
+confirm yes
+ui-debug source GROUP2 on
+# Wait for settled zero-hold readiness, then approve rejoin:
+startup include GROUP2
+confirm yes
 ```
 
 Scenario changes wait for an active apply/save to complete. Each scenario
@@ -184,12 +195,23 @@ starts from the same commissioned fixture. Names and expected exercises:
 | `zero-hold` | OFF banner; awake at zero current; authorized profile retained |
 | `fan-hot`, `fan-cool`, `fan-sensor-fault` | MAX, cooldown to AUTO, or invalid-temperature fallback |
 | `fan-reject` | Required MAX rejected; startup blocked with per-unit fault |
-| `zero-reject` | Zero rejected; latched fault with confirmed standby fallback |
-| `stop-unconfirmed` | Zero and fallback standby rejected; red STOP UNCONFIRMED banner |
+| `zero-reject` | Zero rejected; latched fault and simulated common AC cutoff |
+| `stop-unconfirmed` | Zero/fallback rejected; red AC CUTOFF banner |
 | `wake-current` | Nonzero current after wake at zero; standby requested and fault latched |
+| `battery-can-no-ac` | CAN stays alive on DC, AC absent; WAIT AC without readiness timeout |
+| `cold-start` | No battery, eight-second AC startup and fresh identity/readiness reconciliation |
+| `slow-startup` | Eight-second readiness delay with battery-backed CAN |
+| `source-absent` | GROUP2 AC absent, two identities still visible on DC |
+| `source-return`, `partial-return` | GROUP2 or one of its members returns after 25 s; review inclusion |
+| `source-unstable` | GROUP2 AC toggles every two seconds; settling/unstable diagnostics |
 
 For `identity-timeout`, submit an apply while the prior verified identity is
 still fresh; after its lease expires, preview correctly blocks instead.
+Refreshes can discover a simulated command rejection before the operator submits
+an apply; that correctly makes the later apply blocked. To test real boot with
+saved exceptions use `ui-debug restart`; scenario selection first primes a known
+healthy fixture before injecting its power/failure transition. `source`/`battery`
+commands accept `all` or a group and change runtime power without rebuilding.
 `changed` fires once per local edit; `save-changed` fires once per save,
 including local Apply & save. There is no automatic rollback of accepted simulated
 writes, just as with real PSUs.

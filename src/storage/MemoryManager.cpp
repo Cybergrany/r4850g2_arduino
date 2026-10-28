@@ -20,7 +20,8 @@ bool newer(uint32_t a, uint32_t b) { return int32_t(a - b) > 0; }
 bool decode(const uint8_t* b, Configuration& c) {
   c = {}; c.deploymentId = get32(b + 16); c.voltage = get16(b + 20);
   c.offlineVoltage = get16(b + 22); c.pollMs = get16(b + 24); c.count = b[26];
-  if (b[27] > 1 || b[28]) return false;
+  if (b[27] > 1 || (b[1] == 2 && b[28])) return false;
+  c.acceptedAbsent = b[1] >= 3 ? b[28] : 0;
   c.autoResume = b[27]; uint16_t at = 29;
   for (auto& g : c.groups) {
     memcpy(g.name, b + at, 8); g.name[8] = 0; g.members = b[at + 8];
@@ -37,10 +38,10 @@ bool decode(const uint8_t* b, Configuration& c) {
   return validConfig(c);
 }
 void encode(const Configuration& c, uint8_t* b, uint32_t sequence) {
-  b[0] = 0xa5; b[1] = 2; put16(b + 2, MemoryManager::recordSize); put32(b + 4, sequence);
+  b[0] = 0xa5; b[1] = 3; put16(b + 2, MemoryManager::recordSize); put32(b + 4, sequence);
   memcpy(b + 10, "R48C", 4); b[14] = c.operating.voltageAuthorized; b[15] = c.operating.voltageMask;
   put32(b + 16, c.deploymentId); put16(b + 20, c.voltage); put16(b + 22, c.offlineVoltage);
-  put16(b + 24, c.pollMs); b[26] = c.count; b[27] = c.autoResume; uint16_t at = 29;
+  put16(b + 24, c.pollMs); b[26] = c.count; b[27] = c.autoResume; b[28] = c.acceptedAbsent; uint16_t at = 29;
   for (const auto& g : c.groups) {
     memcpy(b + at, g.name, 8); b[at + 8] = g.members;
     put16(b + at + 9, g.current); put16(b + at + 11, g.offlineCurrent); at += 13;
@@ -71,11 +72,11 @@ bool MemoryManager::readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uin
   const uint16_t base = slot * slotSize;
   for (uint8_t i = 0; i < 16; ++i) bytes[i] = storage_.read(base + i);
   size = get16(bytes + 2); sequence = get32(bytes + 4);
-  if (bytes[0] != 0xa5 || (bytes[1] != 1 && bytes[1] != 2) || memcmp(bytes + 10, "R48C", 4) ||
-      size > slotSize || size < 20 || (bytes[1] == 2 && size != recordSize)) return false;
+  if (bytes[0] != 0xa5 || (bytes[1] != 1 && bytes[1] != 2 && bytes[1] != 3) || memcmp(bytes + 10, "R48C", 4) ||
+      size > slotSize || size < 20 || (bytes[1] >= 2 && size != recordSize)) return false;
   for (uint16_t i = 16; i < size; ++i) bytes[i] = storage_.read(base + i);
   if (crc(bytes, size) != get16(bytes + 8)) return false;
-  if (bytes[1] == 2) { Configuration c; return decode(bytes, c); }
+  if (bytes[1] >= 2) { Configuration c; return decode(bytes, c); }
   LegacyConfiguration old; return decodeLegacy(bytes, size, old);
 }
 StorageResult MemoryManager::load(Configuration& c) const {
@@ -85,7 +86,7 @@ StorageResult MemoryManager::load(Configuration& c) const {
   for (uint8_t i = 0; i < 2; ++i) if (readRecord(i, b, size, seq) && (slot < 0 || newer(seq, best))) { slot = i; best = seq; }
   if (slot < 0) return StorageResult::NoValidRecord;
   readRecord(slot, b, size, seq);
-  if (b[1] == 2) {
+  if (b[1] >= 2) {
     Configuration next; decode(b, next); c = next;
     return c.deploymentId == deployment::id ? StorageResult::Ok : StorageResult::WrongDeployment;
   }

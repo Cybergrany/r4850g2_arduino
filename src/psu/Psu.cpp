@@ -13,7 +13,10 @@ void Psu::receive(const CanFrame& f, uint32_t now) {
     const uint16_t raw = uint16_t(f.data[6]) << 8 | f.data[7];
     telemetry.ampHours += raw / protocol::ahCurrentDivisor * protocol::ahSampleSeconds / 3600;
   } else if (protocol::command(f.id) == protocol::dataCommand && f.data[0] == 1) {
-    if (f.data[1] == 0x83) { telemetry.alarmBits = protocol::readBigEndian(f.data + 4); telemetry.alarmSeen = true; }
+    if (f.data[1] == 0x83) {
+      telemetry.alarmBits = protocol::readBigEndian(f.data + 4);
+      telemetry.alarmSeen = true; telemetry.lastAlarm = now;
+    }
     const int8_t m = protocol::metric(f.data[1]);
     if (m < 0) return;
     const uint32_t raw = protocol::readBigEndian(f.data + 4);

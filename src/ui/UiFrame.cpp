@@ -1,3 +1,4 @@
+#include "../util/FlashString.h"
 #include "UiFrame.h"
 #include <string.h>
 #include <math.h>
@@ -58,7 +59,7 @@ void UiFrame::wrap(uint8_t row, uint8_t end, FlashText value, uint8_t style) {
 void formatValue(char* out, uint8_t size, float value, const char* unit, uint8_t decimals) {
   if (!size) return;
   out[0] = 0;
-  if (!isfinite(value)) { snprintf(out, size, "--"); return; }
+  if (!isfinite(value)) { PSU_SNPRINTF(out, size, "--"); return; }
   const bool negative = value < 0; float magnitude = fabsf(value);
   if (decimals > 2) decimals = 2;
   const char prefixes[] = {'\0', 'k', 'M'};
@@ -68,14 +69,14 @@ void formatValue(char* out, uint8_t size, float value, const char* unit, uint8_t
       if (magnitude * divisor >= 4294967040.0f) continue;
       const uint32_t rounded = uint32_t(magnitude * divisor + 0.5f);
       char number[24];
-      int n = snprintf(number, sizeof(number), "%s%lu", negative && rounded ? "-" : "", (unsigned long)(rounded / divisor));
-      if (precision) n += snprintf(number + n, sizeof(number) - n, ".%0*u", precision, unsigned(rounded % divisor));
+      int n = PSU_SNPRINTF(number, sizeof(number), "%s%lu", negative && rounded ? "-" : "", (unsigned long)(rounded / divisor));
+      if (precision) n += PSU_SNPRINTF(number + n, sizeof(number) - n, ".%0*u", precision, unsigned(rounded % divisor));
       if (scale) number[n++] = prefixes[scale];
       number[n] = 0;
       if (n + strlen(unit) < size) { strcpy(out, number); strcat(out, unit); return; }
     }
   }
-  snprintf(out, size, "OVF");
+  PSU_SNPRINTF(out, size, "OVF");
 }
 }
 

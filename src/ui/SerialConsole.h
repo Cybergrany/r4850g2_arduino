@@ -21,7 +21,7 @@ class SerialConsole {
   void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan };
   void printControl(uint32_t now);
   uint16_t controlNotice_ = 0xffff;
   void execute();
@@ -62,6 +62,10 @@ class SerialConsole {
   uint16_t saveToken_ = 0;
   bool waitingSave_ = false, traceTurn_ = false;
   ApplyPlan plan_ = {};
+  AvailabilityPlan availabilityPlan_;
+  bool availabilityConfirmation_ = false;
+  uint32_t availabilityNotice_ = 0;
+  uint8_t availabilityAttentionNotice_ = 0;
 };
 }
 #endif

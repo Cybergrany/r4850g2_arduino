@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[1]
 sources = [
+    'src/psu/PsuAvailability.cpp', 'src/io/ChargeAllowOutput.cpp',
+    'src/ui/UiAvailability.cpp',
     'src/config/ChargerConfig.cpp', 'src/protocol/HuaweiProtocol.cpp',
     'src/psu/PsuControl.cpp', 'src/psu/Psu.cpp', 'src/psu/Discovery.cpp', 'src/psu/PsuController.cpp',
     'src/psu/Presentation.cpp', 'src/storage/MemoryManager.cpp',
@@ -17,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='r4850-touch-') as folder:
     binary = str(Path(folder) / 'test')
     subprocess.run([os.environ.get('CXX', 'g++'), '-std=c++11', '-Wall', '-Wextra',
         '-Werror', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-        '-DPSU_ENABLE_TOUCH=1', '-DPSU_UI_DEBUG=1', '-DPSU_ENABLE_ENCODER=1', '-DPSU_ENABLE_ENABLE_IN=1', '-DPSU_FAN_PWM_PIN=6',
+        '-DPSU_ENABLE_TOUCH=1', '-DPSU_UI_DEBUG=1', '-DPSU_ENABLE_ENCODER=1', '-DPSU_ENABLE_ENABLE_IN=1', '-DPSU_FAN_PWM_PIN=6', '-DPSU_CHG_ALLOW_PIN=27',
         '-Itest/support', '-Isrc', *sources, '-o', binary], cwd=root, check=True)
     env = os.environ.copy()
     env['ASAN_OPTIONS'] = env.get('ASAN_OPTIONS', '') + ':detect_leaks=0'

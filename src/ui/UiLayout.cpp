@@ -1,3 +1,4 @@
+#include "../util/FlashString.h"
 #include "UiLayout.h"
 #include "../debug/Simulator.h"
 #include <stdio.h>
@@ -10,6 +11,7 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
   };
   switch (m.page()) {
     case UiPage::Groups:
+      add(1,0,26,1,ActionKind::Startup,UI_TEXT(""));
       // Group tiles are buttons too; their content is drawn by UiView.
       for (uint8_t i=0;i<3;++i) {
         const uint8_t rank=m.groupRank()/3*3+i;
@@ -40,14 +42,43 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       add(12,0,12,3,ActionKind::ConfirmNo,UI_TEXT("No / Cancel"));
       add(12,14,12,3,ActionKind::ConfirmYes,UI_TEXT("Yes, partial")); break;
     case UiPage::Tools:
+      add(2,0,26,2,ActionKind::Startup,UI_TEXT("Startup / availability"));
 #if PSU_ENABLE_TOUCH
-      add(2,0,26,3,ActionKind::Calibrate,UI_TEXT("Calibrate touch"));
-      add(6,0,26,3,ActionKind::TouchDebug,UI_TEXT("Touch diagnostics"));
+      add(4,0,26,2,ActionKind::Calibrate,UI_TEXT("Calibrate touch"));
+      add(6,0,26,2,ActionKind::TouchDebug,UI_TEXT("Touch diagnostics"));
 #endif
 #if PSU_UI_DEBUG
-      add(9,0,26,3,ActionKind::Scenarios,UI_TEXT("SIM scenarios"));
+      add(8,0,26,2,ActionKind::Scenarios,UI_TEXT("SIM scenarios"));
 #endif
+      if (m.cutoffFitted()) add(10,0,26,2,ActionKind::HardStop,UI_TEXT("Hard stop: AC cutoff"));
       add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
+    case UiPage::Availability:
+      add(6,0,26,2,ActionKind::AvailabilityPrimary,m.startupRetry() ? UI_TEXT("Retry startup") : m.startupProbe() ? UI_TEXT("Power PSUs for discovery") :
+          m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Include group") : UI_TEXT("Continue without group"));
+      add(8,0,26,2,ActionKind::Back,m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Keep excluded") : UI_TEXT("Wait for group"));
+      add(10,0,26,2,ActionKind::AvailabilityIndividuals,UI_TEXT("Choose individuals"));
+      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
+      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
+      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+    case UiPage::AvailabilityUnits:
+      for (uint8_t i = 0; i < 2 && m.unitRank()/2*2+i < m.unitCount(); ++i)
+        add(2+i*3,0,26,2,ActionKind::AvailabilityToggle,UI_TEXT(""),m.unitRank()/2*2+i);
+      add(8,0,26,2,ActionKind::AvailabilityReview,UI_TEXT("Review selected units"));
+      add(10,0,26,2,ActionKind::AvailabilityMode,m.availabilityAction() == AvailabilityAction::Accept ? UI_TEXT("Action: accept absence") :
+          m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Action: include") : UI_TEXT("Action: require again"));
+      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
+      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
+      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+    case UiPage::AvailabilityConfirm:
+      if (m.availabilityPlan().action == AvailabilityAction::Accept || m.availabilityPlan().action == AvailabilityAction::Require)
+        add(9,0,26,2,ActionKind::AvailabilityRemember,m.availabilityPlan().remember ? UI_TEXT("[x] Remember + save config") : UI_TEXT("[ ] Remember + save config"));
+      add(12,0,12,3,ActionKind::Back,UI_TEXT("Cancel"));
+      if (m.availabilityPlan().blocker == Issue::None) add(12,14,12,3,ActionKind::AvailabilityConfirm,UI_TEXT("Confirm"));
+      break;
+    case UiPage::AvailabilityResult:
+      add(12,0,26,3,ActionKind::Back,UI_TEXT("Back"));
+      if (m.cutoffFitted()) add(10,0,26,2,ActionKind::HardStop,UI_TEXT("Hard stop: AC cutoff"));
+      break;
     case UiPage::TouchDebug:
       add(8,0,10,3,ActionKind::Adjust,UI_TEXT("Test -"),-1);
       add(8,16,10,3,ActionKind::Adjust,UI_TEXT("Test +"),1);
@@ -79,6 +110,7 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
     if (!*b[i].label.data) continue;
 #endif
     const bool selected=(m.page()==UiPage::Tools && i==m.toolSelection()) ||
+        (m.availabilityPage() && i==m.availabilitySelection()) ||
         (m.page()==UiPage::Config && m.field()==UiField::Tools && b[i].action.kind==ActionKind::Tools);
     const uint8_t style=selectedStyle | (selected ? Accent : Text);
     for (uint8_t r=b[i].row;r<b[i].row+b[i].height;++r) f.text(r,b[i].col,b[i].width,UI_TEXT(""),style);
@@ -98,8 +130,11 @@ void UiLayout::extras(UiFrame& f,const UiModel& m,const PsuController& c,uint32_
     if (live.partial()) strcat(value,"*");
     f.text(9,6,12,live.valid() ? value : "--",live.partial() ? Warning : Text);
     char lo[9],hi[9],range[27]; formatValue(lo,sizeof(lo),m.minimum()/100.0f,""); formatValue(hi,sizeof(hi),m.maximum()/100.0f,"");
-    snprintf(range,sizeof(range),"Range %.7s - %.7s %c",lo,hi,volts ? 'V' : 'A'); f.text(10,0,26,range,Muted);
-  } else if (m.page()==UiPage::Tools) f.text(1,0,26,UI_TEXT("TOOLS"),Accent);
+    PSU_SNPRINTF(range,sizeof(range),"Range %.7s - %.7s %c",lo,hi,volts ? 'V' : 'A'); f.text(10,0,26,range,Muted);
+  } else if (m.page()==UiPage::Tools) {
+    f.text(1,0,26,UI_TEXT("TOOLS"),Accent);
+    if (!m.cutoffFitted()) f.text(10,0,26,UI_TEXT("AC cutoff not fitted"),Muted);
+  }
 #if PSU_UI_DEBUG
   else if (m.page()==UiPage::Scenarios) {
     f.text(2,0,26,UI_TEXT("SIMULATION SCENARIO"),Accent);

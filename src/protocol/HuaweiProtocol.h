@@ -24,6 +24,7 @@ uint8_t address(uint32_t id);
 uint8_t command(uint32_t id);
 bool isReply(const CanFrame& frame);
 bool isCurrentBroadcast(const CanFrame& frame);
+bool isNegotiation(const CanFrame& frame);
 uint32_t readBigEndian(const uint8_t* data);
 CanFrame request(uint8_t address, uint8_t command = dataCommand);
 CanFrame setting(uint8_t address, uint8_t reg, uint16_t value);

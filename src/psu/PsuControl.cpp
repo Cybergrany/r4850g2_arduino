@@ -9,6 +9,7 @@ bool after(uint32_t sample, uint32_t boundary, uint32_t now) {
 }
 }
 Issue PsuController::routingIssue(uint8_t i, uint32_t now) const {
+  if (discovery_.negotiating()) return Issue::IdentityPending;
   if (config_.deploymentId != deployment::id) return Issue::DeploymentMismatch;
   if (i >= count()) return Issue::Invalid;
   if (!identified(config_.units[i].identity)) return Issue::Unbound;
@@ -31,6 +32,11 @@ void PsuController::cancelJob() {
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::reconcile() {
+  if (!ready_) begin(); // Explicit retry also retries local CAN initialization.
+  if (startup_.permit == PermitState::Fault) {
+    startup_.permit = PermitState::Inhibited; startup_.since = now_;
+  }
+  controlRefresh_ = refreshCurrent_ = false;
   // Cooling has its own lifetime. A software stop/retry is not a new physical
   // PSU: preserve its hysteresis and the accepted persistent fan mode.
   const int8_t uncertainFan = controlActive_ && controlWaiting_ && controlRegister_ == protocol::FanMode ? controlSlot_ : -1;
@@ -70,6 +76,7 @@ void PsuController::enableChanged(bool wasEnabled) {
   }
 }
 Result PsuController::setAutoResume(bool on) {
+  if (on) startup_.commissioning = false;
   const bool was = enable_.enabled(); enable_.request(on, EnableSource::Serial);
   enableChanged(was); return Result::Ok;
 }
@@ -136,6 +143,9 @@ void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t 
   u.attempts = 0; // A fallback is a new command step, including wake-OFF -> standby-ON.
   controlPhase(slot, !u.zeroConfirmed && !u.standbyConfirmed && !fallbackFailed ?
       ControlPhase::EmergencyStandby : ControlPhase::Fault, now);
+  // A failed INFO query sent no actuation command. Let link expiry classify an
+  // absent source; it must not turn a boot-time absence into a global AC trip.
+  if (state != CommandState::IdentityTimeout && !u.zeroConfirmed && !u.standbyConfirmed && startup_.permit == PermitState::Allowed) hardStop();
 }
 void PsuController::updateFan(uint8_t i, uint32_t now) {
   auto& u = control_[i]; float temperature = 0, amps = 0;
@@ -150,7 +160,7 @@ void PsuController::updateFan(uint8_t i, uint32_t now) {
   const bool data = freshMetric(i, protocol::OutputTemperature, temperature, now) && isfinite(temperature) &&
       temperature >= control::minimumTemperature && temperature <= control::maximumTemperature &&
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && amps >= 0;
-  const uint16_t requested = !enable_.enabled() && (u.zeroConfirmed || u.standbyConfirmed) ? 0 :
+  const uint16_t requested = (excluded_ & (1U << i)) || (!enable_.enabled() && (u.zeroConfirmed || u.standbyConfirmed)) ? 0 :
       (config_.operating.currentMask & (1U << i)) ? config_.operating.current[i] : 0;
   if (!data || routingIssue(i, now) != Issue::None) u.fanReason = FanReason::InvalidTelemetry;
   else if (temperature >= control::fanOutputTempThreshold) u.fanReason = FanReason::Temperature;
@@ -192,23 +202,29 @@ ExternalFanStatus PsuController::externalFanStatus(uint32_t now) const {
 }
 bool PsuController::controlsOnline(uint8_t mask) const {
   for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i))
-    if (control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) return false;
+    if ((excluded_ & (1U << i)) || control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) return false;
   return true;
 }
 bool PsuController::wakeAllowed(uint8_t i, uint32_t now) const {
   const auto& u = control_[i]; const auto* d = deviceForSlot(i, now); float amps;
   // Wake at zero is per unit and independent of enable/group completeness.
   // The installation-wide barrier still guards every positive-current restore.
-  return routingIssue(i, now) == Issue::None && u.fault == CommandState::Idle && u.zeroConfirmed &&
+  return powerAvailable() && routingIssue(i, now) == Issue::None && d && d->acState(now, staleMs()) != AcState::Absent &&
+      u.fault == CommandState::Idle && u.zeroConfirmed &&
       (u.phase == ControlPhase::Prepared || u.phase == ControlPhase::Wake) &&
       u.fanAcknowledged == u.fanRequested && d && d->telemetry.broadcastSeen &&
       uint32_t(now - d->telemetry.lastBroadcast) <= staleMs() &&
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && fabsf(amps) <= control::stoppedCurrentAmps;
 }
 bool PsuController::releaseAllowed(uint32_t now) const {
-  if (!enable_.enabled() || !config_.operating.voltageAuthorized ||
+  if (!powerAvailable() || availabilitySaving() || !participants() || !enable_.enabled() || !config_.operating.voltageAuthorized ||
       config_.operating.voltageMask != membersMask(count())) return false;
   for (uint8_t i = 0; i < count(); ++i) {
+    if (!(requiredMembers() & (1U << i))) {
+      if (availabilityReason(i, now) == AvailabilityReason::Fault) return false;
+      continue;
+    }
+    if (excluded_ & (1U << i)) return false;
     const auto& u = control_[i];
     if (issue(i, now) != Issue::None || u.fault != CommandState::Idle || !(voltageSynced_ & (1U << i))) return false;
     if (u.phase != ControlPhase::Held && u.phase != ControlPhase::Online) return false;
@@ -221,11 +237,16 @@ bool PsuController::releaseAllowed(uint32_t now) const {
   return true;
 }
 ControlStatus PsuController::controlStatus(uint32_t now) const {
+  if (!powerAvailable()) return {Activity::StartBlocked, Issue::Cutoff, 0};
   if (!ready_) return {enable_.enabled() ? Activity::StartBlocked : Activity::StopUnconfirmed, Issue::Invalid, 0};
   ControlStatus s = {Activity::Reconciling, Issue::None, 0};
   bool stopped = true, held = true, online = true, starting = false;
   for (uint8_t i = 0; i < count(); ++i) {
+    if (!(requiredMembers() & (1U << i)) && availabilityReason(i, now) != AvailabilityReason::Fault) continue;
     const auto& u = control_[i]; const Issue route = routingIssue(i, now);
+    if ((excluded_ & (1U << i)) && s.blocker == Issue::None) { s.blocker = Issue::ApprovalRequired; s.slot = i; }
+    const auto* device = deviceForSlot(i, now);
+    if (device && device->acState(now, staleMs()) == AcState::Absent && s.blocker == Issue::None) { s.blocker = Issue::NoAc; s.slot = i; }
     float amps;
     stopped &= (u.zeroConfirmed || u.standbyConfirmed) && route == Issue::None && freshMetric(i, protocol::OutputCurrent, amps, now) &&
         isfinite(amps) && fabsf(amps) <= control::stoppedCurrentAmps;
@@ -243,6 +264,8 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
       }
     }
   }
+  if (!participants() && requiredMembers() == 0 && s.blocker == Issue::None)
+    return {Activity::Holding, Issue::NoParticipants, 0};
   if (!enable_.enabled()) {
     s.activity = s.blocker != Issue::None ? (stopped ? Activity::StartBlocked : Activity::StopUnconfirmed) :
         stopped && held ? Activity::Holding : Activity::Stopping;
@@ -257,6 +280,7 @@ void PsuController::controlCommand(uint8_t slot, uint8_t reg, uint16_t value, ui
   const auto* d = deviceForSlot(slot, now);
   if (!d || routingIssue(slot, now) != Issue::None) return;
   controlActive_ = true; controlWaiting_ = controlVerified_ = false;
+  controlRefresh_ = false;
   controlSlot_ = slot; controlRegister_ = reg; controlValue_ = value;
   controlEpoch_ = d->epoch; controlStarted_ = now;
   auto& u = control_[slot];
@@ -266,9 +290,16 @@ void PsuController::controlCommand(uint8_t slot, uint8_t reg, uint16_t value, ui
     controlComplete(CommandState::TransportError, now);
 }
 void PsuController::controlComplete(CommandState state, uint32_t now) {
+  const bool refresh = controlRefresh_; controlRefresh_ = false;
   controlActive_ = controlWaiting_ = controlVerified_ = false;
   auto& u = control_[controlSlot_]; u.last = state;
   if (state != CommandState::Success) {
+    if (refresh && state == CommandState::IdentityTimeout) {
+      // No setting was sent. A supply disappearing during a background INFO
+      // check is an availability change, not evidence that a stop failed.
+      refreshed_[controlSlot_] = now; refreshCurrent_ = false; u.attempts = 0;
+      return;
+    }
     if (state == CommandState::Rejected || state == CommandState::Changed || u.attempts >= control::commandAttempts) {
       if (controlRegister_ == protocol::FanMode) u.fanFailed = true;
       if (u.fault == CommandState::Idle) latchControlFault(controlSlot_, state, controlRegister_, now);
@@ -277,6 +308,16 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
     return;
   }
   u.attempts = 0;
+  if (refresh) {
+    if (controlRegister_ == protocol::OnlineVoltage) {
+      if (controlValue_ == protocol::encodeVoltage(reconciliationVoltage())) voltageSynced_ |= 1U << controlSlot_;
+      refreshCurrent_ = true; refreshSlot_ = controlSlot_;
+    } else {
+      refreshed_[controlSlot_] = now; refreshCurrent_ = false;
+      refreshIndex_ = (controlSlot_ + 1) % count();
+    }
+    return;
+  }
   if (controlRegister_ == protocol::Standby) {
     controlPhase(controlSlot_, controlValue_ ? ControlPhase::VerifyStandby : ControlPhase::Starting, now);
     u.zeroConfirmed = u.awakeConfirmed = u.standbyConfirmed = false;
@@ -287,7 +328,7 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
   } else if (controlRegister_ == protocol::OnlineVoltage) {
     if (config_.operating.voltageAuthorized && controlValue_ == protocol::encodeVoltage(config_.operating.voltage))
       voltageSynced_ |= 1U << controlSlot_;
-    controlPhase(controlSlot_, ControlPhase::Prepared, now);
+    controlPhase(controlSlot_, u.postReady && u.awakeConfirmed ? ControlPhase::Starting : ControlPhase::Prepared, now);
   } else if (controlRegister_ == protocol::OnlineCurrent) {
     u.zeroConfirmed = false; currentSynced_ &= uint8_t(~(1U << controlSlot_));
     controlPhase(controlSlot_, ControlPhase::Stopping, now);
@@ -305,11 +346,15 @@ void PsuController::controlReceive(const CanFrame& f, uint32_t now) {
 }
 void PsuController::controlTick(uint32_t now) {
   const uint32_t observation = uint32_t(config_.pollMs) * 3 > control::observationMs ? uint32_t(config_.pollMs) * 3 : control::observationMs;
+  const uint32_t startupObservation = uint32_t(config_.pollMs) * 3 > control::startupReadyMs ? uint32_t(config_.pollMs) * 3 : control::startupReadyMs;
   for (uint8_t i = 0; i < count(); ++i) {
     auto& u = control_[i]; const auto* d = deviceForSlot(i, now);
     const uint32_t epoch = d && routingIssue(i, now) == Issue::None ? d->epoch : 0;
     if (observedEpoch_[i] != epoch) {
+      const CommandState latched = startup_.permit == PermitState::Fault ? u.fault : CommandState::Idle;
+      const uint8_t faultReg = u.faultRegister;
       u = {}; voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
+      if (latched != CommandState::Idle) { u.fault = latched; u.faultRegister = faultReg; u.phase = ControlPhase::Fault; }
       if (running_ & (1U << i)) restorePending_ |= 1U << i;
       restoreBlocked_ &= uint8_t(~(1U << i)); observedEpoch_[i] = epoch;
       if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
@@ -336,16 +381,25 @@ void PsuController::controlTick(uint32_t now) {
       const bool observed = freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) &&
           after(d->telemetry.updated[protocol::OutputCurrent], u.since, now);
       const bool zero = observed && fabsf(amps) <= control::stoppedCurrentAmps;
-      if (zero && (u.phase != ControlPhase::Starting || (d->telemetry.ready && after(d->telemetry.lastBroadcast, u.since, now)))) {
+      if (zero && (u.phase != ControlPhase::Starting || (d->acState(now, staleMs()) != AcState::Absent &&
+          d->telemetry.ready && after(d->telemetry.lastBroadcast, u.since, now)))) {
         if (u.phase == ControlPhase::VerifyStandby) {
           u.standbyConfirmed = true;
           controlPhase(i, ControlPhase::Fault, now);
         } else {
           u.zeroConfirmed = true;
-          if (u.phase == ControlPhase::Starting) u.awakeConfirmed = true;
-          controlPhase(i, u.awakeConfirmed ? ControlPhase::Held : ControlPhase::Fan, now);
+          if (u.phase == ControlPhase::Starting) {
+            u.awakeConfirmed = true;
+            if (!u.postReady) {
+              u.postReady = true; u.zeroConfirmed = false; u.fanAcknowledged = FanMode::Unknown;
+              controlPhase(i, ControlPhase::Zero, now);
+            } else {
+              u.reconciled = true; refreshed_[i] = now; controlPhase(i, ControlPhase::Held, now);
+            }
+          } else controlPhase(i, u.awakeConfirmed && u.reconciled ? ControlPhase::Held : ControlPhase::Fan, now);
         }
-      } else if (uint32_t(now - u.since) >= observation) {
+      } else if ((d->acState(now, staleMs()) != AcState::Absent || (observed && !zero)) &&
+          uint32_t(now - u.since) >= (u.phase == ControlPhase::Starting && (!observed || zero) ? startupObservation : observation)) {
         if (u.fault != CommandState::Idle) controlPhase(i, ControlPhase::Fault, now);
         else latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now);
       }
@@ -365,6 +419,15 @@ void PsuController::controlTick(uint32_t now) {
       controlComplete(controlWaiting_ ? CommandState::Timeout : CommandState::IdentityTimeout, now); return;
     }
     if (!controlWaiting_ && controlVerified_ && !txPending_ && uint32_t(now - lastSend_) >= limits::commandGapMs) {
+      if (controlRefresh_) {
+        const uint16_t desired = controlRegister_ == protocol::OnlineVoltage ? protocol::encodeVoltage(reconciliationVoltage()) :
+            protocol::encodeCurrent(enable_.enabled() && !(excluded_ & (1U << controlSlot_)) &&
+                control_[controlSlot_].phase == ControlPhase::Online && (config_.operating.currentMask & (1U << controlSlot_)) ?
+                config_.operating.current[controlSlot_] : 0, config_.units[controlSlot_].ratedCurrent);
+        if (desired != controlValue_ || !powerAvailable() || (control_[controlSlot_].phase != ControlPhase::Online && control_[controlSlot_].phase != ControlPhase::Held)) {
+          controlActive_ = controlRefresh_ = refreshCurrent_ = false; control_[controlSlot_].attempts = 0; return;
+        }
+      }
       // A temperature/current change may have overtaken a pending AUTO request.
       // Re-evaluate before transmission; an already transmitted command is
       // followed by MAX and cannot unlock a high-current job until that ACK.
@@ -412,8 +475,31 @@ void PsuController::controlTick(uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) if (control_[i].phase == ControlPhase::Prepared && wakeAllowed(i, now)) {
     controlPhase(i, ControlPhase::Wake, now); controlCommand(i, protocol::Standby, 0, now); return;
   }
-  if (releaseAllowed(now)) for (uint8_t i = 0; i < count(); ++i) if (control_[i].phase == ControlPhase::Held) {
+  if (releaseAllowed(now)) for (uint8_t i = 0; i < count(); ++i) if ((participants() & (1U << i)) && control_[i].phase == ControlPhase::Held) {
     control_[i].zeroConfirmed = false; controlPhase(i, ControlPhase::Online, now);
+  }
+}
+void PsuController::refreshSettings(uint32_t now) {
+  if (!powerAvailable() || busy() || controlActive_ || txPending_ || sentThisTick_ || discovery_.negotiating() ||
+      uint32_t(now - lastSend_) < limits::commandGapMs) return;
+  for (uint8_t n = 0; n < count(); ++n) {
+    const uint8_t i = refreshCurrent_ ? refreshSlot_ : uint8_t((refreshIndex_ + n) % count());
+    const auto* d = deviceForSlot(i, now); const auto& u = control_[i];
+    if ((restoreBlocked_ & (1U << i)) || issue(i, now) != Issue::None ||
+        (u.phase != ControlPhase::Held && u.phase != ControlPhase::Online)) {
+      if (refreshCurrent_) { refreshCurrent_ = false; return; }
+      continue;
+    }
+    if (refreshCurrent_ && d->epoch != refreshEpoch_) { refreshCurrent_ = false; return; }
+    if (!refreshCurrent_ && uint32_t(now - refreshed_[i]) < control::volatileRefreshMs) continue;
+    const uint16_t current = enable_.enabled() && !(excluded_ & (1U << i)) && u.phase == ControlPhase::Online &&
+        (config_.operating.currentMask & (1U << i)) ? config_.operating.current[i] : 0;
+    if (refreshCurrent_ && current >= control::fanOutputCurrentThreshold && u.fanAcknowledged != FanMode::Max) return;
+    if (refreshCurrent_ && config_.operating.voltageAuthorized && !(voltageSynced_ & (1U << i))) { refreshCurrent_ = false; return; }
+    if (!refreshCurrent_) { refreshEpoch_ = d->epoch; refreshSlot_ = i; }
+    controlCommand(i, refreshCurrent_ ? protocol::OnlineCurrent : protocol::OnlineVoltage,
+        refreshCurrent_ ? protocol::encodeCurrent(current, config_.units[i].ratedCurrent) : protocol::encodeVoltage(reconciliationVoltage()), now);
+    controlRefresh_ = controlActive_; return;
   }
 }
 }

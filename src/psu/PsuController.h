@@ -1,18 +1,13 @@
 #pragma once
 #include "Discovery.h"
 #include "PsuControl.h"
+#include "Availability.h"
 namespace psu {
-enum class Result : uint8_t { Ok, Invalid, Busy, TransportError, Blocked, ConfirmRequired, Changed };
-enum class Issue : uint8_t {
-  None, Missing, Unbound, Unassigned, IdentityPending, Conflict, NoTelemetry,
-  NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity,
-  Disabled, Reconciling, ControlFault, NoProfile, FanTestRequiresHold
-};
 enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
   Operation operation;
   int8_t group;
-  uint8_t members, recipients, missing;
+  uint8_t members, recipients, missing, excluded;
   uint16_t voltage, current[PSU_MAX_UNITS];
   uint8_t addresses[PSU_MAX_UNITS];
   uint32_t epochs[PSU_MAX_UNITS];
@@ -70,6 +65,24 @@ class PsuController {
   ControlStatus controlStatus(uint32_t now) const;
   // Explicit retry after an operator has reviewed a latched control failure.
   void reconcile();
+  void configureStartup(bool installed, bool configurationReady, uint32_t now);
+  const StartupStatus& startupStatus() const { return startup_; }
+  bool chargeAllowed() const { return startup_.permit == PermitState::Allowed; }
+  bool powerAvailable() const { return startup_.permit == PermitState::NotFitted || chargeAllowed(); }
+  Result hardStop();
+  uint8_t excluded() const { return excluded_; }
+  uint8_t acceptedAbsences() const { return (config_.acceptedAbsent | sessionAccepted_) & uint8_t(~sessionRequired_); }
+  uint8_t participants() const { return membersMask(count()) & uint8_t(~excluded_); }
+  uint8_t requiredMembers() const { return membersMask(count()) & uint8_t(~(excluded_ & acceptedAbsences())); }
+  AvailabilityReason availabilityReason(uint8_t slot, uint32_t now) const;
+  bool availabilitySettled(uint8_t group, uint32_t now) const;
+  bool availabilityUnstable(uint8_t group, uint32_t now) const;
+  uint8_t availabilityAttention(uint32_t now) const;
+  uint32_t availabilityRevision() const { return availabilityRevision_; }
+  AvailabilityPlan previewAvailability(AvailabilityAction action, uint8_t mask, bool remember, uint32_t now) const;
+  Result confirmAvailability(const AvailabilityPlan& plan, MemoryManager& memory, uint32_t now);
+  const AvailabilityReport& availabilityReport() const { return availabilityReport_; }
+  bool availabilitySaving() const { return availabilityReport_.saving; }
   Result setPollInterval(uint16_t ms);
   int8_t groupIndex(const char* name) const;
   const Psu* deviceForSlot(uint8_t slot, uint32_t now) const;
@@ -122,6 +135,11 @@ class PsuController {
   void beginReport(Operation operation, uint8_t requested, uint8_t recipients, uint8_t skipped = 0);
   void runJob(uint32_t now);
   void restore(uint32_t now);
+  void refreshSettings(uint32_t now);
+  void availabilityTick(uint32_t now);
+  void startupTick(uint32_t now);
+  void finishAvailability(uint32_t now);
+  void applyAvailability(const AvailabilityPlan& plan);
   Issue routingIssue(uint8_t slot, uint32_t now) const;
   void enableChanged(bool wasEnabled);
   void cancelJob();
@@ -144,6 +162,22 @@ class PsuController {
   uint16_t controlValue_ = 0;
   uint8_t controlSlot_ = 0, controlRegister_ = 0;
   bool controlActive_ = false, controlWaiting_ = false, controlVerified_ = false;
+  bool controlRefresh_ = false, refreshCurrent_ = false;
+  uint8_t refreshSlot_ = 0;
+  uint32_t refreshEpoch_ = 0;
+  StartupStatus startup_;
+  uint32_t now_ = 0, acReleased_ = 0;
+  bool startupConfigured_ = false;
+  uint8_t excluded_ = 0, sessionAccepted_ = 0, sessionRequired_ = 0;
+  uint32_t availabilityRevision_ = 1;
+  AvailabilityReason availabilityReasons_[PSU_MAX_UNITS] = {};
+  uint32_t groupChanged_[limits::maxGroups] = {}, groupEpisode_[limits::maxGroups] = {};
+  uint32_t refreshed_[PSU_MAX_UNITS] = {};
+  uint8_t refreshIndex_ = 0;
+  AvailabilityPlan savedAvailability_;
+  AvailabilityReport availabilityReport_;
+  MemoryManager* availabilityMemory_ = nullptr;
+  uint16_t availabilitySaveToken_ = 0;
   Configuration config_;
   Discovery discovery_;
   uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;

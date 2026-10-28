@@ -35,7 +35,8 @@ circuit. This firmware uses SPI; an 8/16-bit-only parallel shield is not support
 
 SPI is also available on the Mega ICSP header. Deselect any unused SD-card or
 touch controller sharing the bus, using that module's documented CS pin/pullup.
-No touch or SD-card functionality is used. A bare backlight LED needs a suitable
+Touch is used only in touch-enabled builds; SD-card functionality is not used.
+A bare backlight LED needs a suitable
 driver; do not connect its load directly to a Mega GPIO. Many shields hardwire
 TFT CS to pin 10, which conflicts with the existing CAN wiring.
 
@@ -62,7 +63,8 @@ The UI deliberately does not adopt replacement identities or edit membership.
 An empty installation shows `No groups configured` with a serial setup prompt.
 
 For initial local operation, enter a group's configuration and apply **bus
-voltage first**, with every configured PSU ready. Then apply that group's total
+voltage first**, with every required participant ready. Review unavailable
+members through the startup workflow below. Then apply that group's total
 current. Alternatively, complete the initial `apply all` using serial. Applying
 bus voltage alone never activates staged currents from other groups.
 
@@ -73,7 +75,8 @@ bus voltage alone never activates staged currents from other groups.
 | Groups | Select group, paging after three | Open its chargers | Group configuration |
 | Chargers | Select PSU, paging after two | Details / error explanation | Return to groups |
 | Details | No action | Return to charger list | Return to groups |
-| Configuration | Select bus voltage or group total current | Begin editing | Return to groups |
+| Configuration | Select voltage, current or Tools | Begin editing / open Tools | Return to groups |
+| Tools / startup | Select an action | Open / review / confirm | Back |
 | Editing | Adjust the flashing value | Apply and save | Discard uncommitted edit; return to groups |
 | Missing-member warning | Select No / Yes | Confirm choice | Cancel and return to groups |
 | Operation/result | No action | Return to configuration when finished | Return to groups; submitted work continues |
@@ -82,6 +85,8 @@ The original group selection is retained when returning. Holding does not also
 emit a short-click action. Edit steps default to 0.1 V and 0.5 A; wheel adjustment
 stops at backend limits, including the exact group capacity for its commissioned
 member ratings and equal-share rounding. Values are revalidated before applying.
+When no groups exist yet, holding on the group screen opens Tools for startup
+diagnostics and commissioning power.
 
 Serial remains available throughout navigation. A configuration change during
 an edit invalidates it, rather than applying an obsolete value. A confirmation
@@ -128,7 +133,8 @@ No Ah history is written to EEPROM. The approximation is not a battery fuel gaug
 ## Apply, failure and persistence
 
 The editor explicitly labels **BUS VOLTAGE - ALL GROUPS**. A voltage commit sends
-the shared voltage to every configured PSU; it has no missing-member override.
+the shared voltage to participating PSUs and authorizes it for excluded members'
+approved return; it has no one-operation partial-voltage override.
 A current commit stages the group's total and applies its original equal shares.
 
 The UI shows `APPLYING` while the backend verifies identities and waits for ACKs.
@@ -193,6 +199,18 @@ checks. Host tests and builds do not establish the chosen module's electrical
 compatibility, worst-case interrupt timing, or PSU behavior on a loaded CAN bus.
 
 ## Enable and control status
+
+**Tools → Startup / availability** provides group-first accept/wait/individual
+choices for absent sources, and include/keep-excluded/individual choices for
+returning sources. Touch can also open it from the status row. Review the
+selected slots/allocation before confirming; **Remember + save config** explicitly
+saves the current full configuration too. Wheel navigation uses the same actions.
+See [STARTUP.md](STARTUP.md) for settling, stale decisions, faults and persistence.
+
+Groups with accepted exclusions show `ACT n/m` in amber, while genuine faults
+keep red error precedence. The running banner reports participant counts.
+Cutoff/inhibit and no-active-unit states have explicit labels. Returning excluded
+units remain at zero and show an approval-needed message.
 
 The spare row below the V/A/W header shows intentional zero-current hold and its winning
 control source in amber. Reconciliation and zero-current startup are also

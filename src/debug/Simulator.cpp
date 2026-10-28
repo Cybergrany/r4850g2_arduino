@@ -1,3 +1,4 @@
+#include "../util/FlashString.h"
 #include "Simulator.h"
 #if PSU_UI_DEBUG
 #include <string.h>
@@ -39,6 +40,13 @@ FlashText scenarioName(DebugScenario s) {
     case DebugScenario::ZeroReject: return UI_TEXT("zero-reject");
     case DebugScenario::StopUnconfirmed: return UI_TEXT("stop-unconfirmed");
     case DebugScenario::WakeCurrent: return UI_TEXT("wake-current");
+    case DebugScenario::BatteryCan: return UI_TEXT("battery-can-no-ac");
+    case DebugScenario::ColdStart: return UI_TEXT("cold-start");
+    case DebugScenario::SlowStartup: return UI_TEXT("slow-startup");
+    case DebugScenario::SourceAbsent: return UI_TEXT("source-absent");
+    case DebugScenario::SourceReturn: return UI_TEXT("source-return");
+    case DebugScenario::PartialReturn: return UI_TEXT("partial-return");
+    case DebugScenario::UnstableSource: return UI_TEXT("source-unstable");
     default: return UI_TEXT("unknown");
   }
 }
@@ -47,7 +55,7 @@ Configuration debugConfiguration() {
   memset(c.groups, 0, sizeof(c.groups));
   for (uint8_t i = 0; i < c.count; ++i) {
     const uint8_t g = i < 3 ? 0 : i < 5 ? 1 : i < 7 ? 2 : 3;
-    snprintf(c.groups[g].name, sizeof(c.groups[g].name), "GROUP%u", unsigned(g + 1));
+    PSU_SNPRINTF(c.groups[g].name, sizeof(c.groups[g].name), "GROUP%u", unsigned(g + 1));
     c.groups[g].members |= 1U << i; c.groups[g].current += 1000;
     c.units[i].identity = simIdentity(i); c.units[i].ratedCurrent = 5000;
     c.operating.current[i] = 1000;
@@ -62,10 +70,45 @@ void SimulatedCan::reset() {
   pending_ = cycling_ = false; slot_ = field_ = budget_ = 0; lastCycle_ = 0;
   standby_ = fanMax_ = wakeSeen_ = 0;
   scenario_ = DebugScenario::Healthy;
+  sources_ = batteries_ = 0xff; permit_ = true; now_ = scenarioSince_ = changedSource_ = 0;
+  memset(readyAt_, 0, sizeof(readyAt_));
 }
-bool SimulatedCan::present(uint8_t i) const { return !(scenario_ == DebugScenario::Missing && i == 1); }
+void SimulatedCan::sourcePower(uint8_t mask, bool on) {
+  const uint8_t changed = on ? mask & uint8_t(~sources_) : mask & sources_;
+  if (on) sources_ |= mask; else sources_ &= uint8_t(~mask);
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (changed & (1U << i)) {
+    current_[i] = 0; voltage_[i] = 5400; // Commissioned offline baseline; live settings reset on AC loss.
+    readyAt_[i] = now_ + 8000;
+  }
+}
+void SimulatedCan::batteryPower(uint8_t mask, bool on) {
+  if (on) batteries_ |= mask; else batteries_ &= uint8_t(~mask);
+}
+void SimulatedCan::permit(bool allowed) {
+  if (permit_ == allowed) return;
+  permit_ = allowed;
+  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
+    current_[i] = 0; voltage_[i] = 5400;
+    readyAt_[i] = now_ + (scenario_ == DebugScenario::SlowStartup || scenario_ == DebugScenario::ColdStart ? 8000 : 1000);
+  }
+}
+void SimulatedCan::scenario(DebugScenario value) {
+  scenario_ = value; scenarioSince_ = changedSource_ = now_;
+  if (value == DebugScenario::WakeCurrent) wakeSeen_ = 0;
+  if (value == DebugScenario::BatteryCan) sourcePower(0xff, false);
+  if (value == DebugScenario::ColdStart || value == DebugScenario::SlowStartup) {
+    if (value == DebugScenario::ColdStart) batteryPower(0xff, false);
+    sourcePower(0xff, false); sourcePower(0xff, true);
+  }
+  if (value == DebugScenario::SourceAbsent || value == DebugScenario::SourceReturn ||
+      value == DebugScenario::PartialReturn || value == DebugScenario::UnstableSource) sourcePower(0x18, false);
+}
+bool SimulatedCan::present(uint8_t i) const { return (ac(i) || (batteries_ & (1U << i))) && !(scenario_ == DebugScenario::Missing && i == 1); }
+bool SimulatedCan::outputReady(uint8_t i) const {
+  return ac(i) && int32_t(now_ - readyAt_[i]) >= 0 && !(standby_ & (1U << i)) && !(scenario_ == DebugScenario::NotReady && i == 1);
+}
 uint16_t SimulatedCan::measuredCurrent(uint8_t i) const {
-  if (standby_ & (1U << i)) return 0;
+  if (!outputReady(i)) return 0;
   if (scenario_ == DebugScenario::WakeCurrent && !current_[i] && (wakeSeen_ & (1U << i))) return 200;
   return scenario_==DebugScenario::Extremes && current_[i] ? 6000 : current_[i]*9UL/10;
 }
@@ -89,7 +132,7 @@ CanFrame SimulatedCan::metricFrame(uint8_t i, uint8_t m) const {
     case protocol::Efficiency: raw = 930; break;
     case protocol::OutputVoltage: raw = uint32_t(voltage_[i]) * 1024 / 100; break;
     case protocol::CurrentCapacity: raw = 60UL * 1024; break;
-    case protocol::InputVoltage: raw = 227UL * 1024; break;
+    case protocol::InputVoltage: raw = ac(i) ? 227UL * 1024 : 0; break;
     case protocol::OutputTemperature: raw = (scenario_ == DebugScenario::SensorFault ? 1000UL :
         scenario_ == DebugScenario::Hot ? 60UL : scenario_ == DebugScenario::Cool ? 25UL : 40UL + i * 3) * 1024; break;
     case protocol::InputTemperature: raw = scenario_ == DebugScenario::Extremes ? uint32_t(-12L * 1024) : 30UL * 1024; break;
@@ -100,7 +143,7 @@ CanFrame SimulatedCan::metricFrame(uint8_t i, uint8_t m) const {
 CanFrame SimulatedCan::broadcastFrame(uint8_t i) const {
   CanFrame f = {}; f.extended = true; f.length = 8;
   f.id = 0x1000117eUL | uint32_t(i + 1) << 16; f.data[1] = 1;
-  f.data[3] = (standby_ & (1U << i)) || (scenario_ == DebugScenario::NotReady && i == 1) ? 1 : 0;
+  f.data[3] = outputReady(i) ? 0 : 1;
   const uint16_t raw = measuredCurrent(i) / 5; f.data[6] = raw >> 8; f.data[7] = raw; return f;
 }
 bool SimulatedCan::send(const CanFrame& f) {
@@ -137,6 +180,12 @@ bool SimulatedCan::send(const CanFrame& f) {
   pending_ = true; return true;
 }
 void SimulatedCan::service(uint32_t now) {
+  now_ = now;
+  if ((scenario_ == DebugScenario::SourceReturn || scenario_ == DebugScenario::PartialReturn) && uint32_t(now - scenarioSince_) >= 25000)
+    sourcePower(scenario_ == DebugScenario::SourceReturn ? 0x18 : 0x08, true);
+  if (scenario_ == DebugScenario::UnstableSource && uint32_t(now - changedSource_) >= 2000) {
+    changedSource_ = now; sourcePower(0x18, !(sources_ & 0x18));
+  }
   budget_ = 4;
   if (!cycling_ && uint32_t(now - lastCycle_) >= 377) { cycling_ = true; slot_ = field_ = 0; lastCycle_ = now; }
 }
@@ -150,8 +199,11 @@ bool SimulatedCan::receive(CanFrame& f) {
   if (field_==0 && slot_==1 && (scenario_==DebugScenario::IdentityTimeout || scenario_==DebugScenario::IdentityPending)) ++field_;
   if (field_ == 0) f = identityFrame(slot_);
   else if (field_ == 1) f = broadcastFrame(slot_);
-  else f = metricFrame(slot_, field_ - 2);
-  if (++field_ == protocol::MetricCount + 2 || (scenario_ == DebugScenario::Stale && slot_ == 1 && field_ == 2)) {
+  else if (field_ == protocol::MetricCount + 2) {
+    f = protocol::request(slot_ + 1); f.id &= ~0x80UL; f.data[0] = 1; f.data[1] = 0x83;
+    bigEndian(f.data + 4, ac(slot_) ? 0 : (uint32_t(1) << 29));
+  } else f = metricFrame(slot_, field_ - 2);
+  if (++field_ == protocol::MetricCount + 3 || (scenario_ == DebugScenario::Stale && slot_ == 1 && field_ == 2)) {
     field_ = 0; ++slot_;
   }
   return true;

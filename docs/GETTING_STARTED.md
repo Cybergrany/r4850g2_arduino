@@ -11,6 +11,11 @@ it is not an AC input-current setting or a guarantee of measured output current.
 
 ## 1. Establish communication without a battery
 
+With the AC-cutoff build, empty/untrusted EEPROM leaves CHG_ALLOW LOW. Start
+with `diag startup`, then `startup probe` and review/`confirm yes` on the unloaded
+bench. This enables discovery with charging enable OFF. See
+[startup commissioning and unavailable sources](STARTUP.md).
+
 Use a powered PSU, the correct enable/slot-detect wiring for it, and the MCP2515
 CAN interface. A battery or load is unnecessary for discovery and telemetry.
 Check CAN termination at both physical bus ends, H/L wiring, common reference,
@@ -169,7 +174,7 @@ Wait for `RESULT accepted slots=1,2 failed=- incomplete/skipped=-`. `OK` and
 `QUEUED` mean the job was accepted, not that a PSU accepted its settings. Every
 write first rechecks identity at the destination address. All voltage ACKs must
 succeed before the current phase begins. Initial startup also requires
-zero-current/fan/voltage/wake reconciliation across all members. Configuration
+zero-current/fan/voltage/wake reconciliation across required participants. Configuration
 changes and `save` are blocked while a job runs; `autoresume off` can always
 interrupt it and request zero-current holding.
 
@@ -232,8 +237,10 @@ preview voltage
 apply voltage
 ```
 
-This requires **all configured slots** to be identified and ready; no partial
-voltage override exists. It preserves authorized current limits. If the voltage
+This requires **all participating slots** to be identified and ready; there is
+no one-operation partial voltage override. Explicitly accepted absences are
+excluded from transmission but retain the new common-voltage intent for approved
+return. It preserves authorized current limits. If the voltage
 operation fails partway, inspect the per-unit result and complete a successful
 `apply voltage`/`apply all` before issuing another group current apply. There
 is no atomic CAN transaction and no pretend rollback of already accepted writes.
@@ -265,10 +272,16 @@ not a later staged edit. `config` and `diag group` distinguish these values.
 
 During the same controller session, returning authorized units reconcile through
 zero current, checked fan mode, common voltage and verified wake before
-restoring their shares. Missing members block charging-current release;
+restoring their shares. New/unaccepted missing members block charging-current release;
 unaffected healthy PSUs keep their shares. No current is increased to compensate for absence. Control
 failures latch visibly; inspect `diag control`, fix the cause, and use `reconcile`
 to request a new attempt. Reconciliation never applies later staged drafts.
+
+For an intentionally unavailable source, use `startup accept GROUP2 remember`,
+review the identities/allocation and `confirm yes`. Wait for verified save
+completion. Returning excluded members require `startup include GROUP2` and
+confirmation. Use slot selections for partial groups. See [STARTUP.md](STARTUP.md)
+for session-only choices, removing exceptions, settling and the UI equivalent.
 
 Enable is OFF by default. **`autoresume on/off` now controls live operation**, as
 well as the preference saved for next boot. `autoresume off` requests zero current
@@ -312,8 +325,9 @@ Wait for the final result and verify the chosen fallback on hardware, then
 
 Commission a new unit's defaults before attaching it to a live parallel pack.
 An unbound/replacement PSU can already energize its output using its own saved
-settings. This firmware has no contactor or hardware output-disable interlock;
-zero current, missing CAN, or removal from a group is not electrical isolation.
+settings. The optional CHG_ALLOW pin commands a common AC cutoff without contactor
+feedback or DC isolation. Zero current, missing CAN, or removal from a group is
+not electrical isolation. See [STARTUP.md](STARTUP.md).
 
 ## Missing members and replacements
 
@@ -391,7 +405,7 @@ until recommissioned. Unbinding does not switch the old unit's output off.
 | `missing; output state unknown` | No fresh matching device; inspect hardware or explicitly choose partial current apply |
 | `waiting for fresh telemetry AND current broadcast` | A response alone is insufficient; `poll`, inspect raw traffic and PSU state |
 | `PSU reports not ready` | Check input power/protection and raw alarm/status; no speculative automatic fault reset |
-| `common voltage not synchronized` | Complete `apply voltage` or `apply all` with all configured units ready |
+| `common voltage not synchronized` | Complete `apply voltage` or `apply all` with required participants ready; review accepted absences with `diag startup` |
 | `identity query timeout; setting not sent` | Fresh pre-write identity check failed; inspect INFO response traffic |
 | `ACK timeout` | Setting delivery/outcome uncertain; inspect PSU and retry explicitly |
 | `PSU rejected` | PSU rejected the value; inspect model, rating, range, decoded ACK |
@@ -417,9 +431,14 @@ explicit online/offline operations. After serial commissioning, the
 current through the same backend. A successful local apply also saves controller
 EEPROM; serial `apply` and `save` remain separate operations.
 
-EEPROM schema 2 uses two 256-byte journal slots, with a 216-byte record at eight
+EEPROM schema 3 uses two 256-byte journal slots, with a 216-byte record at eight
 PSUs. The remainder of Mega EEPROM is untouched. A save commits last with CRC
 verification; interrupted saves preserve the previous complete record.
+
+Schema 2 loads with no accepted-absence exceptions. Schema 3 uses reserved byte
+28 for remembered identity-bound exceptions; touch calibration retains its two
+40-byte journal tails. Older firmware does not understand schema 3 and may load
+an older record or none, so export and recommission before downgrading.
 
 Schema 1 records are never rewritten just by boot/load:
 

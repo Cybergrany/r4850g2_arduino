@@ -10,6 +10,7 @@
 #endif
 #include "../psu/PsuController.h"
 #include "../io/FanOutput.h"
+#include "../io/ChargeAllowOutput.h"
 #include "../ui/LocalUi.h"
 #include "../ui/Ili9341Display.h"
 #include "../ui/SerialConsole.h"
@@ -36,6 +37,9 @@ class Application {
   ArduinoEeprom eeprom_;
 #endif
   PsuController controller_;
+#if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
+  ChargeAllowOutput chargeAllow_;
+#endif
 #if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
   FanOutput fanOutput_;
 #endif

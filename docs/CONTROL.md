@@ -36,6 +36,9 @@ invalidate pending UI edits and serial confirmations.
 
 ## Startup and returning units
 
+The optional common AC permit, readiness timing, source-group settling and
+remembered absence policy are described in [STARTUP.md](STARTUP.md).
+
 The controller performs these cooperative steps without waiting loops:
 
 1. Corroborate the bound identity and resolve its temporary CAN address.
@@ -50,14 +53,19 @@ The controller performs these cooperative steps without waiting loops:
 4. Clear any inherited hardware standby (`0x0132`, flag 0), only after that
    unit has accepted zero current and voltage and met the fan policy. Require
    a fresh ready broadcast and a fresh low-current sample after the wake ACK.
-   The unit is now held at zero and awake, even if effective enable is OFF.
+   Readiness allows max(15 seconds, three poll periods); a fresh AC-absent flag
+   waits without a readiness fault. Reassert zero/fan/voltage after readiness,
+   then require fresh ready/low-current observations again. The unit is now
+   held at zero and awake, even if effective enable is OFF.
 5. Restore authorized charging current only when enable is ON, the complete
-   common-voltage profile is authorized, and **all configured members** pass
+   common-voltage profile is authorized, and **all required participants** pass
    identity, telemetry, readiness, voltage and fan checks. Every returning
    recipient must have completed the zero/wake observations first.
 
 A missing member does not prevent reachable units from staying awake at zero
-for cooling. It still blocks initial charging and automatic current restoration.
+for cooling. Without an explicit absence acceptance, it still blocks initial
+charging and automatic current restoration. Accepted identities stay excluded,
+including on return, until separately included after reconciliation.
 Existing healthy online units keep their shares when another unit disappears;
 no load is redistributed. A confirmed `apply GROUP1 partial` remains limited to
 already reconciled online recipients and cannot bypass initial charging checks.
@@ -83,7 +91,8 @@ cannot clear a latched fault or wake a unit from the emergency fallback. A genui
 identity/connection recovery also creates a new reconciliation attempt.
 
 The output can remain electrically live while held at zero. A zero-current
-limit is not isolation, and this controller has no contactor/hardware interlock.
+limit is not isolation. The optional CHG_ALLOW output operates the installation's
+common AC cutoff; it has no contactor feedback and does not isolate the DC bus.
 Before verified CAN communication, or after communication loss, PSU offline
 defaults can govern output. Validate zero acceptance, wake retention, measured
 current and fault fallback on the actual G2 hardware without a battery before

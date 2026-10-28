@@ -12,9 +12,13 @@ class Discovery {
   uint32_t revision() const { return revision_; }
   uint16_t overflow() const { return overflow_; }
   uint32_t ignored() const { return ignored_; }
+  bool negotiating() const { return negotiating_; }
+  void invalidate();
  private:
   Psu devices_[capacity] = {};
   uint32_t revision_ = 1, ignored_ = 0;
   uint16_t overflow_ = 0;
+  uint32_t lastNegotiation_ = 0;
+  bool negotiating_ = false;
 };
 }

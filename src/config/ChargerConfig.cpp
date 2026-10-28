@@ -50,11 +50,11 @@ Configuration defaultConfiguration() {
   c.deploymentId = deployment::id; c.voltage = deployment::voltage;
   c.offlineVoltage = deployment::offlineVoltage; c.pollMs = deployment::pollMs;
   c.count = deployment::initialSlots;
+  PSU_COPY_CONSTANT(c.units, deployment::units, sizeof(c.units));
+  PSU_COPY_CONSTANT(c.groups, deployment::groups, sizeof(c.groups));
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    c.units[i] = deployment::units[i];
     if (!c.units[i].ratedCurrent) c.units[i].ratedCurrent = limits::defaultRatedCurrent;
   }
-  for (uint8_t i = 0; i < limits::maxGroups; ++i) c.groups[i] = deployment::groups[i];
   return c;
 }
 bool validConfig(const Configuration& c) {
@@ -63,6 +63,7 @@ bool validConfig(const Configuration& c) {
       c.voltage < limits::minVoltage || c.voltage > limits::maxVoltage ||
       c.offlineVoltage < limits::minOfflineVoltage || c.offlineVoltage > limits::maxVoltage ||
       (c.operating.currentMask & ~membersMask(c.count)) ||
+      (c.acceptedAbsent & ~membersMask(c.count)) ||
       (c.operating.voltageMask & ~membersMask(c.count)) ||
       (c.operating.currentMask & ~c.operating.voltageMask)) return false;
   if (c.operating.voltageAuthorized && (c.operating.voltage < limits::minVoltage ||
@@ -85,6 +86,7 @@ bool validConfig(const Configuration& c) {
   }
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
     const auto& u = c.units[i];
+    if ((c.acceptedAbsent & (1U << i)) && (!identified(u.identity) || !(assigned & (1U << i)))) return false;
     if (u.ratedCurrent < 100) return false;
     if ((c.operating.voltageMask & (1U << i)) && !identified(u.identity)) return false;
     for (uint8_t j = 0; j < i; ++j)

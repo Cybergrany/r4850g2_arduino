@@ -1,3 +1,4 @@
+#include "../util/FlashString.h"
 #include "LocalUi.h"
 #if PSU_ENABLE_DISPLAY
 #include "UiLayout.h"
@@ -138,7 +139,7 @@ void LocalUi::drawTouch() {
     for (uint8_t r=1;r<15;++r) frame_.text(r,0,26,UI_TEXT(""));
     frame_.text(1,0,26,UI_TEXT("TOUCH CALIBRATION"),Accent);
     if (wizard_.state()==CalibrationState::Collecting) {
-      char b[27]; snprintf(b,sizeof(b),"Hold target %u/5; release",unsigned(wizard_.targetIndex()+1));
+      char b[27]; PSU_SNPRINTF(b,sizeof(b),"Hold target %u/5; release",unsigned(wizard_.targetIndex()+1));
       if (wizard_.targetIndex()==5) strcpy(b,"Release to finish");
       frame_.text(12,0,26,b); frame_.text(14,0,26,PSU_ENABLE_ENCODER ? UI_TEXT("Wheel hold: exit") : PSU_ENABLE_SERIAL ? UI_TEXT("Serial: touch debug off") : UI_TEXT("Lift between targets"),Muted);
       const auto t=CalibrationWizard::target(wizard_.targetIndex());
@@ -160,35 +161,35 @@ void LocalUi::drawTouch() {
     }
   } else if (model_.page()==UiPage::TouchDebug) {
     frame_.text(1,0,26,UI_TEXT("TOUCH DIAGNOSTICS"),Accent);
-    char b[27]; snprintf(b,sizeof(b),"Raw %d,%d Z=%d",raw_.x,raw_.y,raw_.pressure); frame_.text(3,0,26,b);
-    snprintf(b,sizeof(b),"Pixel %d,%d Down=%u",point_.x,point_.y,unsigned(raw_.down)); frame_.text(5,0,26,b);
+    char b[27]; PSU_SNPRINTF(b,sizeof(b),"Raw %d,%d Z=%d",raw_.x,raw_.y,raw_.pressure); frame_.text(3,0,26,b);
+    PSU_SNPRINTF(b,sizeof(b),"Pixel %d,%d Down=%u",point_.x,point_.y,unsigned(raw_.down)); frame_.text(5,0,26,b);
     frame_.text(7,0,26,!hit_ ? UI_TEXT("Target: none") : pointedAction_.kind==ActionKind::Back ? UI_TEXT("Target: Back") :
         pointedAction_.value<0 ? UI_TEXT("Target: test minus") : UI_TEXT("Target: test plus"));
-    snprintf(b,sizeof(b),"Read max %luus",(unsigned long)touchInput_.maximumMicros()); frame_.text(11,0,26,b);
+    PSU_SNPRINTF(b,sizeof(b),"Read max %luus",(unsigned long)touchInput_.maximumMicros()); frame_.text(11,0,26,b);
     if (raw_.down && point_.y<112) frame_.text(point_.y/16,point_.x>4 ? (point_.x-4)/12 : 0,1,UI_TEXT("+"),Accent);
   }
 }
 #endif
 bool LocalUi::command(uint8_t n,char** a,Print& out,uint32_t now) {
-  if (strcmp(a[0],"touch")) return false;
+  if (PSU_STRCMP(a[0], "touch")) return false;
 #if PSU_ENABLE_TOUCH
-  if (n==2 && !strcmp(a[1],"status")) {
+  if (n==2 && !PSU_STRCMP(a[1], "status")) {
     out.print(F("touch calibrated=")); out.print(calibration_.valid); out.print(F(" rejected=")); out.print(rejected_);
     out.print(F(" read-max-us=")); out.print(touchInput_.maximumMicros());
     out.print(F(" save=")); out.print(calibrationStore_.saving() ? F("saving") : calibrationStore_.result()==StorageResult::Ok ? F("ok") :
         calibrationStore_.result()==StorageResult::NoValidRecord ? F("none") : F("failed"));
     out.print(F(" raw=")); out.print(raw_.x); out.print(','); out.print(raw_.y); out.print(F(" z=")); out.println(raw_.pressure);
-  } else if (n==3 && !strcmp(a[1],"calibration") && !strcmp(a[2],"export")) {
+  } else if (n==3 && !PSU_STRCMP(a[1], "calibration") && !PSU_STRCMP(a[2], "export")) {
     out.print(F("touch profile=")); out.print(touch::profile); out.print(F(" valid=")); out.print(calibration_.valid);
     out.print(F(" affine Q16.16=")); for (uint8_t i=0;i<6;++i) { out.print(calibration_.coefficient[i]); out.print(i==5 ? '\n' : ','); }
-  } else if (n==2 && !strcmp(a[1],"calibrate")) {
+  } else if (n==2 && !PSU_STRCMP(a[1], "calibrate")) {
     if (!available_) out.println(F("ERR display unavailable"));
     else { model_.action({ActionKind::Calibrate},now); request(now); dirty_=true; pageReady_=false;
       out.println(model_.page()==UiPage::Calibration ? F("Touch calibration started") : F("ERR busy")); }
-  } else if (n==3 && !strcmp(a[1],"debug") && (!strcmp(a[2],"on") || !strcmp(a[2],"off"))) {
+  } else if (n==3 && !PSU_STRCMP(a[1], "debug") && (!PSU_STRCMP(a[2], "on") || !PSU_STRCMP(a[2], "off"))) {
     if (!available_) out.println(F("ERR display unavailable"));
     else {
-      const bool on=!strcmp(a[2],"on");
+      const bool on=!PSU_STRCMP(a[2], "on");
       if (on) model_.action({ActionKind::TouchDebug},now);
       else if (model_.page()==UiPage::TouchDebug || model_.page()==UiPage::Calibration) model_.action({ActionKind::Back},now);
       request(now); gesture_.cancel(); dirty_=true; pageReady_=false;

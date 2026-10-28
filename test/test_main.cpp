@@ -7,6 +7,7 @@
 #include "storage/MemoryManager.h"
 #include "ui/SerialConsole.h"
 #include "ui/UiView.h"
+#include "ui/UiLayout.h"
 #include <fstream>
 #include <cstdlib>
 #include <array>
@@ -206,6 +207,9 @@ struct Rig {
   uint8_t standby = 0, woken = 0;
   uint16_t current[PSU_MAX_UNITS] = {};
   int16_t temperature = 40;
+  bool reportAc = false;
+  uint8_t noAc = 0;
+  uint32_t notReadyUntil = 0;
   uint8_t noTemperature = 0, noCurrent = 0, rejectRegister = 0xff, dropRegister = 0xff;
   bool leaking = false, leakOnWake = false;
   size_t acknowledged = 0;
@@ -241,7 +245,8 @@ struct Rig {
       if (!(noCurrent & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x81, (standby & (1U<<i)) ? 0 :
           leaking || (leakOnWake && (woken & (1U<<i))) ? 2048 : uint32_t(current[i])*1024/100));
       if (!(noTemperature & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x7f, int32_t(temperature)*1024));
-      can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i))));
+      can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) && now >= notReadyUntil));
+      if (reportAc) can.incoming.push_back(data(addresses[i], 0x83, (noAc & (1U<<i)) ? (uint32_t(1)<<29) : 0));
     }
   }
   void step(uint32_t ms = 250, bool acknowledge = true, bool refresh = true) {
@@ -518,7 +523,11 @@ void fanControl() {
   Rig r; r.c.setCurrent(0,2000); r.apply(); r.temperature=30;
   r.step(29000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.step(4000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
-  auto before=r.can.writes().size(); r.step(10000); CHECK(r.can.writes().size()==before);
+  auto before=r.can.writes().size(); r.step(10000);
+  const auto refreshWrites = r.can.writes();
+  for (size_t n = before; n < refreshWrites.size(); ++n)
+    CHECK(refreshWrites[n].data[1] == protocol::OnlineVoltage || refreshWrites[n].data[1] == protocol::OnlineCurrent);
+  before = refreshWrites.size(); // Persistent fan mode must not be periodically rewritten.
   r.c.setCurrent(0,6000); r.apply(Operation::GroupCurrent,0);
   uint8_t max=0;
   const auto writes=r.can.writes();
@@ -579,10 +588,15 @@ void manualFanControl() {
   CHECK(r.c.externalFanStatus(r.now).reason==FanReason::ManualMax);
   const auto settled=r.can.writes().size();
   CHECK(r.c.setFanOverride(1,FanOverride::Max,r.now)==Result::Ok); r.step(6000);
-  CHECK(r.can.writes().size()==settled);
+  for (size_t i=settled; i<r.can.writes().size(); ++i)
+    CHECK(r.can.writes()[i].data[1]==protocol::OnlineVoltage || r.can.writes()[i].data[1]==protocol::OnlineCurrent);
   const auto writes=r.can.writes();
-  for(size_t i=first;i<writes.size();++i) CHECK(writes[i].data[1]==protocol::FanMode);
-  CHECK(writes.size()==first+3 && !writes[first].data[3] && !writes[first+1].data[3] && writes.back().data[3]==1);
+  unsigned fans=0;
+  for(size_t i=first;i<writes.size();++i) {
+    if(writes[i].data[1]==protocol::FanMode) { CHECK(bool(writes[i].data[3])==(fans==2)); ++fans; }
+    else CHECK(writes[i].data[1]==protocol::OnlineVoltage || (writes[i].data[1]==protocol::OnlineCurrent && protocol::readBigEndian(writes[i].data+4)==0));
+  }
+  CHECK(fans==3);
   // Leaving manual AUTO cannot retain AUTO through the policy deadband.
   r.temperature=36; CHECK(r.c.setFanOverride(3,FanOverride::Policy,r.now)==Result::Ok); r.step(2000);
   CHECK(r.c.unitControl(1).fanAcknowledged==FanMode::Max && r.c.unitControl(1).fanOverride==FanOverride::Policy);
@@ -840,16 +854,28 @@ void acknowledgementsAndFailures() {
 void restorationAndDeployment() {
   Rig r; r.apply();
   CHECK(r.c.setCurrent(0, 2000) == Result::Ok && r.c.setVoltage(5800) == Result::Ok);
-  const auto written = r.can.writes().size();
+  auto written = r.can.writes().size();
   r.live = 1; r.step(16000); CHECK(r.c.issue(1, r.now) == Issue::Missing);
+  for(size_t n=written;n<r.can.writes().size();++n) {
+    const auto f=r.can.writes()[n]; CHECK(protocol::address(f.id)==1);
+    CHECK(f.data[1]==protocol::OnlineVoltage || f.data[1]==protocol::OnlineCurrent);
+  }
+  written=r.can.writes().size();
   r.addresses[1] = 17; r.live = 3; r.step(250); // One identity sample cannot restore.
   CHECK(r.can.writes().size() == written);
   r.step(250); r.finish();
   const auto restored = r.can.writes(); CHECK(restored.size() > written + 2);
   CHECK(restored[written].data[1] == protocol::OnlineCurrent && !protocol::readBigEndian(restored[written].data+4));
-  for(size_t n=written;n<restored.size();++n) CHECK(protocol::address(restored[n].id)==17);
-  CHECK(restored.back().data[1]==protocol::OnlineCurrent);
-  CHECK(protocol::readBigEndian(restored.back().data + 4) == protocol::encodeCurrent(2750, 5000));
+  CanFrame lastReturned = {};
+  for(size_t n=written;n<restored.size();++n) {
+    if(protocol::address(restored[n].id)==17) lastReturned=restored[n];
+    else {
+      CHECK(protocol::address(restored[n].id)==1);
+      CHECK(restored[n].data[1]==protocol::OnlineVoltage || restored[n].data[1]==protocol::OnlineCurrent);
+    }
+  }
+  CHECK(lastReturned.data[1]==protocol::OnlineCurrent);
+  CHECK(protocol::readBigEndian(lastReturned.data + 4) == protocol::encodeCurrent(2750, 5000));
   CHECK(r.c.configuration().groups[0].current == 2000 && r.c.configuration().voltage == 5800);
   auto saved = r.c.configuration(); saved.autoResume=false;
   Rig noResume(saved, true); noResume.finish(); CHECK(noResume.c.controlStatus(noResume.now).activity==Activity::Holding);
@@ -908,7 +934,9 @@ void schedulerAndBounds() {
     if (protocol::command(f.id) == protocol::infoCommand) ++infoRequests;
     if (protocol::command(f.id) == protocol::dataCommand) ++dataRequests;
   }
-  CHECK(infoRequests >= 4 && dataRequests >= 2 && r.can.writes().empty());
+  CHECK(infoRequests >= 4 && dataRequests >= 2);
+  for(const auto& f:r.can.writes()) CHECK(f.data[1]==protocol::OnlineVoltage ||
+      (f.data[1]==protocol::OnlineCurrent && !protocol::readBigEndian(f.data+4)));
   Discovery d;
   for (uint8_t a = 1; a <= Discovery::capacity + 1; ++a) d.receive(info(a, identity(a)), 200);
   CHECK(d.overflow() == 1);
@@ -969,7 +997,7 @@ void cooperativeCan() {
   }
   CHECK(polled == 0xff);
   // At eight members, INFO and DATA both retain their schedules while an
-  // address sweep progresses. No setting writes are generated by this work.
+  // address sweep progresses alongside volatile V/I refresh.
   uint32_t lastData[8] = {}, lastInfo[8] = {};
   unsigned dataCount[8] = {};
   for (unsigned n = 0; n < 4000; ++n) {
@@ -987,7 +1015,9 @@ void cooperativeCan() {
       }
     }
   }
-  CHECK(!all.c.scanning() && all.can.writes().empty());
+  CHECK(!all.c.scanning());
+  for(const auto& f:all.can.writes()) CHECK(f.data[1]==protocol::OnlineVoltage ||
+      (f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)==0));
   for (auto count : dataCount) CHECK(count >= 15);
   // An operator repeatedly requesting all data must not starve identity refresh.
   unsigned refreshed[8] = {};
@@ -1207,7 +1237,10 @@ void serialLifecycleAndParity() {
   CHECK(t.input("hello\n").find("console ready") != std::string::npos);
   t.io.observing = false; t.input("apply all", false);
   r.step(console::inputIdleTimeoutMs); t.console.tick(r.now);
-  t.io.observing = true; CHECK(t.input("\n").find("discarded") != std::string::npos && r.can.writes().empty());
+  const auto idleWrites=r.can.writes();
+  for(const auto& f:idleWrites) CHECK(f.data[1]==protocol::OnlineVoltage ||
+      (f.data[1]==protocol::OnlineCurrent && !protocol::readBigEndian(f.data+4)));
+  t.io.observing = true; CHECK(t.input("\n").find("discarded") != std::string::npos && r.can.writes().size()==idleWrites.size());
   t.input("apply all", false); t.input("\x18\r\n"); CHECK(!r.c.busy());
   t.input("raw on\n"); t.input("set current GROUP1 4", false); t.io.output.clear();
   r.can.incoming.push_back(data(1, 0x75, 55296)); r.c.tick(r.now);
@@ -1223,7 +1256,7 @@ void serialLifecycleAndParity() {
       for (; seen < r.can.sent.size(); ++seen)
         if (protocol::command(r.can.sent[seen].id) == protocol::descriptionCommand) requested = true;
     }
-    CHECK(requested); t.io.output.clear();
+    CHECK(requested); t.drain(); t.io.output.clear(); // Drain independent refresh ACKs before testing description bytes.
   };
   describe();
   auto first = protocol::request(1, protocol::descriptionCommand); first.id = 0x1081d27f;
@@ -1459,7 +1492,7 @@ void uiWorkflows() {
   // Current before global voltage commissioning produces a useful blocker.
   u.hold(); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.blocker() == Issue::VoltageUnsynced);
   CHECK(r.can.writes().empty());
-  u.click(); u.turn(1); CHECK(u.ui.field() == UiField::Voltage);
+  u.click(); u.turn(-1); CHECK(u.ui.field() == UiField::Voltage);
   u.click(); u.turn(1); u.click(); CHECK(u.ui.notice() == UiNotice::Applying);
   u.finish(); CHECK(u.ui.notice() == UiNotice::Saved);
   Configuration saved; CHECK(u.memory.load(saved) == StorageResult::Ok);
@@ -1481,7 +1514,8 @@ void uiWorkflows() {
   u.click(); CHECK(r.can.writes().size() == writes && r.c.configuration().groups[0].current == 1000);
   // No groups is a valid commissioning screen; gestures cannot index -1.
   Rig empty; CHECK(empty.c.removeGroup(0) == Result::Ok); UiRig e(empty);
-  e.click(); e.hold(); e.turn(300); CHECK(e.ui.group() == -1 && e.ui.page() == UiPage::Groups);
+  e.click(); e.hold(); e.turn(300); CHECK(e.ui.group() == -1 && e.ui.page() == UiPage::Tools);
+  e.hold(); CHECK(e.ui.page() == UiPage::Groups);
   UiFrame frame; UiView::compose(frame, e.ui, empty.c, empty.now);
   CHECK(rowText(frame, 3).find("No groups") != std::string::npos);
   Rig removed; UiRig deleted(removed); deleted.hold(); deleted.click();
@@ -1508,11 +1542,18 @@ void uiPartialAndFailures() {
   Configuration saved; CHECK(u.memory.load(saved) == StorageResult::Ok);
   // The confirmation expires; another click cannot issue its old write plan.
   u.click(); u.click(); u.click(); CHECK(u.ui.page() == UiPage::Confirm);
-  const auto before = r.can.writes().size(); r.step(limits::confirmationMs + 1); u.click();
-  CHECK(u.ui.notice() == UiNotice::Changed && r.can.writes().size() == before);
+  const auto before = r.can.writes().size(); r.step(limits::confirmationMs + 1);
+  const auto refreshed = r.can.writes();
+  for (size_t i = before; i < refreshed.size(); ++i) {
+    CHECK(refreshed[i].data[1] == protocol::OnlineVoltage || refreshed[i].data[1] == protocol::OnlineCurrent);
+    CHECK(protocol::readBigEndian(refreshed[i].data + 4) ==
+          (refreshed[i].data[1] == protocol::OnlineVoltage ? protocol::encodeVoltage(r.c.configuration().operating.voltage) :
+           protocol::encodeCurrent(share, r.c.configuration().units[0].ratedCurrent)));
+  }
+  u.click(); CHECK(u.ui.notice() == UiNotice::Changed && u.ui.page() == UiPage::Config && r.can.writes().size() == refreshed.size());
   // Global voltage has no missing-member override.
-  u.turn(1); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.page() != UiPage::Confirm);
-  CHECK(r.can.writes().size() == before);
+  u.turn(-1); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.page() != UiPage::Confirm);
+  CHECK(r.can.writes().size() == refreshed.size());
   Rig unready; unready.apply(); UiRig blocked(unready);
   unready.can.incoming.push_back(broadcast(2, false)); unready.c.tick(unready.now);
   blocked.hold(); blocked.click(); blocked.click();
@@ -1638,9 +1679,11 @@ void uiLayouts() {
   CHECK(rowText(frame, 3).find("ALL GROUPS") != std::string::npos);
   CHECK(rowText(frame, 4).find("54.00V") != std::string::npos && rowText(frame, 5).find("58.50V") != std::string::npos);
 }
+#include "test_availability.inc"
 }
 int main() {
   try {
+    availabilityProtocol(); startupPowerPolicy(); acceptedAbsences(); availabilityDecisionsAndStorage(); availabilityRefreshAndSoak(); availabilityInterfaces();
     controlLifecycle(); zeroHoldEdges(); fanControl(); manualFanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
     eepromAndMigration(); serialFanControl(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();

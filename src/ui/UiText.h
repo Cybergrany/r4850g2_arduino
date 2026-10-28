@@ -43,8 +43,27 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::ControlFault: return F("control fault latched; diag control/psu; correct cause then reconcile");
     case Issue::NoProfile: return F("no complete authorized voltage profile; stage settings then apply all/voltage");
     case Issue::FanTestRequiresHold: return F("manual AUTO requires autoresume off and confirmed awake zero hold; diag control");
+    case Issue::NoAc: return F("WAIT AC; fresh PSU input-power-failure flag");
+    case Issue::ApprovalRequired: return F("returned/excluded PSU needs inclusion approval; diag startup");
+    case Issue::Settling: return F("startup/group availability settling; diag startup");
+    case Issue::Cutoff: return F("AC permit inhibited/faulted or addresses negotiating; diag startup");
+    case Issue::NoParticipants: return F("no active units; accepted absences retained");
   }
   return F("unknown");
+}
+inline const __FlashStringHelper* availabilityName(AvailabilityReason r) {
+  switch (r) {
+    case AvailabilityReason::NoCan: return F("NO CAN; output unknown");
+    case AvailabilityReason::NoAc: return F("WAIT AC");
+    case AvailabilityReason::Reconciling: return F("BOOTING/RECONCILING");
+    case AvailabilityReason::Ready: return F("READY");
+    case AvailabilityReason::Fault: return F("FAULT; cannot waive");
+  }
+  return F("UNKNOWN");
+}
+inline const __FlashStringHelper* permitName(PermitState s) {
+  return s == PermitState::NotFitted ? F("not fitted") : s == PermitState::Allowed ? F("HIGH commanded") :
+      s == PermitState::Inhibited ? F("LOW inhibited") : F("LOW fault latched");
 }
 inline const __FlashStringHelper* enableSourceName(EnableSource s) {
   return s == EnableSource::Serial ? F("autoresume/serial") : s == EnableSource::Switch ? F("ENABLE_IN") : F("boot preference");

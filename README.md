@@ -10,6 +10,10 @@ It covers checking a powered PSU without a battery, discovering identities,
 creating groups, checking responses and broadcasts, applying settings, saving,
 and handling missing or replaced units.
 
+For intermittent AC and battery-connected PSUs, see [startup, AC cutoff and
+remembered group absences](docs/STARTUP.md). Serial and local UI can accept
+unavailable groups and include returning identities without redistributing current.
+
 The MCP2515 interface is unchanged. Screen, wheel, and serial support are
 optional. The local UI targets a **320x240 landscape ILI9341 SPI display (2.8 or 3.2 inches)** with
 three group columns, two chargers per detail page, and optional wheel/touch voltage/current
@@ -48,6 +52,11 @@ See [serial connection behaviour](docs/SERIAL.md).
 Optional four-wire external fan: use `mega2560_serial_fan` for serial-only
 control with 25 kHz PWM on D6. Normal OFF holds zero current while keeping PSUs
 awake for cooling. See [wiring, zero-hold confirmation and fault fallback](docs/CONTROL.md).
+
+`mega2560_serial_cutoff` adds active-HIGH CHG_ALLOW on D27 with no screen,
+wheel or switch. `mega2560_touch_cutoff` combines touch, serial, ENABLE_IN D26,
+fan PWM D6 and CHG_ALLOW D27. Hardware must hold the permit LOW during reset;
+the pin is disabled in other production builds by default.
 
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
@@ -92,7 +101,7 @@ apply all
 ```
 
 With two already commissioned members, GROUP1 receives 27.50 A per PSU. `apply all`
-sends the common voltage to all configured slots, waits for acknowledgements,
+sends the common voltage to participating slots, waits for acknowledgements,
 then sends the current shares. **Wait for the final result**, not just `QUEUED`.
 Subsequent `apply GROUP1` sends only that group's currents, using the previously
 authorized common voltage; it does not activate a pending voltage edit.
@@ -103,7 +112,10 @@ old address. Every setting write also requires a fresh identity reply. Protocol
 observations and remaining physical limitations are documented in
 [reference parity](docs/PARITY.md).
 
-A missing member blocks its group's apply. `apply GROUP1 partial` explains the
+A new, unaccepted missing member blocks its group's apply. Use
+`startup accept GROUP1 [remember]` and review/confirm to accept absence for
+startup and future operations; returned units still require inclusion.
+The older one-operation `apply GROUP1 partial` explains the
 consequences and requires `confirm yes`; available members retain their original
 shares. Global voltage changes cannot use this override. Communication loss
 does not prove a PSU is electrically off, and the controller does not switch
@@ -111,7 +123,8 @@ outputs off when groups are deleted or members disappear.
 
 Controller EEPROM stores drafts **separately** from the authorized operating
 profile. `save` alone cannot activate drafts. A known returning unit can restore
-its authorized settings once the full installation is identified and ready.
+its authorized settings once required participants are identified and ready;
+previously excluded identities require explicit `startup include` approval.
 `autoresume on/off` controls live enable/zero-current hold; `save` persists the preference.
 Boot and returning units reconcile through zero current, checked fan mode, common
 voltage and verified wake before restoring authorized current. Optional

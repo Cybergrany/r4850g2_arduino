@@ -23,5 +23,7 @@ struct UnitControl {
   uint8_t lastRegister = 0, faultRegister = 0, attempts = 0;
   bool zeroConfirmed = false, awakeConfirmed = false, standbyConfirmed = false;
   bool cooling = false, fanFailed = false;
+  bool postReady = false; // Second zero/V/fan pass after power-stage readiness.
+  bool reconciled = false;
 };
 }

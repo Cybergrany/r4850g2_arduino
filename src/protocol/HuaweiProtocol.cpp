@@ -14,6 +14,11 @@ bool isCurrentBroadcast(const CanFrame& f) {
   return f.extended && !f.rtr && f.length == 8 &&
       (f.id & 0xff80ffffUL) == 0x1000117eUL && f.data[0] == 0 && f.data[1] == 1;
 }
+bool isNegotiation(const CanFrame& f) {
+  return f.extended && !f.rtr && f.length == 8 &&
+      (f.id & 0xff80ffffUL) == 0x1000107eUL && f.data[0] == 0x30 &&
+      (f.data[1] == 1 || f.data[1] == 2);
+}
 uint32_t readBigEndian(const uint8_t* d) {
   // Avoid unaligned reads and AVR's 16-bit int promotion when shifting.
   return (uint32_t(d[0]) << 24) | (uint32_t(d[1]) << 16) |

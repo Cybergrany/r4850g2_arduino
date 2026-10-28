@@ -1,9 +1,11 @@
+#include "../util/FlashString.h"
 #include "UiView.h"
 #include "UiText.h"
 #include "UiLayout.h"
 #include <stdio.h>
 #include <string.h>
 namespace psu {
+void drawAvailability(UiFrame&, const UiModel&, const PsuController&, uint32_t);
 namespace {
 void line(UiFrame& f, uint8_t row, FlashText s, uint8_t style = Text) { f.text(row, 0, ui::columns, s, style); }
 void number(UiFrame& f, uint8_t row, uint8_t col, uint8_t width, float value, const char* unit, uint8_t style = Text, uint8_t decimals = 1) {
@@ -44,6 +46,11 @@ FlashText shortIssue(Issue issue) {
     case Issue::Reconciling: return UI_TEXT("RECONCILING");
     case Issue::NoProfile: return UI_TEXT("NEEDS PROFILE");
     case Issue::FanTestRequiresHold: return UI_TEXT("FAN TEST: ZERO HOLD");
+    case Issue::NoAc: return UI_TEXT("WAIT AC");
+    case Issue::ApprovalRequired: return UI_TEXT("APPROVAL NEEDED");
+    case Issue::Settling: return UI_TEXT("SETTLING");
+    case Issue::Cutoff: return UI_TEXT("AC INHIBITED / FAULT");
+    case Issue::NoParticipants: return UI_TEXT("NO ACTIVE UNITS");
     case Issue::VoltageUnsynced: return UI_TEXT("APPLY BUS VOLTAGE FIRST");
     case Issue::DeploymentMismatch: return UI_TEXT("WRONG DEPLOYMENT");
     case Issue::Busy: return UI_TEXT("BUSY");
@@ -65,7 +72,9 @@ FlashText shortCommand(CommandState state) {
 void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint32_t now, uint8_t background) {
   const Issue issue = displayIssue(c, slot, now);
   const auto state = c.report().units[slot].state;
-  if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
+  if ((c.excluded() & (1U << slot)) && c.availabilityReason(slot, now) != AvailabilityReason::Fault)
+    line(f, row, c.availabilityReason(slot, now) == AvailabilityReason::Ready ? UI_TEXT("RETURNED: APPROVAL NEEDED") : UI_TEXT("ACCEPTED ABSENCE"), background | Warning);
+  else if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
   else if (commandFailed(state)) line(f, row, shortCommand(state), background | Error);
   else if (commandActive(state)) line(f, row, UI_TEXT("APPLYING"), background | Warning);
   else line(f, row, UI_TEXT("OK"), background | Good);
@@ -81,7 +90,7 @@ void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     page = m.unitRank() / ui::unitsPerPage + 1;
     pages = (population(c.configuration().groups[m.group()].members) + ui::unitsPerPage - 1) / ui::unitsPerPage;
   }
-  char b[8]; snprintf(b, sizeof(b), "%u/%u", unsigned(pages ? page : 0), unsigned(pages)); f.text(0, 23, 3, b, Muted);
+  char b[8]; PSU_SNPRINTF(b, sizeof(b), "%u/%u", unsigned(pages ? page : 0), unsigned(pages)); f.text(0, 23, 3, b, Muted);
 }
 void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   if (!m.groupCount()) {
@@ -109,11 +118,14 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     reading(f, PSU_ENABLE_TOUCH ? 8 : 10, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
     uint8_t errors = 0, active = 0;
     for (uint8_t i = 0; i < c.count(); ++i) if (group.members & (1U << i)) {
-      if (displayIssue(c, i, now) != Issue::None || commandFailed(c.report().units[i].state)) ++errors;
+      const bool waived = (c.excluded() & c.acceptedAbsences() & (1U << i)) &&
+          c.availabilityReason(i, now) != AvailabilityReason::Fault;
+      if (!waived && (displayIssue(c, i, now) != Issue::None || commandFailed(c.report().units[i].state))) ++errors;
       if (commandActive(c.report().units[i].state)) ++active;
     }
     char b[12];
-    if (errors) { snprintf(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Error); }
+    if (errors) { PSU_SNPRINTF(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Error); }
+    else if (group.members & c.excluded()) { PSU_SNPRINTF(b, sizeof(b), "ACT %u/%u", unsigned(population(group.members & c.participants())), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Warning); }
     else f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, active ? UI_TEXT("APPLYING") : UI_TEXT("OK"), bg | (active ? Warning : Good));
     if (pendingSettings(c, group.members)) f.text(PSU_ENABLE_TOUCH ? 11 : 13, col, 8, UI_TEXT("PENDING"), bg | Warning);
   }
@@ -127,7 +139,7 @@ void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
     const uint8_t slot = m.unitAt(first + pos), row = 2 + pos * (PSU_ENABLE_TOUCH ? 5 : 6);
     const uint8_t bg = slot == m.unit() ? selectedStyle : 0;
     for (uint8_t r = row; r < row + 5; ++r) line(f, r, UI_TEXT(""), bg);
-    char b[27]; snprintf(b, sizeof(b), "PSU%u", unsigned(slot + 1)); f.text(row, 0, 8, b, bg | Accent);
+    char b[27]; PSU_SNPRINTF(b, sizeof(b), "PSU%u", unsigned(slot + 1)); f.text(row, 0, 8, b, bg | Accent);
     if (pendingSettings(c, 1U << slot)) f.text(row, 16, 10, UI_TEXT("PENDING"), bg | Warning, true);
     reading(f, row + 1, 0, 6, measurement(c, slot, protocol::OutputVoltage, now), "V", bg);
     reading(f, row + 1, 10, 7, measurement(c, slot, protocol::OutputCurrent, now), "", bg);
@@ -139,7 +151,7 @@ void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
     char a[6], z[6]; const auto in = measurement(c, slot, protocol::InputTemperature, now), out = measurement(c, slot, protocol::OutputTemperature, now);
     if (in.valid()) formatValue(a, sizeof(a), in.value, "C", 0); else strcpy(a, "--C");
     if (out.valid()) formatValue(z, sizeof(z), out.value, "C", 0); else strcpy(z, "--C");
-    snprintf(b, sizeof(b), "%s/%s", a, z); f.text(row + 2, 0, 11, b, bg);
+    PSU_SNPRINTF(b, sizeof(b), "%s/%s", a, z); f.text(row + 2, 0, 11, b, bg);
     reading(f, row + 2, 11, 8, sessionTotal(c, 1U << slot), "Ah", bg);
     reading(f, row + 2, 19, 7, measurement(c, slot, protocol::OutputPower, now), "W", bg, 0);
     reading(f, row + 3, 0, 6, measurement(c, slot, protocol::InputVoltage, now), "V", bg, 0);
@@ -156,7 +168,7 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     if (old.occupied && sameIdentity(old.identity, c.configuration().units[slot].identity) &&
         (!d || uint32_t(now - old.lastSeen) < uint32_t(now - d->lastSeen))) d = &old;
   }
-  char b[27]; snprintf(b, sizeof(b), "PSU%u  Last CAN addr: %u", unsigned(slot + 1), unsigned(d ? d->address : 0));
+  char b[27]; PSU_SNPRINTF(b, sizeof(b), "PSU%u  Last CAN addr: %u", unsigned(slot + 1), unsigned(d ? d->address : 0));
   line(f, 1, UI_TEXT("PSU DETAILS"), Accent); f.text(2, 0, 26, b);
   if (!d) f.text(2, 21, 5, UI_TEXT("--"));
   status(f, 4, c, slot, now, 0);
@@ -164,7 +176,7 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   const auto& control = c.unitControl(slot);
   if (control.fault != CommandState::Idle) {
     f.wrap(5, 7, {reinterpret_cast<const char*>(stateName(control.fault))}, Error);
-    snprintf(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
+    PSU_SNPRINTF(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
   } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
   else if (control.zeroConfirmed) f.wrap(5, 8, control.awakeConfirmed ?
@@ -179,8 +191,8 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   f.text(3, 17, 9, {reinterpret_cast<const char*>(fanName(control.fanAcknowledged))}, Muted);
   if (issue != Issue::None && commandFailed(command)) line(f, 9, shortCommand(command), Error);
   if (d) {
-    snprintf(b, sizeof(b), "Last response %lus ago", (unsigned long)(uint32_t(now - d->lastSeen) / 1000)); f.text(10, 0, 26, b, Muted);
-    if (d->telemetry.alarmSeen) { snprintf(b, sizeof(b), "Raw alarm 0x%08lX", (unsigned long)d->telemetry.alarmBits); f.text(11, 0, 26, b, Muted); }
+    PSU_SNPRINTF(b, sizeof(b), "Last response %lus ago", (unsigned long)(uint32_t(now - d->lastSeen) / 1000)); f.text(10, 0, 26, b, Muted);
+    if (d->telemetry.alarmSeen) { PSU_SNPRINTF(b, sizeof(b), "Raw alarm 0x%08lX", (unsigned long)d->telemetry.alarmBits); f.text(11, 0, 26, b, Muted); }
   } else line(f, 10, UI_TEXT("No verified live address"), Warning);
   line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
@@ -204,7 +216,7 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     f.text(row + 1, 14, 1, UI_TEXT("-"), Muted);
     number(f, row + 1, 15, 11, (voltage ? limits::maxVoltage : c.groupCurrentMaximum(m.group())) / 100.0f, voltage ? "V" : "A", Muted, 2);
   }
-  if (PSU_UI_DEBUG && !PSU_ENABLE_TOUCH) line(f, 11, UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
+  if (!PSU_ENABLE_TOUCH) line(f, 11, UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
   else if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
   line(f, 12, UI_TEXT("EEPROM saved after ACKs"), Muted);
   line(f, 14, m.editing() ? UI_TEXT("Click:Apply  Hold:Cancel") : UI_TEXT("Click:Edit  Hold:Groups"), Muted);
@@ -212,9 +224,9 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
 void confirmation(UiFrame& f, const UiModel& m) {
   line(f, 2, UI_TEXT("MISSING MEMBER - BLOCKED"), Error);
   f.wrap(4, 8, UI_TEXT("Missing outputs may still be ON. Apply original shares to responding units only? No redistribution."), Warning);
-  char b[27]; uint8_t n = snprintf(b, sizeof(b), "Missing PSU:");
+  char b[27]; uint8_t n = PSU_SNPRINTF(b, sizeof(b), "Missing PSU:");
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (m.plan().missing & (1U << i))
-    n += snprintf(b + n, sizeof(b) - n, " %u", unsigned(i + 1));
+    n += PSU_SNPRINTF(b + n, sizeof(b) - n, " %u", unsigned(i + 1));
   f.text(10, 0, 26, b);
   line(f, 12, m.confirmingYes() ? UI_TEXT("No   > YES, APPLY PARTIAL") : UI_TEXT("> NO   Yes, apply partial"), selectedStyle | Warning);
   line(f, 14, UI_TEXT("Click:Choose Hold:Cancel"), Muted);
@@ -238,13 +250,13 @@ void result(UiFrame& f, const UiModel& m) {
   line(f, 2, title, color); f.wrap(4, 8, body);
   if (m.notice() == UiNotice::Applying || m.notice() == UiNotice::ApplyFailed || m.notice() == UiNotice::Saving) {
     char b[27];
-    snprintf(b, sizeof(b), "ACK %u/%u  Failed %u", unsigned(population(m.succeeded())), unsigned(population(m.plan().recipients)), unsigned(population(m.failed()))); f.text(10, 0, 26, b, color);
+    PSU_SNPRINTF(b, sizeof(b), "ACK %u/%u  Failed %u", unsigned(population(m.succeeded())), unsigned(population(m.plan().recipients)), unsigned(population(m.failed()))); f.text(10, 0, 26, b, color);
   }
   line(f, 14, m.working() ? UI_TEXT("Hold:Groups (continues)") : UI_TEXT("Click:Config Hold:Groups"), Muted);
 }
 void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const auto s = c.controlStatus(now); const auto& e = c.enableControl();
-  if (s.activity == Activity::Running) return;
+  if (s.activity == Activity::Running && !c.excluded()) return;
   const bool fault = s.activity == Activity::StopUnconfirmed || (s.activity == Activity::StartBlocked && s.blocker != Issue::NoProfile);
   const uint8_t color = fault ? Error : Warning;
   const bool full = m.page() == UiPage::Groups || m.page() == UiPage::Editor || m.page() == UiPage::Confirm || m.page() == UiPage::Result;
@@ -255,10 +267,16 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   else if (s.activity == Activity::StopUnconfirmed) text = UI_TEXT("STOP UNCONFIRMED");
   else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING AT ZERO A");
   else if (s.activity == Activity::StartBlocked) text = s.blocker == Issue::NoProfile ? UI_TEXT("START: NEEDS PROFILE") : UI_TEXT("START BLOCKED");
+  if (s.blocker == Issue::NoParticipants) text = UI_TEXT("NO ACTIVE PSUS");
+  if (s.blocker == Issue::Cutoff) text = c.startupStatus().permit == PermitState::Fault ? UI_TEXT("AC CUTOFF: RETRY NEEDED") : UI_TEXT("AC INHIBITED: STARTUP");
   if (full) {
     f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, text, color);
-    if (fault) {
-      char b[9]; snprintf(b, sizeof(b), "PSU %u", unsigned(s.slot + 1)); f.text(1, 17, 5, b, color);
+    if (s.activity == Activity::Running) {
+      char b[32]; PSU_SNPRINTF(b, sizeof(b), "RUN %u/%u: REVIEW ABSENCES", unsigned(population(c.participants())), unsigned(c.count()));
+      if (c.availabilityAttention(now)) f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, UI_TEXT("PSUS RETURNED: REVIEW"), Warning);
+      else f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, b, Warning);
+    } else if (fault && s.blocker != Issue::Cutoff) {
+      char b[9]; PSU_SNPRINTF(b, sizeof(b), "PSU %u", unsigned(s.slot + 1)); f.text(1, 17, 5, b, color);
     }
   } else if (m.page() == UiPage::Units || m.page() == UiPage::Config || m.page() == UiPage::Detail) {
     if (m.page() == UiPage::Detail) f.text(1, 0, 26, UI_TEXT("PSU INFO"), Accent);
@@ -278,12 +296,14 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
     case UiPage::Config: config(f, m, c, now); break;
     case UiPage::Confirm: confirmation(f, m); break;
     case UiPage::Result: result(f, m); break;
+    case UiPage::Availability: case UiPage::AvailabilityUnits: case UiPage::AvailabilityConfirm: case UiPage::AvailabilityResult:
+      drawAvailability(f, m, c, now); break;
     default: UiLayout::extras(f,m,c,now); break;
   }
 #if PSU_ENABLE_TOUCH
   UiLayout::controls(f,m);
 #else
-  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios) UiLayout::controls(f,m);
+  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage()) UiLayout::controls(f,m);
 #endif
   controlBanner(f, m, c, now);
 #if PSU_UI_DEBUG
@@ -292,7 +312,7 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
   if (m.page()==UiPage::Groups || m.page()==UiPage::Units) {
     char page[14]; const uint8_t rank=m.page()==UiPage::Groups ? m.groupRank()/3+1 : m.unitRank()/2+1;
     const uint8_t pages=m.page()==UiPage::Groups ? (m.groupCount()+2)/3 : (m.unitCount()+1)/2;
-    snprintf(page,sizeof(page),"%u/%u",unsigned(rank),unsigned(pages)); f.text(1,23,3,page,Muted);
+    PSU_SNPRINTF(page,sizeof(page),"%u/%u",unsigned(rank),unsigned(pages)); f.text(1,23,3,page,Muted);
   }
 #endif
   if (m.page() != UiPage::Result && m.working()) line(f, 14,

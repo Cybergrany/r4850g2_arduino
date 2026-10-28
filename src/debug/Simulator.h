@@ -9,7 +9,8 @@ enum class DebugScenario : uint8_t {
   Healthy, Empty, Missing, Stale, Unbound, Conflict, Replacement, NotReady,
   VoltageUnsynced, Reject, Timeout, IdentityTimeout, Transport, Partial, SaveFailed, Changed,
   Extremes, WrongDeployment, Unassigned, IdentityPending, SaveChanged, BusOffline,
-  ZeroHold, Hot, Cool, SensorFault, FanReject, ZeroReject, StopUnconfirmed, WakeCurrent, Count
+  ZeroHold, Hot, Cool, SensorFault, FanReject, ZeroReject, StopUnconfirmed, WakeCurrent,
+  BatteryCan, ColdStart, SlowStartup, SourceAbsent, SourceReturn, PartialReturn, UnstableSource, Count
 };
 FlashText scenarioName(DebugScenario scenario);
 Configuration debugConfiguration();
@@ -33,10 +34,15 @@ class SimulatedCan : public CanTransport {
   void service(uint32_t now) override;
   bool receive(CanFrame& frame) override;
   void reset();
-  void scenario(DebugScenario value) { scenario_ = value; if (value == DebugScenario::WakeCurrent) wakeSeen_ = 0; }
+  void scenario(DebugScenario value);
+  void permit(bool allowed);
+  void sourcePower(uint8_t mask, bool on);
+  void batteryPower(uint8_t mask, bool on);
   DebugScenario scenario() const { return scenario_; }
  private:
   bool present(uint8_t slot) const;
+  bool ac(uint8_t slot) const { return permit_ && (sources_ & (1U << slot)); }
+  bool outputReady(uint8_t slot) const;
   uint16_t measuredCurrent(uint8_t slot) const;
   CanFrame identityFrame(uint8_t slot) const;
   CanFrame metricFrame(uint8_t slot, uint8_t metric) const;
@@ -48,6 +54,10 @@ class SimulatedCan : public CanTransport {
   bool pending_ = false, cycling_ = false;
   uint8_t standby_ = 0, fanMax_ = 0, wakeSeen_ = 0;
   DebugScenario scenario_ = DebugScenario::Healthy;
+  uint8_t sources_ = 0xff, batteries_ = 0xff;
+  bool permit_ = true;
+  uint32_t now_ = 0, scenarioSince_ = 0, changedSource_ = 0;
+  uint32_t readyAt_[PSU_MAX_UNITS] = {};
 };
 }
 #endif

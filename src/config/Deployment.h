@@ -1,5 +1,6 @@
 #pragma once
 #include "ChargerConfig.h"
+#include "../util/FlashString.h"
 namespace psu { namespace deployment {
 // Change this ID when moving the controller to another physical installation.
 // EEPROM from a different deployment is inspectable but cannot authorize writes.
@@ -13,8 +14,8 @@ constexpr uint16_t pollMs = 1000;
 // Example with initialSlots=2:
 //   groups = {{"GROUP1", 0x03, 5500, 0}}; // slots 1+2, total 55 A online
 // Fill bindings only after checking the physical units with `diag bus`.
-constexpr UnitConfig units[PSU_MAX_UNITS] = {};
-constexpr GroupConfig groups[limits::maxGroups] = {};
+constexpr UnitConfig units[PSU_MAX_UNITS] PSU_CONST_STORAGE = {};
+constexpr GroupConfig groups[limits::maxGroups] PSU_CONST_STORAGE = {};
 static_assert(id != 0 && initialSlots >= 1 && initialSlots <= PSU_MAX_UNITS, "Invalid deployment identity/count");
 static_assert(voltage >= limits::minVoltage && voltage <= limits::maxVoltage, "Invalid deployment voltage");
 static_assert(offlineVoltage >= limits::minOfflineVoltage && offlineVoltage <= limits::maxVoltage, "Invalid offline voltage");

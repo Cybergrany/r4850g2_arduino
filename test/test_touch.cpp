@@ -184,6 +184,24 @@ void layoutAndLocalUi() {
   CHECK(saved.groups[0].current==old+100);
   CHECK(r.controller.report().failed==0 && r.controller.report().succeeded==7);
   snapshot("touch-saved",display.shown);
+  // Actual touch hit boxes: whole-source acceptance, verified save and rejoin.
+  r.can.sourcePower(0x18,false); for(int i=0;i<1200;++i) tick();
+  tap(100,216); tap(160,216); tap(100,48); tap(270,216); // Back, Tools, Startup, GROUP2.
+  snapshot("touch-availability-group",display.shown);
+  tap(150,112); // Review group.
+  snapshot("touch-availability-confirm",display.shown);
+  tap(150,160); tap(240,216); // Remember + save, Confirm.
+  for(int i=0;i<350;++i) tick();
+  CHECK(r.controller.configuration().acceptedAbsent==0x18 && r.controller.excluded()==0x18);
+  snapshot("touch-availability-saved",display.shown);
+  r.can.sourcePower(0x18,true); for(int i=0;i<1200;++i) tick();
+  CHECK(r.controller.unitControl(3).phase==ControlPhase::Held && r.controller.excluded()==0x18);
+  tap(100,216); // Back to overview; live overview updates to Include group.
+  for(int i=0;i<20;++i) tick();
+  snapshot("touch-availability-return",display.shown);
+  tap(150,112); tap(240,216);
+  for(int i=0;i<400;++i) tick();
+  CHECK(r.controller.excluded()==0 && r.controller.currentSynchronized(3));
 }
 struct Capture : Print {
   std::string value;
@@ -233,7 +251,7 @@ void applicationScenarios() {
   auto command=[&](const std::string& s) { Serial.output.clear(); Serial.input=s+"\n"; tick(20); };
   auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(12); };
   auto editCurrent=[&]() { tap(40,80); tap(112,216); tap(80,128); };
-  tick(800); CHECK(Serial.output.find("SIM:")!=std::string::npos);
+  tick(1600); CHECK(Serial.output.find("SIM:")!=std::string::npos);
   CHECK(Serial.output.find("CAN ready")==std::string::npos);
   command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
 
@@ -262,9 +280,9 @@ void applicationScenarios() {
       case DebugScenario::ZeroHold:
         CHECK(hasText(appFrame,"ZERO A: SERIAL OFF")); snapshot("touch-zero-hold",appFrame); break;
       case DebugScenario::StopUnconfirmed:
-        CHECK(hasText(appFrame,"STOP UNCONFIRMED")); snapshot("touch-stop-unconfirmed",appFrame); break;
+        CHECK(hasText(appFrame,"AC CUTOFF")); snapshot("touch-stop-unconfirmed",appFrame); break;
       case DebugScenario::FanReject: case DebugScenario::WakeCurrent: case DebugScenario::ZeroReject:
-        CHECK(hasText(appFrame,"START BLOCKED")); snapshot("touch-control-fault",appFrame); break;
+        CHECK(hasText(appFrame,"START BLOCKED") || hasText(appFrame,"AC CUTOFF")); snapshot("touch-control-fault",appFrame); break;
       case DebugScenario::Changed:
         editCurrent(); CHECK(hasText(appFrame,"CONFIG / DEVICES CHANGED")); snapshot("touch-changed",appFrame); break;
       case DebugScenario::Missing:
@@ -281,13 +299,15 @@ void applicationScenarios() {
         } else if (DebugScenario(s)==DebugScenario::SaveFailed) {
           CHECK(hasText(appFrame,"APPLIED / EEPROM FAILED")); snapshot("touch-save-failed",appFrame);
         } else {
-          CHECK(hasText(appFrame,"APPLY FAILED - NOT SAVED")); snapshot("touch-apply-failed",appFrame);
+          // A background volatile refresh can discover this rejection before
+          // the editor submits its write. Both paths must leave EEPROM alone.
+          CHECK(hasText(appFrame,"APPLY FAILED - NOT SAVED") || hasText(appFrame,"APPLY BLOCKED")); snapshot("touch-apply-failed",appFrame);
         }
         break;
       default: break;
     }
   }
-  command("ui-debug scenario healthy"); tick(1000);
+  command("ui-debug scenario healthy"); tick(1600);
   command("set current GROUP1 35"); command("apply GROUP1"); tick(500);
   command("save"); tick(300);
   if (Serial.output.find("SIM RAM: EEPROM OK")==std::string::npos) throw std::runtime_error("Save console output: "+Serial.output);
@@ -310,7 +330,27 @@ void applicationScenarios() {
   command("fan all policy"); tick(100);
   command("ui-debug enable-input off"); tick(10); command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
   CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
-
+  // Save latest excluded-member intent, restart with that group present, and
+  // require explicit rejoin before any positive-current restore to those slots.
+  command("ui-debug reset"); tick(1600);
+  command("ui-debug source GROUP2 off"); tick(1000);
+  command("diag startup"); tick(150); CHECK(Serial.output.find("WAIT AC")!=std::string::npos);
+  command("startup accept GROUP2 remember"); tick(100);
+  CHECK(Serial.output.find("selected=4,5")!=std::string::npos);
+  command("confirm yes"); tick(350);
+  CHECK(Serial.output.find("Configuration + decision saved")!=std::string::npos);
+  command("set current GROUP2 26"); command("apply GROUP2"); tick(100);
+  command("save"); tick(350); command("ui-debug restart"); tick(1600);
+  command("diag startup"); tick(150);
+  CHECK(Serial.output.find("excluded=4,5")!=std::string::npos);
+  command("diag psu 4"); tick(100);
+  CHECK(Serial.output.find("authorized A=13.00")!=std::string::npos && Serial.output.find("held-at-zero-awake")!=std::string::npos);
+  command("startup include GROUP2"); tick(100); CHECK(Serial.output.find("ARE YOU SURE?")!=std::string::npos);
+  command("confirm yes"); tick(600);
+  command("diag psu 4"); tick(100); CHECK(Serial.output.find("current-acked=1")!=std::string::npos);
+  command("startup stop"); tick(10); command("autoresume on"); tick(200);
+  command("diag startup"); tick(150); CHECK(Serial.output.find("LOW fault latched")!=std::string::npos);
+  CHECK(Serial.output.find("ERR console output truncated")==std::string::npos);
 }
 
 }

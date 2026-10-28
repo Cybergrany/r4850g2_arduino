@@ -1,5 +1,12 @@
 # Serial lifecycle on the Mega 2560
 
+For `diag startup`, whole-group/individual absence acceptance, remembered
+exceptions, returned-unit inclusion, commissioning probe and immediate AC stop,
+see [STARTUP.md](STARTUP.md). `startup accept/include/require GROUP|slots
+[remember]` always previews before `confirm yes`; `startup stop` is immediate.
+Ctrl-X cancels unsubmitted availability confirmations too. Disconnecting the
+terminal does not undo a submitted decision or an already-started save.
+
 The application calls `Serial.begin(115200)` without waiting for a host and
 services CAN/controller work before serial and optional display work each loop. The Mega uses a
 hardware UART behind a separate USB bridge. Its AVR `HardwareSerial::operator bool`

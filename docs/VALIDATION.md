@@ -2,19 +2,22 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended with awake zero-current holding, manual fan tests and four-wire 25 kHz fan coverage on
-2026-10-28. No firmware upload or physical fan/touch/multi-PSU test was performed.
+extended with AC-cutoff startup, source availability, remembered exclusions,
+post-ready reconciliation and volatile-setting refresh on 2026-10-28.
+No firmware upload or physical cutoff/fan/touch/multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
 python3 tools/test_touch.py
 python3 tools/test_fan_output.py
+python3 tools/test_charge_allow.py
 PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560 -e mega2560_serial -e mega2560_display \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
   -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
-  -e mega2560_touch_enable -e mega2560_touch_fan -e mega2560_serial_fan -j 4
+  -e mega2560_touch_enable -e mega2560_touch_fan -e mega2560_serial_fan \
+  -e mega2560_serial_cutoff -e mega2560_touch_cutoff -j 4
 python3 tools/check_debug_build.py
 git diff --check
 ```
@@ -22,7 +25,7 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All fourteen profiles build successfully
+All sixteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -30,34 +33,37 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6883 | 98662 |
-| `mega2560_serial` | 5055 | 67452 |
-| `mega2560_display` | 6858 | 95898 |
-| `mega2560_local` | 5563 | 66232 |
-| `mega2560_minimal` | 3681 | 29222 |
-| `mega2560_touch` | 7193 | 108572 |
-| `mega2560_touch_wheel` | 7218 | 110040 |
-| `mega2560_ui_debug` | 6878 | 98420 |
-| `mega2560_touch_debug` | 7188 | 108802 |
-| `mega2560_touch_local` | 5847 | 73864 |
-| `mega2560_touch_debug_local` | 5810 | 74026 |
-| `mega2560_touch_enable` | 7193 | 108882 |
-| `mega2560_touch_fan` | 7198 | 109202 |
-| `mega2560_serial_fan` | 5060 | 67620 |
+| `mega2560` | 6531 | 119542 |
+| `mega2560_serial` | 4864 | 79758 |
+| `mega2560_display` | 6506 | 114038 |
+| `mega2560_local` | 5500 | 82770 |
+| `mega2560_minimal` | 3745 | 35774 |
+| `mega2560_touch` | 6739 | 129228 |
+| `mega2560_touch_wheel` | 6764 | 130722 |
+| `mega2560_ui_debug` | 6533 | 121246 |
+| `mega2560_touch_debug` | 6741 | 130690 |
+| `mega2560_touch_local` | 5708 | 90078 |
+| `mega2560_touch_debug_local` | 5710 | 90508 |
+| `mega2560_touch_enable` | 6739 | 129518 |
+| `mega2560_touch_fan` | 6744 | 129900 |
+| `mega2560_serial_fan` | 4869 | 80020 |
+| `mega2560_serial_cutoff` | 4865 | 79846 |
+| `mega2560_touch_cutoff` | 6745 | 129988 |
 
-The touch/serial build uses 87.8% static RAM and 42.8% flash, leaving 999 bytes
-for stack/runtime use (974 bytes with touch and wheel). Omitting serial leaves
-2345 bytes in the production touch profile. Enabling external PWM adds 5 bytes
-of static RAM (994 bytes remain in the touch/enable/fan build). The serial-only
-fan build leaves 3132 bytes. Static RAM excludes worst-case stack/interrupt nesting.
+The full touch/serial/enable/fan/cutoff build uses 82.3% static RAM and 51.2% flash,
+leaving 1447 bytes for stack/runtime use. Touch and wheel leave 1428 bytes;
+omitting serial leaves 2484 bytes in the production touch profile. The serial-only
+cutoff build leaves 3327 bytes. Fixed UI/parser strings and deployment templates
+now live in flash on AVR. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
-512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
+512 bytes, with two 256-byte slots and a 216-byte schema-3 record at this capacity.
 Touch calibration adds independent 40-byte records in the unused slot tails;
-the charger record format remains compatible.
+schema-2 records remain readable, with no absence exceptions. Older firmware
+does not understand schema 3; review the [downgrade caveat](ARCHITECTURE.md).
 
 All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
-present; physical CAN/MCP2515 and EEPROM access symbols are absent. Their
+present; physical CAN/MCP2515, EEPROM, cutoff and fan PWM symbols are absent. Their
 dependency graphs also omit CAN. This verifies software isolation, not touch
 hardware or production CAN timing.
 
@@ -69,7 +75,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **437791 host checks** and **960 touch/simulator checks** with
+Both suites pass: **630411 host checks** and **1004 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -156,7 +162,7 @@ Meaningful scenarios include:
 The [generated preview](ui-preview.html) uses frames exported from those tests
 and the pinned Adafruit GFX font. Zero-hold, pending-wake and failure layouts use
 that font; captured screens exercise enlarged editor digits and
-readable text equivalents. All 30 preview frames execute with bounded display
+readable text equivalents. All 38 preview frames execute with bounded display
 cells and accessible text in a Node canvas/DOM adapter. It is not an LCD test. Touch host tests substitute
 raw coordinates and display/time/serial adapters; they do not emulate the ADC,
 electrical SPI transactions or physical display response.
@@ -232,13 +238,13 @@ power tests only after commissioning appropriate limits and defaults.
 
 The host suite also verifies exact byte-3 standby/fan frames and complete echoed
 ACK payloads; first-boot zero/fan/voltage/wake with autoresume OFF; per-unit wake
-at zero despite missing peers; and the all-unit barrier before positive current.
+at zero despite missing peers; and the required-participant barrier before positive current.
 It checks inherited standby, saved-profile versus draft isolation, live OFF
 preemption and rapid ON/OFF edges. Normal runtime OFF/ON sends no standby frame;
 an OFF during initial wake still completes fresh awake/zero observations. Boot
 OR and latest-wins/debounced switch coverage includes millis wrap and a serial
 command during initial debounce. EEPROM interruption and calibration-tail
-coverage are retained without a schema change.
+coverage are retained through the schema-3 migration.
 
 Fault injection covers missing/readdressed units and identity lease expiry;
 rejected zero/MAX/wake/fallback; bounded missing ACKs and late ACKs; missing fresh
@@ -249,8 +255,8 @@ invalid/stale sensors; 30-second hysteresis; no repeat writes at steady demand;
 and a pending AUTO overtaken by a new hot reading. A stop-to-held phase change
 cannot replenish the fan retry budget. UI assertions check source labels, color,
 fault details, pending versus confirmed wake, and continued telemetry. Simulator tests run with
-ENABLE_IN and external PWM enabled at compile time but without GPIO APIs,
-proving both debug application paths remain virtual. Fan tests cover preserved
+ENABLE_IN, external PWM and CHG_ALLOW enabled at compile time but without GPIO APIs,
+proving the debug application paths remain virtual. Fan tests cover preserved
 AUTO/MAX mode and cooldown time across serial/switch edges, maximum-temperature
 aggregation, stale/missing-member fallback, S-curve endpoints/monotonicity,
 per-unit current overrides and 30-second release. The physical adapter harness
@@ -258,6 +264,38 @@ checks all six supported Mega pins, both polarities, all 256 duty commands,
 phase-correct mode/TOP/prescaler, DC endpoints, unselected timer/channel
 isolation, boot-full polarity, changed-only writes, 100 ms cadence and millis
 wrap. All six pin variants also compile against the real AVR register headers.
+
+## AC startup and availability coverage
+
+The host suite drives the production startup controller through inhibited,
+allowed and latched-cutoff states. It verifies the two-second inhibit, invalid
+configuration/probe policy, explicit CAN-initialization retry, eight-second
+readiness, separate stop/readiness deadlines, post-ready reassertion and
+battery-backed CAN with absent AC. Alarm bit 29 and observed address negotiation
+invalidate stale epochs and confirmations. A missing INFO response alone does
+not imply failed stopping; actual unexpected current still trips the cutoff.
+
+Availability tests cover the grace and stable-group intervals, unstable sources,
+whole-group and individual selection, new missing members, saved and session
+exceptions, rejected faults, explicit zero-held rejoining and waiver revocation.
+Current remains divided across full configured membership; excluded units retain
+the latest authorized share. An all-excluded apply updates intent with zero
+hardware successes. Serial/wheel/touch use the same confirmation transaction.
+The touch suite also exercises actual application save/restart and rejoining.
+
+Every byte interruption during a remembered decision preserves a complete old
+or new record. Save/readback failure, a simultaneous CAN return, configuration
+changes and confirmation expiry never silently activate a stale decision.
+Schema-2 migration supplies no exceptions; session waivers do not leak into an
+ordinary save. Background refresh sends only authorized volatile V/I or held
+zero, leaves operator reports intact and does not retry a failed explicit apply.
+
+The GPIO harness verifies LOW-before-OUTPUT, changed-only writes and conflicting
+pin rejection. These checks do not establish relay timing or electrical fail-safe
+behavior. Follow [STARTUP.md](STARTUP.md#bench-acceptance), including physical
+LOW during reset/upload, simultaneous power-up, independent source loss/return,
+battery removal, real fallback defaults and cooling with enable OFF. The
+simulator scenarios and generated previews do not replace those bench checks.
 Compile checks reject CAN, ENABLE_IN, unsupported PWM and encoder Timer1 conflicts.
 
 Manual AUTO/MAX/policy tests cover all/group/slot/range selection, malformed

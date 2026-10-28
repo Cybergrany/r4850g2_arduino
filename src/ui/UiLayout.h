@@ -14,6 +14,6 @@ class UiLayout {
   static uint8_t hit(const UiModel& model, int16_t x, int16_t y, UiAction& action);
   static void controls(UiFrame& frame, const UiModel& model);
   static void extras(UiFrame& frame, const UiModel& model, const PsuController& controller, uint32_t now);
-  static constexpr uint8_t capacity = 6;
+  static constexpr uint8_t capacity = 8;
 };
 }

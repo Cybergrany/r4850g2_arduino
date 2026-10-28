@@ -47,13 +47,22 @@ The same source describes different current normalization on some R48xx models.
 This implementation preserves Craig's established R4850G2 scaling; it does not
 automatically treat every R48xx as electrically equivalent. Validate commands,
 reported current, and actual current on each supported model. `0x0183` is retained
-raw; nonzero is not automatically interpreted as a fault. [Observed values](https://github.com/patagonaa/huawei-r48xx#output-current-limit).
+raw; nonzero is not automatically interpreted as a fault. Bit 29 is decoded
+separately as input-power failure, with fresh/present/absent/unknown state;
+all other bits remain available for inspection. This matches
+[patagonaa's AC-present decoder](https://github.com/patagonaa/esphome-huawei-r4850/blob/main/components/huawei_r4850/huawei_r4850.cpp).
+The AVR mask uses an explicit 32-bit value, rather than a 16-bit `int` shift.
 
 Huawei's [R4850G2 manual](https://www.beyondlogic.org/pdf/Huawei_R4850G2_Rectifier_User_Manual_V1.4.pdf)
 describes parallel operation and current sharing. Source groups in this firmware
 select which unit limits to command; they are not a closed-loop power-sharing
-controller, BMS, contactor controller, charge-stage algorithm, or termination
+controller, BMS, charge-stage algorithm, or termination
 policy. Actual group loading must be measured under the intended wiring/load.
+
+The Mega can now command the installation's common AC cutoff through CHG_ALLOW;
+this adds no contactor feedback or DC isolation. The manual's 3–8 s startup delay
+is covered by a separate 15 s readiness allowance; stopped-current checks retain
+their shorter deadline. See [startup policy and hardware acceptance](STARTUP.md).
 
 Online settings are volatile; PSU defaults govern startup and communication-loss
 fallback. Establish compatible defaults before adding a replacement to a live

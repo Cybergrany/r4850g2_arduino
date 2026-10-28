@@ -1,3 +1,4 @@
+#include "../util/FlashString.h"
 #include "SerialConsole.h"
 #if PSU_ENABLE_SERIAL
 #include "UiText.h"
@@ -40,7 +41,7 @@ bool identity(const char* text, Identity& id) {
   return identified(id);
 }
 bool selection(const char* s, uint8_t count, uint8_t& mask) {
-  if (!strcmp(s, "all")) { mask = membersMask(count); return true; }
+  if (!PSU_STRCMP(s, "all")) { mask = membersMask(count); return true; }
   mask = 0;
   while (*s) {
     uint16_t a = 0, b = 0; bool digit = false;
@@ -79,6 +80,7 @@ const __FlashStringHelper* metricName(uint8_t metric) {
 void SerialConsole::resetSession() {
   length_ = 0; discard_ = afterCr_ = false; echo_ = true;
   view_ = View::None; watch_ = raw_ = confirmation_ = false; descriptionAddress_ = 0;
+  availabilityConfirmation_ = false;
   traceHead_ = traceTail_ = traceCount_ = 0;
   submitted_ = redraw_ = trailingDiscard_ = false;
   backlogNotice_ = resetNotice_ = expiredNotice_ = false;
@@ -114,7 +116,7 @@ void SerialConsole::storageReply(StorageResult r) {
 #endif
   switch (r) {
     case StorageResult::Ok: io_.println(F("EEPROM OK; saved drafts and authorized profile are separate")); break;
-    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled bindings reconcile at zero current")); break;
+    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled template; fitted AC cutoff stays LOW. diag startup / startup probe")); break;
     case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs 512 bytes")); break;
     case StorageResult::InvalidConfig: io_.println(F("ERR invalid configuration")); break;
     case StorageResult::WriteFailed: io_.println(F("ERR EEPROM verification failed")); break;
@@ -145,24 +147,25 @@ void SerialConsole::execute() {
   view_ = View::None;
   if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
   uint16_t n = 0, value = 0; uint8_t mask = 0;
-  if (memory_.saving() && (!strcmp(args[0], "save") || !strcmp(args[0], "load") ||
-      !strcmp(args[0], "defaults") || !strcmp(args[0], "legacy") || !strcmp(args[0], "apply") ||
-      !strcmp(args[0], "offline") || !strcmp(args[0], "confirm"))) {
+  if (memory_.saving() && (!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") ||
+      !PSU_STRCMP(args[0], "defaults") || !PSU_STRCMP(args[0], "legacy") || !PSU_STRCMP(args[0], "apply") ||
+      !PSU_STRCMP(args[0], "offline") || !PSU_STRCMP(args[0], "confirm"))) {
     storageReply(StorageResult::Busy); return;
   }
-  if (!strcmp(args[0], "hello") && argc == 1) {
+  if (!PSU_STRCMP(args[0], "hello") && argc == 1) {
     resetSession(); io_.println(F("R4850 console ready; help for commands; Ctrl-X resets console")); return;
   }
-  if (!strcmp(args[0], "help") && (argc == 1 || (argc == 2 && !strcmp(args[1], "diagnostics")))) {
+  if (!PSU_STRCMP(args[0], "help") && (argc == 1 || (argc == 2 && !PSU_STRCMP(args[1], "diagnostics")))) {
     startView(argc == 2 ? View::DiagnosticHelp : View::Help); return;
   }
-  if ((!strcmp(args[0], "config") || !strcmp(args[0], "groups")) && argc == 1) { startView(View::Config); return; }
-  if (!strcmp(args[0], "legacy") && argc == 1) { startView(View::Legacy); return; }
-  if (!strcmp(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
-  if (!strcmp(args[0], "diag") && argc >= 2) {
-    if (!strcmp(args[1], "control") && argc == 2) { startView(View::Control); return; }
-    if (!strcmp(args[1], "bus") && argc == 2) { startView(View::Bus); return; }
-    if (!strcmp(args[1], "group") && argc == 3) {
+  if ((!PSU_STRCMP(args[0], "config") || !PSU_STRCMP(args[0], "groups")) && argc == 1) { startView(View::Config); return; }
+  if (!PSU_STRCMP(args[0], "legacy") && argc == 1) { startView(View::Legacy); return; }
+  if (!PSU_STRCMP(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
+  if (!PSU_STRCMP(args[0], "diag") && argc >= 2) {
+    if (!PSU_STRCMP(args[1], "startup") && argc == 2) { startView(View::Startup); return; }
+    if (!PSU_STRCMP(args[1], "control") && argc == 2) { startView(View::Control); return; }
+    if (!PSU_STRCMP(args[1], "bus") && argc == 2) { startView(View::Bus); return; }
+    if (!PSU_STRCMP(args[1], "group") && argc == 3) {
       const int8_t g = controller_.groupIndex(args[2]);
       if (g >= 0) {
         const auto s = controller_.groupStatus(g, now_);
@@ -173,38 +176,38 @@ void SerialConsole::execute() {
         startView(View::Units, s.members); return;
       }
     }
-    if (!strcmp(args[1], "psu") && argc == 3 && integer(args[2], controller_.count(), n) && n) { startView(View::Units, 1U << (n - 1)); return; }
+    if (!PSU_STRCMP(args[1], "psu") && argc == 3 && integer(args[2], controller_.count(), n) && n) { startView(View::Units, 1U << (n - 1)); return; }
   }
-  if ((!strcmp(args[0], "status") || !strcmp(args[0], "telemetry")) && argc <= 2) {
+  if ((!PSU_STRCMP(args[0], "status") || !PSU_STRCMP(args[0], "telemetry")) && argc <= 2) {
     mask = membersMask(controller_.count());
-    if (argc == 2 && strcmp(args[1], "all")) {
+    if (argc == 2 && PSU_STRCMP(args[1], "all")) {
       const int8_t g = controller_.groupIndex(args[1]);
       if (g < 0) { reply(Result::Invalid); return; } mask = controller_.configuration().groups[g].members;
     }
-    startView(!strcmp(args[0], "telemetry") ? View::Telemetry : View::Units, mask); return;
+    startView(!PSU_STRCMP(args[0], "telemetry") ? View::Telemetry : View::Units, mask); return;
   }
-  if (!strcmp(args[0], "count") && argc == 2 && integer(args[1], PSU_MAX_UNITS, n)) { reply(controller_.setCount(n)); return; }
-  if (!strcmp(args[0], "unbind") && argc == 2 && integer(args[1], PSU_MAX_UNITS, n) && n) {
+  if (!PSU_STRCMP(args[0], "count") && argc == 2 && integer(args[1], PSU_MAX_UNITS, n)) { reply(controller_.setCount(n)); return; }
+  if (!PSU_STRCMP(args[0], "unbind") && argc == 2 && integer(args[1], PSU_MAX_UNITS, n) && n) {
     const auto result = controller_.unbind(n - 1); reply(result);
     if (result == Result::Ok) io_.println(F("Identity released; current authorization removed. This does not switch off the physical output."));
     return;
   }
-  if (!strcmp(args[0], "group") && argc >= 3) {
-    if (!strcmp(args[1], "set") && argc == 4 && selection(args[3], controller_.count(), mask)) {
+  if (!PSU_STRCMP(args[0], "group") && argc >= 3) {
+    if (!PSU_STRCMP(args[1], "set") && argc == 4 && selection(args[3], controller_.count(), mask)) {
       reply(controller_.setGroup(args[2], mask)); io_.println(F("Membership edits do not change live limits; preview/apply new allocation.")); return;
     }
-    if (!strcmp(args[1], "delete") && argc == 3) {
+    if (!PSU_STRCMP(args[1], "delete") && argc == 3) {
       const int8_t g = controller_.groupIndex(args[2]);
       reply(g < 0 ? Result::Invalid : controller_.removeGroup(g));
       io_.println(F("Deleting membership does not switch off physical outputs.")); return;
     }
   }
-  if ((!strcmp(args[0], "bind") || !strcmp(args[0], "adopt")) && argc == 4 &&
+  if ((!PSU_STRCMP(args[0], "bind") || !PSU_STRCMP(args[0], "adopt")) && argc == 4 &&
       integer(args[1], controller_.count(), n) && n && decimal(args[3], value)) {
     Identity id;
     if (!identity(args[2], id)) { reply(Result::Invalid); return; }
     const auto& old = controller_.configuration().units[n - 1].identity;
-    if (!strcmp(args[0], "bind") && identified(old) && !sameIdentity(id, old)) {
+    if (!PSU_STRCMP(args[0], "bind") && identified(old) && !sameIdentity(id, old)) {
       io_.println(F("BLOCKED different identity: verify replacement/physical wiring, then adopt <slot> <id> <rated-A>")); return;
     }
     const auto result = controller_.bind(n - 1, id, value, now_); reply(result);
@@ -212,17 +215,17 @@ void SerialConsole::execute() {
     else io_.println(F("Binding unchanged; diag bus must show a fresh verified unique identity. Check rating and existing bindings."));
     return;
   }
-  if (!strcmp(args[0], "set")) {
-    if (argc == 3 && decimal(args[2], value) && (!strcmp(args[1], "voltage") || !strcmp(args[1], "offline-voltage"))) {
-      reply(controller_.setVoltage(value, !strcmp(args[1], "offline-voltage"))); return;
+  if (!PSU_STRCMP(args[0], "set")) {
+    if (argc == 3 && decimal(args[2], value) && (!PSU_STRCMP(args[1], "voltage") || !PSU_STRCMP(args[1], "offline-voltage"))) {
+      reply(controller_.setVoltage(value, !PSU_STRCMP(args[1], "offline-voltage"))); return;
     }
     if (argc == 4 && decimal(args[3], value)) {
-      if (!strcmp(args[1], "voltage") || !strcmp(args[1], "offline-voltage")) {
+      if (!PSU_STRCMP(args[1], "voltage") || !PSU_STRCMP(args[1], "offline-voltage")) {
         io_.println(F("ERR parallel voltage is global: set voltage <V> (no group)")); return;
       }
       const int8_t g = controller_.groupIndex(args[2]);
-      if (g >= 0 && (!strcmp(args[1], "current") || !strcmp(args[1], "offline-current"))) {
-        const bool offline = !strcmp(args[1], "offline-current");
+      if (g >= 0 && (!PSU_STRCMP(args[1], "current") || !PSU_STRCMP(args[1], "offline-current"))) {
+        const bool offline = !PSU_STRCMP(args[1], "offline-current");
         const auto r = controller_.setCurrent(g, value, offline); reply(r);
         if (r == Result::Ok) {
           const auto& group = controller_.configuration().groups[g];
@@ -240,21 +243,43 @@ void SerialConsole::execute() {
       }
     }
   }
-  if (!strcmp(args[0], "autoresume") && argc == 2 && (!strcmp(args[1], "on") || !strcmp(args[1], "off"))) {
-    reply(controller_.setAutoResume(!strcmp(args[1], "on")));
+  if (!PSU_STRCMP(args[0], "autoresume") && argc == 2 && (!PSU_STRCMP(args[1], "on") || !PSU_STRCMP(args[1], "off"))) {
+    reply(controller_.setAutoResume(!PSU_STRCMP(args[1], "on")));
     io_.println(F("Live enable request changed; save persists it. Latest switch edge or serial command wins. diag control")); return;
   }
-  if (!strcmp(args[0], "reconcile") && argc == 1) {
+  if (!PSU_STRCMP(args[0], "reconcile") && argc == 1) {
     controller_.reconcile(); io_.println(F("Reconciliation restarted; active apply cancelled; authorized profile retained. diag control")); return;
   }
-  if (!strcmp(args[0], "fan")) {
-    if (argc != 3 || (strcmp(args[2], "auto") && strcmp(args[2], "max") && strcmp(args[2], "policy"))) {
+  if (!PSU_STRCMP(args[0], "startup")) {
+    availabilityConfirmation_ = confirmation_ = false;
+    if (argc == 2 && !PSU_STRCMP(args[1], "stop")) {
+      reply(controller_.hardStop()); startView(View::Startup); return;
+    }
+    if (argc == 2 && !PSU_STRCMP(args[1], "status")) { startView(View::Startup); return; }
+    const bool probe = argc == 2 && !PSU_STRCMP(args[1], "probe");
+    if (!probe && (argc < 3 || argc > 4 || (argc == 4 && PSU_STRCMP(args[3], "remember")))) { reply(Result::Invalid); return; }
+    AvailabilityAction action = AvailabilityAction::Probe;
+    if (!probe) {
+      if (!PSU_STRCMP(args[1], "accept")) action = AvailabilityAction::Accept;
+      else if (!PSU_STRCMP(args[1], "include")) action = AvailabilityAction::Include;
+      else if (!PSU_STRCMP(args[1], "require")) action = AvailabilityAction::Require;
+      else { reply(Result::Invalid); return; }
+      const int8_t g = controller_.groupIndex(args[2]);
+      if (g >= 0) mask = controller_.configuration().groups[g].members;
+      else if (!selection(args[2], controller_.count(), mask)) { reply(Result::Invalid); return; }
+    }
+    availabilityPlan_ = controller_.previewAvailability(action, mask, argc == 4, now_);
+    availabilityConfirmation_ = availabilityPlan_.blocker == Issue::None;
+    startView(View::AvailabilityPlan); return;
+  }
+  if (!PSU_STRCMP(args[0], "fan")) {
+    if (argc != 3 || (PSU_STRCMP(args[2], "auto") && PSU_STRCMP(args[2], "max") && PSU_STRCMP(args[2], "policy"))) {
       io_.println(F("ERR fan <all|GROUP|slots> <auto|max|policy>; slots: 1 or 1,3-4")); return;
     }
     const int8_t group = controller_.groupIndex(args[1]);
     if (group >= 0) mask = controller_.configuration().groups[group].members;
     else if (!selection(args[1], controller_.count(), mask)) { reply(Result::Invalid); return; }
-    const auto mode = !strcmp(args[2], "auto") ? FanOverride::Auto : !strcmp(args[2], "max") ? FanOverride::Max : FanOverride::Policy;
+    const auto mode = !PSU_STRCMP(args[2], "auto") ? FanOverride::Auto : !PSU_STRCMP(args[2], "max") ? FanOverride::Max : FanOverride::Policy;
     const auto result = controller_.setFanOverride(mask, mode, now_);
     if (result == Result::Blocked) {
       for (uint8_t i = 0; i < controller_.count(); ++i) if (mask & (1U << i)) {
@@ -274,16 +299,16 @@ void SerialConsole::execute() {
     }
     return;
   }
-  if (!strcmp(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
-  if ((!strcmp(args[0], "apply") || !strcmp(args[0], "preview") || !strcmp(args[0], "offline")) && argc >= 2 && argc <= 3) {
-    const bool offline = !strcmp(args[0], "offline");
-    const bool partial = argc == 3 && !strcmp(args[2], "partial");
-    if ((argc == 3 && !partial) || (offline && strcmp(args[1], "all"))) { reply(Result::Invalid); return; }
+  if (!PSU_STRCMP(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
+  if ((!PSU_STRCMP(args[0], "apply") || !PSU_STRCMP(args[0], "preview") || !PSU_STRCMP(args[0], "offline")) && argc >= 2 && argc <= 3) {
+    const bool offline = !PSU_STRCMP(args[0], "offline");
+    const bool partial = argc == 3 && !PSU_STRCMP(args[2], "partial");
+    if ((argc == 3 && !partial) || (offline && PSU_STRCMP(args[1], "all"))) { reply(Result::Invalid); return; }
     int8_t g = controller_.groupIndex(args[1]);
-    Operation op = offline ? Operation::Offline : !strcmp(args[1], "all") ? Operation::All :
-        !strcmp(args[1], "voltage") ? Operation::Voltage : Operation::GroupCurrent;
-    plan_ = controller_.preview(op, g, now_, partial); confirmation_ = false;
-    if (!strcmp(args[0], "preview")) io_.println(F("PREVIEW ONLY; no settings sent"));
+    Operation op = offline ? Operation::Offline : !PSU_STRCMP(args[1], "all") ? Operation::All :
+        !PSU_STRCMP(args[1], "voltage") ? Operation::Voltage : Operation::GroupCurrent;
+    plan_ = controller_.preview(op, g, now_, partial); confirmation_ = availabilityConfirmation_ = false;
+    if (!PSU_STRCMP(args[0], "preview")) io_.println(F("PREVIEW ONLY; no settings sent"));
     else {
       const auto r = controller_.queue(plan_, false, now_); reply(r);
       if (r == Result::Ok) { io_.println(F("QUEUED; acknowledgements/results determine success")); wasBusy_ = true; }
@@ -291,38 +316,44 @@ void SerialConsole::execute() {
     }
     startView(View::Plan); return;
   }
-  if (!strcmp(args[0], "confirm") && argc == 2) {
-    if (!strcmp(args[1], "no")) { confirmation_ = false; io_.println(F("Cancelled; no settings sent")); return; }
-    if (!strcmp(args[1], "yes") && confirmation_) {
+  if (!PSU_STRCMP(args[0], "confirm") && argc == 2) {
+    if (!PSU_STRCMP(args[1], "no")) { confirmation_ = availabilityConfirmation_ = false; io_.println(F("Cancelled; no settings sent")); return; }
+    if (!PSU_STRCMP(args[1], "yes") && availabilityConfirmation_) {
+      availabilityConfirmation_ = false;
+      reply(controller_.confirmAvailability(availabilityPlan_, memory_, now_));
+      if (controller_.availabilitySaving()) io_.println(F("Saving reviewed configuration + decision; continuation waits for verification."));
+      return;
+    }
+    if (!PSU_STRCMP(args[1], "yes") && confirmation_) {
       confirmation_ = false; const auto r = controller_.queue(plan_, true, now_); reply(r);
       if (r == Result::Ok) wasBusy_ = true;
       return;
     }
-    io_.println(F("ERR no valid confirmation pending; apply GROUP partial to preview")); return;
+    io_.println(F("ERR no valid confirmation pending; preview startup action or apply GROUP partial")); return;
   }
-  if (!strcmp(args[0], "poll") && argc == 2) {
+  if (!PSU_STRCMP(args[0], "poll") && argc == 2) {
     const int8_t g = controller_.groupIndex(args[1]);
-    mask = !strcmp(args[1], "all") ? membersMask(controller_.count()) : g >= 0 ? controller_.configuration().groups[g].members : 0;
+    mask = !PSU_STRCMP(args[1], "all") ? membersMask(controller_.count()) : g >= 0 ? controller_.configuration().groups[g].members : 0;
     const auto r = controller_.requestPoll(mask, now_); reply(r);
     if (r == Result::Ok) io_.println(F("POLL QUEUED; paced per PSU; telemetry/diag bus shows replies"));
     return;
   }
-  if (!strcmp(args[0], "describe") && argc == 2 && integer(args[1], 127, n) && n) {
+  if (!PSU_STRCMP(args[0], "describe") && argc == 2 && integer(args[1], 127, n) && n) {
     const auto r = controller_.requestDescription(n); reply(r);
     if (r == Result::Ok) { descriptionAddress_ = n; io_.println(F("DESCRIPTION QUEUED; reply follows when available")); }
     return;
   }
-  if (!strcmp(args[0], "reset-ah") && argc == 1) { controller_.resetAmpHours(); reply(Result::Ok); return; }
-  if ((!strcmp(args[0], "watch") || !strcmp(args[0], "raw") || !strcmp(args[0], "echo")) && argc == 2 &&
-      (!strcmp(args[1], "on") || !strcmp(args[1], "off"))) {
-    const bool on = !strcmp(args[1], "on");
-    if (!strcmp(args[0], "watch")) watch_ = on; else if (!strcmp(args[0], "raw")) raw_ = on; else echo_ = on;
+  if (!PSU_STRCMP(args[0], "reset-ah") && argc == 1) { controller_.resetAmpHours(); reply(Result::Ok); return; }
+  if ((!PSU_STRCMP(args[0], "watch") || !PSU_STRCMP(args[0], "raw") || !PSU_STRCMP(args[0], "echo")) && argc == 2 &&
+      (!PSU_STRCMP(args[1], "on") || !PSU_STRCMP(args[1], "off"))) {
+    const bool on = !PSU_STRCMP(args[1], "on");
+    if (!PSU_STRCMP(args[0], "watch")) watch_ = on; else if (!PSU_STRCMP(args[0], "raw")) raw_ = on; else echo_ = on;
     reply(Result::Ok); return;
   }
-  if ((!strcmp(args[0], "save") || !strcmp(args[0], "load") || !strcmp(args[0], "defaults")) && argc == 1) {
+  if ((!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") || !PSU_STRCMP(args[0], "defaults")) && argc == 1) {
     if (controller_.busy()) { reply(Result::Busy); return; }
-    if (!strcmp(args[0], "defaults")) { reply(controller_.configure(defaultConfiguration())); return; }
-    if (!strcmp(args[0], "save")) {
+    if (!PSU_STRCMP(args[0], "defaults")) { reply(controller_.configure(defaultConfiguration())); return; }
+    if (!PSU_STRCMP(args[0], "save")) {
       const auto r = memory_.startSave(controller_.configuration());
       if (r == StorageResult::Ok) {
         waitingSave_ = true; saveToken_ = memory_.saveToken(); saveRevision_ = controller_.configurationRevision();
@@ -432,6 +463,17 @@ void SerialConsole::tick(uint32_t now) {
     reportedOverruns_ = io_.overruns(); beginOutput();
     io_.println(F("ERR console output truncated; command may have executed; inspect status")); prompt(); return;
   }
+  const auto& availability = controller_.availabilityReport();
+  if (availability.sequence != availabilityNotice_ && !availability.saving) {
+    availabilityNotice_ = availability.sequence; beginOutput();
+    io_.print(F("STARTUP decision: ")); reply(availability.result);
+    if (availability.remembered) io_.println(availability.result == Result::Ok ?
+        F("Configuration + decision saved; enable policy still applies.") : F("Saved reviewed snapshot, but live state changed; no continuation. Review diag startup."));
+    else if (availability.storage != StorageResult::Ok) storageReply(availability.storage);
+    else io_.println(F("Session decision only; no new persistent acceptance."));
+    if (!submitted_) prompt();
+    return;
+  }
   if (!wasBusy_ && controller_.busy() && controller_.report().operation == Operation::Restore) {
     beginOutput(); io_.print(F("RESTORE authorized profile; slots=")); printMembers(controller_.report().recipients);
     io_.println(F(" (saved/staged drafts are not applied)"));
@@ -449,6 +491,13 @@ void SerialConsole::tick(uint32_t now) {
     wasBusy_ = false; return;
   }
   wasBusy_ = controller_.busy();
+  const uint8_t attention = controller_.availabilityAttention(now);
+  availabilityAttentionNotice_ &= attention;
+  if ((attention & ~availabilityAttentionNotice_) && !length_ && view_ == View::None) {
+    availabilityAttentionNotice_ = attention; beginOutput();
+    io_.print(F("STARTUP REVIEW: unavailable or returned slots=")); printMembers(attention);
+    io_.println(F("; diag startup for group/individual choices; no automatic inclusion.")); prompt(); return;
+  }
   const auto controlState = controller_.controlStatus(now);
   const uint16_t controlKey = uint16_t(controlState.activity) | uint16_t(controlState.blocker) << 3 |
       uint16_t(controlState.slot) << 8 | uint16_t(controller_.enableControl().source()) << 12 |
@@ -528,7 +577,64 @@ void SerialConsole::printControl(uint32_t now) {
 }
 void SerialConsole::outputRow(uint32_t now) {
   const auto& c = controller_.configuration();
-  if (view_ == View::Control) {
+  if (view_ == View::Startup) {
+    if (row_ == 0) {
+      io_.print(F("CHG_ALLOW ")); io_.print(permitName(controller_.startupStatus().permit));
+      io_.print(F(" pin=")); io_.println(control::chargeAllowPin);
+      io_.println(F("Permit is a command, not contactor feedback or DC isolation."));
+    } else if (row_ == 1) {
+      printControl(now);
+      io_.print(F("configuration-ready=")); io_.print(controller_.startupStatus().configurationReady);
+      io_.print(F(" commissioning=")); io_.print(controller_.startupStatus().commissioning);
+      io_.print(F(" negotiating=")); io_.println(controller_.discovery().negotiating());
+    } else if (row_ == 2) {
+      io_.print(F("saved-absence=")); printMembers(c.acceptedAbsent);
+      io_.print(F(" effective-waivers=")); printMembers(controller_.acceptedAbsences());
+      io_.print(F(" excluded=")); printMembers(controller_.excluded());
+      io_.print(F(" participants=")); printMembers(controller_.participants()); io_.println();
+    } else if (row_ < 3 + c.count) {
+      const uint8_t i = row_ - 3; const auto* d = controller_.deviceForSlot(i, now);
+      io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" id=")); printIdentity(c.units[i].identity);
+      io_.print(' '); io_.println(availabilityName(controller_.availabilityReason(i, now)));
+      io_.print(F("  AC=")); const auto ac = d ? d->acState(now, controller_.staleMs()) : AcState::Unknown;
+      io_.print(ac == AcState::Unknown ? F("unknown") : ac == AcState::Absent ? F("absent") : F("present"));
+      if (controller_.excluded() & (1U << i)) io_.print(F(" EXCLUDED; return needs approval"));
+      io_.print(F(" authorized-A=")); io_.println(c.operating.current[i] / 100.0f);
+    } else if (row_ < 3 + c.count + limits::maxGroups) {
+      const uint8_t g = row_ - 3 - c.count; const auto& group = c.groups[g];
+      if (group.members) {
+        io_.print(group.name); io_.print(' ');
+        io_.print(controller_.availabilitySettled(g, now) ? F("SETTLED") : controller_.availabilityUnstable(g, now) ? F("UNSTABLE") : F("SETTLING"));
+        uint16_t active = 0;
+        for (uint8_t i = 0; i < c.count; ++i) if (group.members & controller_.participants() & (1U << i)) active += c.operating.current[i];
+        io_.print(F(" target-A=")); io_.print(group.current / 100.0f);
+        io_.print(F(" participating-authorized-A=")); io_.println(active / 100.0f);
+      }
+    } else { io_.println(F("startup accept/include/require GROUP|slots [remember]; confirm yes/no. No current redistribution.")); view_ = View::None; }
+    ++row_;
+  } else if (view_ == View::AvailabilityPlan) {
+    const auto& p = availabilityPlan_;
+    if (row_ == 0) {
+      io_.print(F("STARTUP PLAN: ")); io_.println(issueName(p.blocker));
+      io_.print(F("action=")); io_.println(p.action == AvailabilityAction::Accept ? F("accept absence") : p.action == AvailabilityAction::Include ? F("include returned units") :
+          p.action == AvailabilityAction::Require ? F("require again; no implicit inclusion") : F("power PSUs for discovery; charging enable OFF"));
+    } else if (row_ == 1) {
+      io_.print(F("selected=")); printMembers(p.selected); io_.print(F(" participants-after=")); printMembers(p.participants); io_.println();
+      io_.println(p.remember ? F("REMEMBER: saves current configuration too; staged values remain unapplied.") : F("SESSION ONLY: no absence permission persisted."));
+    } else if (row_ < 2 + c.count) {
+      const uint8_t i = row_ - 2;
+      if ((p.selected | p.participants) & (1U << i)) {
+        io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" id=")); printIdentity(c.units[i].identity);
+        io_.print(F(" authorized-A=")); io_.print(c.operating.current[i] / 100.0f);
+        io_.print((p.participants & (1U << i)) ? F(" participating ") : F(" excluded "));
+        io_.println(availabilityName(controller_.availabilityReason(i, now)));
+      }
+    } else {
+      if (availabilityConfirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; shares unchanged. Saved enable may resume charging. confirm yes/no within 15s."));
+      view_ = View::None;
+    }
+    ++row_;
+  } else if (view_ == View::Control) {
     const auto& e = controller_.enableControl();
     if (row_ == 0) printControl(now);
     else if (row_ == 1) {
@@ -562,6 +668,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
       case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
+      case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -583,6 +690,8 @@ void SerialConsole::outputRow(uint32_t now) {
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
+      case 18: io_.println(F("diag startup; startup accept/include/require GROUP|slots [remember]; confirm yes/no")); break;
+      case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
     }
@@ -665,6 +774,7 @@ void SerialConsole::outputRow(uint32_t now) {
     if (row_ == 0) {
       io_.print(F("PLAN ")); io_.print(issueName(plan_.blocker)); io_.print(F(" members=")); printMembers(plan_.members);
       io_.print(F(" recipients=")); printMembers(plan_.recipients); io_.println();
+      io_.print(F(" accepted exclusions (authorized, not applied)=")); printMembers(plan_.excluded); io_.println();
     } else if (row_ <= c.count) {
       const uint8_t i = row_ - 1;
       if (plan_.members & (1U << i)) {
