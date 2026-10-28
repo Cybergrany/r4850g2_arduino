@@ -154,8 +154,8 @@ current. Other faults remain blocking. A partial success is labelled
 `PARTIAL APPLY SAVED`, never complete group success. Cancelling after that
 warning retains the staged draft in RAM without issuing the partial writes.
 
-Reboot restoration remains the existing separate policy: `autoresume on` and
-`save` opt in after commissioning. Local apply/save does not enable auto-resume
+`autoresume on/off` now controls live enable/standby and `save` persists that
+preference. Local apply/save does not bypass a disabled enable request
 or alter the PSU's own nonvolatile offline defaults.
 
 ## Other builds and future displays
@@ -191,3 +191,14 @@ python3 tools/render_ui.py /tmp/r4850-ui docs/ui-preview.html
 See [validation](VALIDATION.md) for build sizes and the remaining physical bench
 checks. Host tests and builds do not establish the chosen module's electrical
 compatibility, worst-case interrupt timing, or PSU behavior on a loaded CAN bus.
+
+## Enable and control status
+
+The spare row below the V/A/W header shows intentional standby and its winning
+control source in amber. Reconciliation and zero-current startup are also
+visible. A failed or unknown stop is red and is never labelled confirmed
+standby. Charger/config title rows show compact OFF/source or fault tags.
+PSU details include requested/ACKed fan mode and control failure/register.
+Existing per-unit errors and measured telemetry remain visible. SIM pagination
+uses the last three cells of the status row and retains the permanent SIM mark.
+See [CONTROL.md](CONTROL.md) for examples, diagnostics and enable semantics.

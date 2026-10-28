@@ -16,6 +16,9 @@
 #ifndef PSU_UI_DEBUG
 #define PSU_UI_DEBUG 0
 #endif
+#ifndef PSU_ENABLE_ENABLE_IN
+#define PSU_ENABLE_ENABLE_IN 0
+#endif
 #if PSU_ENABLE_TOUCH && !PSU_ENABLE_DISPLAY
 #error "Touch requires PSU_ENABLE_DISPLAY"
 #endif

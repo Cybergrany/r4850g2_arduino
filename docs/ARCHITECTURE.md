@@ -32,7 +32,8 @@ voltage, per-slot authorized currents, and validity masks. Queueing a validated
 online apply authorizes its intended values; the asynchronous result separately
 reports what was acknowledged. A partial apply authorizes only its recipients.
 Saving drafts never authorizes them. Changing membership/bindings invalidates
-affected current authorization, without sending writes or changing live peers.
+affected current authorization without redistributing live peers' currents. A new
+binding also makes that unit managed and starts background standby reconciliation.
 There is no hidden total-current ceiling or feedback redistribution loop.
 Voltage is still one shared value; its per-slot authorization mask prevents a
 replacement or newly added slot inheriting reboot permission from an old profile.
@@ -67,6 +68,7 @@ controller.setGroup("GROUP1", 0x03);  // slots 0 and 1
 const int8_t group = controller.groupIndex("GROUP1");
 controller.setVoltage(5400);         // one global voltage
 controller.setCurrent(group, 5500);  // total 55 A, shares 27.50 A
+controller.setAutoResume(true);     // live enable; first wait for held-in-standby
 
 const auto plan = controller.preview(psu::Operation::All, -1, now);
 // Render every plan.issues[i], its recipients, voltage and current[i].
@@ -85,7 +87,7 @@ atomic in RAM and return Busy while a job runs. The old independent-pack
 | Hook | UI responsibility / data |
 | --- | --- |
 | `configuration()` | Global drafts, deployment, groups, bindings, ratings, authorized profile |
-| `setGroup`, `removeGroup`, `setCount`, `bind`, `unbind` | Commissioning and membership changes; no CAN settings sent |
+| `setGroup`, `removeGroup`, `setCount`, `bind`, `unbind` | Commissioning/membership; binding starts background reconciliation; removal does not stop retired hardware |
 | `checkCurrent(group,total)` | Structured capacity error with limiting slot, requested share and maximum |
 | `setCurrent`, `setVoltage` | Stage validated online/offline drafts; no automatic clamping |
 | `groupStatus(group,now)` | Membership/responding/ready/missing masks and requested/authorized totals |
@@ -179,12 +181,13 @@ pending for recovery. A known returning identity must pass all eligibility
 checks again. Recovery waits for the full configured installation to be ready;
 all returning recipients acknowledge authorized voltage before authorized
 currents are restored. Units authorized only for voltage receive no invented
-current setting. The failed attempt is latched until an explicit apply or a real
+current setting (reconciliation still explicitly prepares zero current). The failed attempt is latched until an explicit apply or a real
 loss/recovery transition. No offline defaults are written by recovery.
 
 `configure(config,true)` is for boot: it arms saved operating settings only if
 `autoResume` is enabled and deployment matches. Console load uses
-`configure(config,false)`, which never replays settings. There is no automatic
+`configure(config,false)`, which holds the managed units through standby reconciliation
+without replaying operating current. There is no automatic
 EEPROM write when applying or reconnecting; persistence is explicit.
 
 Identity guards narrow address-reuse races but cannot create atomic hardware
@@ -334,7 +337,7 @@ sequence, hardware profile and rotation, independent of deployment identity.
 With `PSU_UI_DEBUG`, Application instantiates `SimulatedCan` and `RamStorage`.
 No hardware CAN or Arduino EEPROM adapter is compiled into these builds. The
 simulator synthesizes bounded INFO/DATA/current/ACK traffic for the actual
-controller and discovery state machines. It stores only operating V/A and a
+controller and discovery state machines. It stores operating V/A, standby/fan bits and a
 single pending response; no large receive history or heap is needed. Scenario
 selection resets the simulated controller only after pending work finishes,
 primes healthy identities/operating settings, then introduces the selected fault.
@@ -345,3 +348,25 @@ ordinary settings use the same RAM byte device in debug builds.
 See `docs/TOUCH.md` for commands, timing, storage and reset semantics. A SIM mark
 is permanent on all debug screens, and hardware diagnostics are explicitly
 labelled simulated. `tools/check_debug_build.py` verifies linked isolation.
+
+## Reconciliation and enable ownership
+
+`PsuControl.cpp` owns per-unit reconciliation, fan hysteresis, and a single
+identity-checked control transaction. It shares the controller's cooperative TX
+slot and 250 ms write spacing with ordinary profile jobs. A pending stop takes
+priority; telemetry and identity requests continue while commands or fresh
+post-ACK observations are awaited. Control failures are distinct from user job
+results and remain visible through `unitControl(slot)`.
+
+`EnableControl` resolves the boot OR and later debounced switch edges/serial
+commands. `setAutoResume` is deliberately allowed during an apply so OFF can
+preempt it. `sampleEnableInput` accepts logical active state; Application alone
+reads the configured GPIO, and never in debug builds. Enable events increment
+the configuration revision, invalidating pending UI edits/confirmations.
+
+`controlStatus(now)` exposes global activity and the blocking slot/issue;
+`enableControl()` exposes effective request/source and raw/debounced input.
+`reconcile()` explicitly retries from held standby. No new persistent fields or
+EEPROM schema are added: save snapshots the existing autoResume preference, and
+fan thresholds/pins live in `ControlConfig.h`. See [CONTROL.md](CONTROL.md) for
+ordering, exact thresholds, failure handling and hardware limits.

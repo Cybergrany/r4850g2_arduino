@@ -22,6 +22,7 @@ Issue displayIssue(const PsuController& c, uint8_t slot, uint32_t now) {
   if (!c.ready()) return Issue::Invalid;
   const Issue issue = c.issue(slot, now);
   if (issue != Issue::None) return issue;
+  if (c.unitControl(slot).fault != CommandState::Idle) return Issue::ControlFault;
   const protocol::Metric required[] = {protocol::OutputVoltage, protocol::OutputCurrent, protocol::OutputPower};
   for (const auto metric : required) {
     float value; if (!c.freshMetric(slot, metric, value, now)) return Issue::NoTelemetry;
@@ -38,6 +39,10 @@ FlashText shortIssue(Issue issue) {
     case Issue::Conflict: return UI_TEXT("ID CONFLICT");
     case Issue::NoTelemetry: return UI_TEXT("STALE DATA");
     case Issue::NotReady: return UI_TEXT("NOT READY");
+    case Issue::ControlFault: return UI_TEXT("CONTROL FAULT");
+    case Issue::Disabled: return UI_TEXT("ENABLE IS OFF");
+    case Issue::Reconciling: return UI_TEXT("RECONCILING");
+    case Issue::NoProfile: return UI_TEXT("NEEDS PROFILE");
     case Issue::VoltageUnsynced: return UI_TEXT("APPLY BUS VOLTAGE FIRST");
     case Issue::DeploymentMismatch: return UI_TEXT("WRONG DEPLOYMENT");
     case Issue::Busy: return UI_TEXT("BUSY");
@@ -155,9 +160,18 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   if (!d) f.text(2, 21, 5, UI_TEXT("--"));
   status(f, 4, c, slot, now, 0);
   const Issue issue = displayIssue(c, slot, now); const auto command = c.report().units[slot].state;
-  if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
+  const auto& control = c.unitControl(slot);
+  if (control.fault != CommandState::Idle) {
+    f.wrap(5, 7, {reinterpret_cast<const char*>(stateName(control.fault))}, Error);
+    snprintf(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
+  } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
-  else f.wrap(5, 8, UI_TEXT("Online, ready; no known command fault. Hardware alarms are not fully decoded."));
+  else f.wrap(5, 8, control.standbyConfirmed ? UI_TEXT("Intentional standby confirmed by ACK and fresh low current. Profile retained.") :
+      UI_TEXT("Online, ready; no known command fault. Hardware alarms are not fully decoded."));
+  f.text(3, 0, 5, UI_TEXT("Fan:"), Muted);
+  f.text(3, 5, 8, {reinterpret_cast<const char*>(fanName(control.fanRequested))}, Warning);
+  f.text(3, 13, 4, UI_TEXT("ACK:"), Muted);
+  f.text(3, 17, 9, {reinterpret_cast<const char*>(fanName(control.fanAcknowledged))}, Muted);
   if (issue != Issue::None && commandFailed(command)) line(f, 9, shortCommand(command), Error);
   if (d) {
     snprintf(b, sizeof(b), "Last response %lus ago", (unsigned long)(uint32_t(now - d->lastSeen) / 1000)); f.text(10, 0, 26, b, Muted);
@@ -223,6 +237,32 @@ void result(UiFrame& f, const UiModel& m) {
   }
   line(f, 14, m.working() ? UI_TEXT("Hold:Groups (continues)") : UI_TEXT("Click:Config Hold:Groups"), Muted);
 }
+void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+  const auto s = c.controlStatus(now); const auto& e = c.enableControl();
+  if (s.activity == Activity::Running) return;
+  const bool fault = s.activity == Activity::StopUnconfirmed || (s.activity == Activity::StartBlocked && s.blocker != Issue::NoProfile);
+  const uint8_t color = fault ? Error : Warning;
+  const bool full = m.page() == UiPage::Groups || m.page() == UiPage::Editor || m.page() == UiPage::Confirm || m.page() == UiPage::Result;
+  FlashText text = UI_TEXT("RECONCILING...");
+  if (s.activity == Activity::Standby) text = e.source() == EnableSource::Switch ? UI_TEXT("STANDBY: ENABLE_IN OFF") :
+      e.source() == EnableSource::Serial ? UI_TEXT("STANDBY: SERIAL OFF") : UI_TEXT("STANDBY: BOOT OFF");
+  else if (s.activity == Activity::Stopping) text = UI_TEXT("STOPPING...");
+  else if (s.activity == Activity::StopUnconfirmed) text = UI_TEXT("STOP UNCONFIRMED");
+  else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING AT ZERO A");
+  else if (s.activity == Activity::StartBlocked) text = s.blocker == Issue::NoProfile ? UI_TEXT("START: NEEDS PROFILE") : UI_TEXT("START BLOCKED");
+  if (full) {
+    f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, text, color);
+    if (fault) {
+      char b[9]; snprintf(b, sizeof(b), "PSU %u", unsigned(s.slot + 1)); f.text(1, 17, 5, b, color);
+    }
+  } else if (m.page() == UiPage::Units || m.page() == UiPage::Config || m.page() == UiPage::Detail) {
+    if (m.page() == UiPage::Detail) f.text(1, 0, 26, UI_TEXT("PSU INFO"), Accent);
+    const FlashText tag = fault ? UI_TEXT("CONTROL FAULT") : !e.enabled() ?
+        (e.source() == EnableSource::Switch ? UI_TEXT("OFF: SWITCH") : e.source() == EnableSource::Serial ? UI_TEXT("OFF: SERIAL") : UI_TEXT("OFF: BOOT")) :
+        s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : UI_TEXT("RECONCILING");
+    f.text(1, 9, 14, tag, color);
+  }
+}
 }
 void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   f.clear(); header(f, m, c, now);
@@ -240,13 +280,14 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
 #else
   if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios) UiLayout::controls(f,m);
 #endif
+  controlBanner(f, m, c, now);
 #if PSU_UI_DEBUG
   f.text(0,23,3,UI_TEXT("SIM"),Warning);
   // Preserve pagination alongside the permanent SIM mark.
   if (m.page()==UiPage::Groups || m.page()==UiPage::Units) {
     char page[14]; const uint8_t rank=m.page()==UiPage::Groups ? m.groupRank()/3+1 : m.unitRank()/2+1;
     const uint8_t pages=m.page()==UiPage::Groups ? (m.groupCount()+2)/3 : (m.unitCount()+1)/2;
-    snprintf(page,sizeof(page),"Page %u/%u",unsigned(rank),unsigned(pages)); f.text(1,18,8,page,Muted);
+    snprintf(page,sizeof(page),"%u/%u",unsigned(rank),unsigned(pages)); f.text(1,23,3,page,Muted);
   }
 #endif
   if (m.page() != UiPage::Result && m.working()) line(f, 14,

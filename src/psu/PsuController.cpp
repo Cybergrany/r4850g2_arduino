@@ -9,6 +9,10 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   if (!validConfig(c)) return Result::Invalid;
   reconcileSessions(c);
   config_ = c; ++revision_; voltageSynced_ = restoreBlocked_ = 0;
+  controlActive_ = controlWaiting_ = controlVerified_ = false;
+  for (auto& u : control_) u = {};
+  enable_.boot(resume && c.autoResume);
+  config_.autoResume = enable_.enabled();
   currentSynced_ = 0;
   voltageCommissioned_ = verifying_ = identityChecked_ = false;
   report_ = {};
@@ -126,28 +130,23 @@ void PsuController::reconcileSessions(const Configuration& next) {
       sessionAh_[i] = 0; sessionSeen_ &= uint8_t(~(1U << i));
     }
 }
-Result PsuController::setAutoResume(bool on) { auto c = config_; c.autoResume = on; return change(c); }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
 const Psu* PsuController::deviceForSlot(uint8_t slot, uint32_t now) const {
   return slot < count() ? discovery_.identity(config_.units[slot].identity, now) : nullptr;
 }
 Issue PsuController::issue(uint8_t i, uint32_t now) const {
-  if (config_.deploymentId != deployment::id) return Issue::DeploymentMismatch;
-  if (i >= count()) return Issue::Invalid;
-  if (!identified(config_.units[i].identity)) return Issue::Unbound;
+  const auto route = routingIssue(i, now);
+  if (route != Issue::None) return route;
   if (groupFor(config_, i) < 0) return Issue::Unassigned;
-  // Distinguish duplicate identity from absence: it must never be overrideable.
-  for (uint8_t j = 0; j < Discovery::capacity; ++j) {
-    const auto& d = discovery_.device(j);
-    if (d.conflict && d.fresh(now, limits::identityLeaseMs) && sameIdentity(d.identity, config_.units[i].identity)) return Issue::Conflict;
-  }
+  if (control_[i].fault != CommandState::Idle) return Issue::ControlFault;
   const Psu* d = deviceForSlot(i, now);
-  if (!d || !d->fresh(now, staleMs())) return Issue::Missing;
-  if (!d->verified(now)) return Issue::IdentityPending;
   const auto& t = d->telemetry;
   if (!t.dataSeen || uint32_t(now - t.lastData) > staleMs()) return Issue::NoTelemetry;
   if (!t.broadcastSeen || uint32_t(now - t.lastBroadcast) > staleMs()) return Issue::NoTelemetry;
-  if (!t.ready) return Issue::NotReady;
+  // A confirmed intentional standby is not a failed unit and must not prevent
+  // its own release. Readiness is checked again after the wake ACK.
+  if (!t.ready && !control_[i].standbyConfirmed && control_[i].phase != ControlPhase::Starting &&
+      control_[i].phase != ControlPhase::Wake) return Issue::NotReady;
   return Issue::None;
 }
 GroupStatus PsuController::groupStatus(uint8_t g, uint32_t now) const {
@@ -216,6 +215,15 @@ ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool 
     p.addresses[i] = d->address; p.epochs[i] = d->epoch; p.recipients |= 1U << i;
   }
   if (!p.recipients && p.blocker == Issue::None) p.blocker = Issue::Missing;
+  if (p.blocker == Issue::None) {
+    for (uint8_t i = 0; i < count(); ++i) if (p.recipients & (1U << i)) {
+      if (control_[i].fault != CommandState::Idle) { p.blocker = Issue::ControlFault; break; }
+      if (control_[i].phase != ControlPhase::Prepared && control_[i].phase != ControlPhase::Online)
+        p.blocker = Issue::Reconciling;
+      if (op == Operation::GroupCurrent && control_[i].phase != ControlPhase::Online) p.blocker = Issue::Reconciling;
+    }
+  }
+  if (!enable_.enabled() && op != Operation::Offline) p.blocker = Issue::Disabled;
   return p;
 }
 Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
@@ -242,6 +250,7 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) if (fresh.recipients & (1U << i)) observedEpoch_[i] = fresh.epochs[i];
   ++revision_; restoreBlocked_ &= uint8_t(~fresh.recipients); restorePending_ &= uint8_t(~fresh.recipients);
   beginReport(p.operation, fresh.members, fresh.recipients, fresh.missing);
+  jobStarted_ = false;
   pending_ = fresh.recipients; waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
   return Result::Ok;
 }
@@ -277,6 +286,7 @@ void PsuController::serviceTransmit(uint32_t now) {
     report_.units[jobSlot_].state = CommandState::TransportError;
     advance(false);
   }
+  if (txPurpose_ == TxPurpose::Control && controlActive_) controlComplete(CommandState::TransportError, now);
 }
 void PsuController::advance(bool success) {
   const uint8_t bit = uint8_t(1U << jobSlot_);
@@ -287,6 +297,7 @@ void PsuController::advance(bool success) {
 }
 void PsuController::receive(const CanFrame& f, uint32_t now) {
   discovery_.receive(f, now);
+  controlReceive(f, now);
   int8_t slot = -1;
   for (uint8_t i = 0; i < count(); ++i) {
     const auto* d = deviceForSlot(i, now);
@@ -308,9 +319,7 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
     if (d && d->epoch == job_.epochs[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None)
       identityChecked_ = true;
   }
-  if (waiting_ && slot == jobSlot_ && protocol::isReply(f) && protocol::command(f.id) == protocol::setCommand &&
-      (f.data[0] == 1 || f.data[0] == 0x21) && f.data[1] == report_.units[jobSlot_].reg &&
-      protocol::readBigEndian(f.data + 4) == expected_) {
+  if (waiting_ && slot == jobSlot_ && protocol::settingReply(f, report_.units[jobSlot_].reg, expected_)) {
     const auto* d = deviceForSlot(jobSlot_, now);
     if (d && d->epoch == job_.epochs[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None) {
       const bool ok = f.data[0] == 1;
@@ -326,6 +335,28 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
   if (observer_) observer_(context_, slot, f);
 }
 void PsuController::runJob(uint32_t now) {
+  if (job_.operation != Operation::Offline && !enable_.enabled()) { cancelJob(); return; }
+  if (job_.operation != Operation::Offline && !controlsOnline(job_.recipients)) {
+    if (jobStarted_) {
+      for (uint8_t i = 0; i < count(); ++i) if (job_.recipients & (1U << i)) {
+        if (control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) {
+          report_.failed |= 1U << i; report_.succeeded &= uint8_t(~(1U << i)); report_.units[i].state = CommandState::Changed;
+        }
+      }
+      const uint8_t incomplete = report_.recipients & uint8_t(~(report_.failed | report_.succeeded));
+      report_.skipped |= incomplete;
+      for (uint8_t i = 0; i < count(); ++i) if (incomplete & (1U << i)) report_.units[i].state = CommandState::Incomplete;
+      report_.active = false; pending_ = 0; waiting_ = verifying_ = identityChecked_ = false; return;
+    }
+    for (uint8_t i = 0; i < count(); ++i) if (job_.recipients & (1U << i)) {
+      if (control_[i].fault != CommandState::Idle || routingIssue(i, now) != Issue::None) {
+        cancelJob(); return;
+      }
+    }
+    const auto state = controlStatus(now);
+    if (state.blocker != Issue::None) { cancelJob(); return; }
+    return; // Reconciliation owns standby/zero/wake; user jobs cannot bypass it.
+  }
   if (waiting_) {
     const auto* d = deviceForSlot(jobSlot_, now);
     if (!d || d->epoch != job_.epochs[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
@@ -362,7 +393,7 @@ void PsuController::runJob(uint32_t now) {
       return;
     }
   }
-  if (txPending_ || uint32_t(now - lastSend_) < limits::commandGapMs) return;
+  if (controlActive_ || sentThisTick_ || txPending_ || uint32_t(now - lastSend_) < limits::commandGapMs) return;
   for (jobSlot_ = 0; !(pending_ & (1U << jobSlot_)); ++jobSlot_) {}
   const auto* d = deviceForSlot(jobSlot_, now);
   if (!d || d->epoch != job_.epochs[jobSlot_] || d->address != job_.addresses[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
@@ -370,10 +401,13 @@ void PsuController::runJob(uint32_t now) {
   }
   const bool current = secondPhase_ || job_.operation == Operation::GroupCurrent;
   const bool offline = job_.operation == Operation::Offline;
+  if (current && !offline && job_.current[jobSlot_] >= control::fanOutputCurrentThreshold &&
+      control_[jobSlot_].fanAcknowledged != FanMode::Max) return;
   const uint8_t reg = current ? (offline ? protocol::OfflineCurrent : protocol::OnlineCurrent) :
       (offline ? protocol::OfflineVoltage : protocol::OnlineVoltage);
   expected_ = current ? protocol::encodeCurrent(job_.current[jobSlot_], config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage);
   if (!verifying_) {
+    jobStarted_ = true;
     report_.units[jobSlot_] = {CommandState::VerifyingIdentity, reg, expected_};
     verifying_ = true; identityChecked_ = false; verificationStarted_ = now;
     if (!send(protocol::request(d->address, protocol::infoCommand), TxPurpose::Job)) {
@@ -392,19 +426,7 @@ void PsuController::runJob(uint32_t now) {
   if (!waiting_) { report_.units[jobSlot_].state = CommandState::TransportError; advance(false); }
 }
 void PsuController::restore(uint32_t now) {
-  for (uint8_t i = 0; i < count(); ++i) {
-    const auto* d = deviceForSlot(i, now);
-    const uint32_t epoch = d && issue(i, now) == Issue::None ? d->epoch : 0;
-    if (epoch != observedEpoch_[i]) {
-      voltageSynced_ &= uint8_t(~(1U << i));
-      currentSynced_ &= uint8_t(~(1U << i));
-      if (running_ & (1U << i)) restorePending_ |= 1U << i;
-      // A real disconnect/identity epoch transition permits one recovery attempt.
-      restoreBlocked_ &= uint8_t(~(1U << i));
-      observedEpoch_[i] = epoch;
-    }
-  }
-  if (busy() || !restorePending_) return;
+  if (!enable_.enabled() || busy() || !restorePending_ || !controlsOnline(membersMask(count()))) return;
   // Binding/adopting or adding slots never authorizes voltage by itself. Keep
   // the pending installation observable until an explicit complete voltage apply.
   if (config_.operating.voltageMask != membersMask(count())) return;
@@ -423,6 +445,7 @@ void PsuController::restore(uint32_t now) {
   }
   pending_ = recipients; restorePending_ &= uint8_t(~recipients);
   beginReport(Operation::Restore, recipients, recipients);
+  jobStarted_ = false;
   waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::tick(uint32_t now) {
@@ -432,6 +455,7 @@ void PsuController::tick(uint32_t now) {
   CanFrame f;
   for (uint8_t n = 0; n < 32 && transport_.receive(f); ++n) receive(f, now);
   discovery_.tick(now, staleMs());
+  controlTick(now);
   restore(now);
   if (busy()) runJob(now);
   // Identity and telemetry refresh continue even during a long multi-unit job.

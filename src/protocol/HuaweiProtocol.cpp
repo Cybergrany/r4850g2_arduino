@@ -34,6 +34,16 @@ CanFrame setting(uint8_t addr, uint8_t reg, uint16_t value) {
   f.data[7] = uint8_t(value);
   return f;
 }
+CanFrame toggle(uint8_t addr, uint8_t reg, bool value) {
+  auto f = setting(addr, reg, 0); f.data[3] = value ? 1 : 0; return f;
+}
+bool settingReply(const CanFrame& f, uint8_t reg, uint16_t value) {
+  if (!isReply(f) || command(f.id) != setCommand ||
+      (f.data[0] != 1 && f.data[0] != 0x21) || f.data[1] != reg) return false;
+  const auto expected = reg == Standby || reg == FanMode ? toggle(1, reg, value != 0) : setting(1, reg, value);
+  for (uint8_t i = 2; i < 8; ++i) if (f.data[i] != expected.data[i]) return false;
+  return true;
+}
 uint16_t encodeVoltage(uint16_t cv) { return uint32_t(cv) * fixedPointScale / 100; }
 uint16_t encodeCurrent(uint16_t ca, uint16_t rated) {
   // Reference v1.2: the wire value is a fraction of rated current, not A * 20.

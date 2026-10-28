@@ -2,7 +2,7 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-performed on 2026-10-17. No firmware upload or physical touch/multi-PSU test was performed.
+extended with fan/enable/reconciliation coverage on 2026-10-27. No firmware upload or physical touch/multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
@@ -11,7 +11,8 @@ PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560 -e mega2560_serial -e mega2560_display \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
-  -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local -j 4
+  -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
+  -e mega2560_touch_enable -j 4
 python3 tools/check_debug_build.py
 git diff --check
 ```
@@ -19,7 +20,7 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All eleven profiles build successfully
+All twelve profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -27,21 +28,22 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6534 | 82868 |
-| `mega2560_serial` | 4734 | 52156 |
-| `mega2560_display` | 6509 | 79608 |
-| `mega2560_local` | 5312 | 57290 |
-| `mega2560_minimal` | 3470 | 22160 |
-| `mega2560_touch` | 6844 | 92368 |
-| `mega2560_touch_wheel` | 6869 | 93804 |
-| `mega2560_ui_debug` | 6522 | 81222 |
-| `mega2560_touch_debug` | 6832 | 90578 |
-| `mega2560_touch_local` | 5596 | 64530 |
-| `mega2560_touch_debug_local` | 5566 | 62870 |
+| `mega2560` | 6829 | 93748 |
+| `mega2560_serial` | 5001 | 62894 |
+| `mega2560_display` | 6804 | 90990 |
+| `mega2560_local` | 5537 | 64598 |
+| `mega2560_minimal` | 3657 | 28070 |
+| `mega2560_touch` | 7139 | 103728 |
+| `mega2560_touch_wheel` | 7164 | 105196 |
+| `mega2560_ui_debug` | 6823 | 93180 |
+| `mega2560_touch_debug` | 7133 | 103648 |
+| `mega2560_touch_local` | 5821 | 72242 |
+| `mega2560_touch_debug_local` | 5783 | 72036 |
+| `mega2560_touch_enable` | 7139 | 104010 |
 
-The touch/serial build uses 83.5% static RAM and 36.4% flash, leaving 1348 bytes
-for stack/runtime use (1323 bytes with touch and wheel). Omitting serial leaves
-2596 bytes in the production touch profile. Static RAM excludes worst-case stack/interrupt nesting.
+The touch/serial build uses 87.1% static RAM and 40.8% flash, leaving 1053 bytes
+for stack/runtime use (1028 bytes with touch and wheel). Omitting serial leaves
+2371 bytes in the production touch profile. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
@@ -61,7 +63,8 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass. UI navigation, formatting and persistence use the production
+Both suites pass: **425086 host checks** and **952 touch/simulator checks** with
+UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
 access and interruption boundary, not hundreds of thousands of independent cases.
@@ -145,8 +148,8 @@ Meaningful scenarios include:
   Simulated save/restart/reset and disabled auto-resume retain their semantics.
 
 The [generated preview](ui-preview.html) uses frames exported from those tests
-and the pinned Adafruit GFX font. Its pixel layout was inspected; all 22 captured
-screens' JavaScript drawing paths execute, including enlarged editor digits and
+and the pinned Adafruit GFX font. The new standby/failure pixel layouts were
+inspected with that font; captured screens exercise enlarged editor digits and
 readable text equivalents. It is not an LCD test. Touch host tests substitute
 raw coordinates and display/time/serial adapters; they do not emulate the ADC,
 electrical SPI transactions or physical display response.
@@ -217,3 +220,31 @@ power tests only after commissioning appropriate limits and defaults.
     saves after physical reset. Then use a production touch profile with every
     PSU broadcasting; monitor `touch status` and `diag bus` during sustained input,
     calibration and saving. Record actual stack margin and receive/loop counters.
+
+## Fan, enable and reconciliation coverage
+
+The host suite also verifies exact byte-3 standby/fan frames and complete echoed
+ACK payloads; first-boot standby even with autoresume OFF; all-unit zero/wake
+barriers before positive current; saved-profile versus draft isolation; live OFF
+preemption; boot OR and latest-wins/debounced switch handling, including millis
+wrap and a serial command during initial debounce. EEPROM interruption and
+calibration-tail coverage are retained without a schema change.
+
+Fault injection covers missing/readdressed units and identity lease expiry;
+rejected standby/MAX; bounded missing ACKs and late ACKs; missing fresh current;
+nonzero current after zero-limit wake; unexpected output while held; explicit
+reconciliation recovery; fan temperature/requested/measured-current triggers;
+invalid/stale sensors; 30-second hysteresis; no repeat writes at steady demand;
+and a pending AUTO overtaken by a new hot reading. UI assertions check source
+labels, color, fault details and continued telemetry. Simulator tests run with
+ENABLE_IN enabled at compile time but without GPIO APIs, proving the debug
+application path remains virtual.
+
+Before using the new sequence on hardware, verify `0x0132` and `0x0134` acceptance
+on the actual G2 firmware, actual standby current, zero-current retention across
+wake, readiness timing, and audible/physical Auto/Max fan response. Test live OFF
+during apply and loss of CAN during stop: no unconfirmed stop may appear as
+standby. Exercise the wired D26 switch, serial overrides and power cycling with
+the switch held ON (boot OR deliberately permits restarting). Confirm absence
+and replacement cases with all intended PSUs, and measure stack/interrupt margin
+in the chosen Mega profile. Software simulation does not establish these results.

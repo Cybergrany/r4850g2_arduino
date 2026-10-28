@@ -1,10 +1,12 @@
 #pragma once
 #include "Discovery.h"
+#include "PsuControl.h"
 namespace psu {
 enum class Result : uint8_t { Ok, Invalid, Busy, TransportError, Blocked, ConfirmRequired, Changed };
 enum class Issue : uint8_t {
   None, Missing, Unbound, Unassigned, IdentityPending, Conflict, NoTelemetry,
-  NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity
+  NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity,
+  Disabled, Reconciling, ControlFault, NoProfile
 };
 enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
@@ -35,6 +37,7 @@ struct CurrentCheck {
   uint8_t slot;
   uint16_t share, maximum;
 };
+struct ControlStatus { Activity activity; Issue blocker; uint8_t slot; };
 class PsuController {
  public:
   explicit PsuController(CanTransport& transport);
@@ -55,6 +58,12 @@ class PsuController {
   uint16_t groupCurrentMaximum(uint8_t group) const;
   uint32_t configurationRevision() const { return revision_; }
   Result setAutoResume(bool enabled);
+  void sampleEnableInput(bool active, uint32_t now);
+  const EnableControl& enableControl() const { return enable_; }
+  const UnitControl& unitControl(uint8_t slot) const { return control_[slot]; }
+  ControlStatus controlStatus(uint32_t now) const;
+  // Explicit retry after an operator has reviewed a latched control failure.
+  void reconcile();
   Result setPollInterval(uint16_t ms);
   int8_t groupIndex(const char* name) const;
   const Psu* deviceForSlot(uint8_t slot, uint32_t now) const;
@@ -98,7 +107,7 @@ class PsuController {
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
   Result change(const Configuration& candidate, uint8_t invalidate = 0);
-  enum class TxPurpose : uint8_t { Background, Job, ManualRead };
+  enum class TxPurpose : uint8_t { Background, Job, ManualRead, Control };
   bool send(const CanFrame& frame, TxPurpose purpose = TxPurpose::Background);
   void serviceTransmit(uint32_t now);
   void reconcileSessions(const Configuration& next);
@@ -107,7 +116,26 @@ class PsuController {
   void beginReport(Operation operation, uint8_t requested, uint8_t recipients, uint8_t skipped = 0);
   void runJob(uint32_t now);
   void restore(uint32_t now);
+  Issue routingIssue(uint8_t slot, uint32_t now) const;
+  void enableChanged(bool wasEnabled);
+  void cancelJob();
+  void controlTick(uint32_t now);
+  void controlReceive(const CanFrame& frame, uint32_t now);
+  void controlCommand(uint8_t slot, uint8_t reg, uint16_t value, uint32_t now);
+  void controlComplete(CommandState state, uint32_t now);
+  void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now);
+  void controlPhase(uint8_t slot, ControlPhase phase, uint32_t now);
+  void updateFan(uint8_t slot, uint32_t now);
+  bool releaseAllowed(uint32_t now) const;
+  bool controlsOnline(uint8_t mask) const;
+  uint16_t reconciliationVoltage() const;
   CanTransport& transport_;
+  EnableControl enable_;
+  UnitControl control_[PSU_MAX_UNITS];
+  uint32_t controlStarted_ = 0, controlEpoch_ = 0;
+  uint16_t controlValue_ = 0;
+  uint8_t controlSlot_ = 0, controlRegister_ = 0;
+  bool controlActive_ = false, controlWaiting_ = false, controlVerified_ = false;
   Configuration config_;
   Discovery discovery_;
   uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;
@@ -123,6 +151,7 @@ class PsuController {
   bool txPending_ = false, sentThisTick_ = false;
   TxPurpose txPurpose_ = TxPurpose::Background;
   bool ready_ = false, waiting_ = false, secondPhase_ = false;
+  bool jobStarted_ = false;
   bool voltageCommissioned_ = false, verifying_ = false, identityChecked_ = false;
   uint32_t verificationStarted_ = 0;
   uint8_t pending_ = 0, jobSlot_ = 0;

@@ -16,7 +16,7 @@ queue; saturation drops trace entries with a warning, not controller ACK handlin
 | Close/reopen monitor without MCU reset | Same controller state; raw/watch may still be enabled until Ctrl-X or `hello` |
 | USB disconnect with independent board power | Controller keeps running; console cannot detect this event |
 | USB unplug when USB is the only power | Board powers off; reconnect is a new boot |
-| DTR reset or power cycle | RAM/telemetry/unfinished jobs reset; EEPROM/defaults load, saved `autoresume` policy waits for verified, ready members |
+| DTR reset or power cycle | RAM/telemetry/unfinished jobs reset; EEPROM/defaults load, managed units reconcile through standby; saved `autoresume`/initial ENABLE_IN determine release |
 
 Arduino documents the Mega's [USB DTR to reset connection](https://store.arduino.cc/products/arduino-mega-2560-rev3).
 A terminal opening the port can therefore cause a real MCU reset, not just a
@@ -124,3 +124,11 @@ hook. Debug builds add `ui-debug status`, `ui-debug scenario NAME`,
 backpressure rules apply. See [TOUCH.md](TOUCH.md) for the full workflow.
 `PSU_UI_DEBUG` excludes hardware CAN and uses volatile RAM instead of EEPROM;
 startup and storage replies identify simulation explicitly.
+
+## Live enable and reconciliation
+
+`autoresume on/off` now changes the live enable request as well as its savable
+boot preference. OFF interrupts active apply work; console reset/reconnect does
+not. `diag control` reports the winning serial/switch/boot source, physical
+switch state, reconciliation and per-unit standby/fan outcomes. `reconcile`
+explicitly retries after faults are reviewed. See [CONTROL.md](CONTROL.md).

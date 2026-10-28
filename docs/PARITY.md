@@ -73,7 +73,7 @@ its own saved settings. [Craig's hardware review](https://www.beyondlogic.org/re
 - Voltage validation is 41.5–58.5 V online and 48–58.5 V offline. ACKs report PSU
   acceptance, not actual load delivery or protection status.
 - No automatic model/rating identification, full alarm decoder, PSU address
-  setter, fan control, standby setter, or input-current setter is implemented.
+  setter or input-current setter is implemented.
   These are outside the pinned Craig reference's implemented controls.
 - The identity check before each write reduces address-reuse risk; there is no
   protocol transaction that atomically proves identity and sets a value. Fast
@@ -87,3 +87,18 @@ its own saved settings. [Craig's hardware review](https://www.beyondlogic.org/re
 Derived protocol behaviour retains Craig Peacock's GPL-3.0-or-later attribution
 in source and the repository's [LICENSE](../LICENSE). Historical sketch/hardware
 assets retain their existing provenance.
+
+## Standby and fan controls (2026-10-27)
+
+The [documented register set format](https://github.com/patagonaa/huawei-r48xx#80-register-set-request)
+puts standby `0x0132` and fan mode `0x0134` in byte 3 (0/1), with zeroes
+in bytes 2 and 4–7. Full echoed payloads are matched for ACKs. The same source
+marks `0x0114` and `0x0187` unsupported on G2; neither is used here.
+
+The [ESPHome component's persistence table](https://github.com/patagonaa/esphome-huawei-r4850#persistence)
+reports standby as volatile/CAN-connected and fan Auto/Max as persistent in the
+PSU, including when disconnected. This motivates transition-only fan writes and
+explicit commissioning of offline V/A defaults. The guarded standby/zero/wake
+sequence is controller policy based on those operations, not a documented atomic
+G2 safe-start transaction. Verify register acceptance and retained settings on
+the actual hardware. [Implemented policy and limitations](CONTROL.md).

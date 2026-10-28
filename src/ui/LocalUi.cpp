@@ -5,6 +5,7 @@
 #include <stdio.h>
 namespace psu {
 void LocalUi::begin() {
+  lastInput_ = millis(); // A runtime UI restart begins a new inactivity period.
   available_ = display_.begin(); frame_.clear(); model_.tick(millis());
 #if PSU_ENABLE_ENCODER
   wheel_.begin();

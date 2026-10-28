@@ -21,7 +21,9 @@ class SerialConsole {
   void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control };
+  void printControl(uint32_t now);
+  uint16_t controlNotice_ = 0xffff;
   void execute();
   void resetSession();
   void beginOutput();

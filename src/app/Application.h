@@ -26,6 +26,7 @@ class Application {
   DebugScenario desiredScenario_ = DebugScenario::Healthy;
   Result scenarioResult_ = Result::Ok;
   bool priming_ = true, changed_ = false;
+  bool debugInputPresent_ = false, debugInput_ = false;
   UiAction debugRequest_;
   void resetDebug(bool restart, bool erase, DebugScenario scenario);
   void debugTick(uint32_t now);

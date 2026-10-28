@@ -144,7 +144,8 @@ with its MIT notice retained in `Xpt2046Input.cpp`.
 
 Debug startup seeds eight bound units across four groups (3/2/2/1 members).
 It performs normal simulated identity checks and restores the fixture's
-operating settings before introducing a scenario. Allow several seconds for
+operating settings before introducing a scenario. Reconciliation now includes
+standby, fan, voltage, zero current and wake checks; allow tens of seconds for
 this priming; `ui-debug status` reports it. No physical CAN or EEPROM is used.
 
 Select Tools > SIM scenarios, turn/use Previous/Next, then Run. The final two
@@ -180,6 +181,11 @@ starts from the same commissioned fixture. Names and expected exercises:
 | `extremes` | Large power readings, negative input temperature and an eight-character group name |
 | `wrong-deployment` | Fixture belongs to another deployment; writes blocked |
 | `identity-pending` | Identity responses cease; wait for the identity lease to expire |
+| `standby` | Intentional OFF banner; authorized profile retained |
+| `fan-hot`, `fan-cool`, `fan-sensor-fault` | MAX, cooldown to AUTO, or invalid-temperature fallback |
+| `fan-reject` | Required MAX rejected; startup blocked with per-unit fault |
+| `standby-reject` | Stop not acknowledged; red STOP UNCONFIRMED banner |
+| `wake-current` | Nonzero current after wake at zero; standby requested and fault latched |
 
 For `identity-timeout`, submit an apply while the prior verified identity is
 still fresh; after its lease expires, preview correctly blocks instead.
@@ -210,3 +216,8 @@ writer gating and simulation faults. They do not establish physical touch
 accuracy, stack margin or SPI/CAN timing. On production hardware, hold +/- and
 navigate while all PSUs broadcast; inspect `touch status` and the existing
 `diag bus` overflow/loop counters. Debug mode cannot measure real CAN contention.
+
+`ui-debug enable-input on/off` feeds a virtual switch through the normal debounce
+and latest-event-wins logic. Debug builds never read ENABLE_IN GPIO, including
+when its build flag is enabled. See [CONTROL.md](CONTROL.md) for fan thresholds,
+startup policy and control diagnostics.

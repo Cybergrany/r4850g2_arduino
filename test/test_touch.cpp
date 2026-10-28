@@ -105,7 +105,7 @@ struct Rig {
   SimulatedCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
   Rig():controller(can),memory(bytes) { can.reset(); CHECK(controller.configure(debugConfiguration(),true)==Result::Ok); CHECK(controller.begin()); }
   void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); memory.stepSave(); }
-  void ready() { for(unsigned i=0;i<1600 && (!controller.voltageSynchronized(0) || controller.busy());++i) step();
+  void ready() { for(unsigned i=0;i<4000 && (controller.report().succeeded!=membersMask(controller.count()) || controller.busy());++i) step();
     for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(controller.issue(i,clockNow)==Issue::None && controller.voltageSynchronized(i)); }
 };
 void simulationTests() {
@@ -236,6 +236,7 @@ void applicationScenarios() {
   tick(800); CHECK(Serial.output.find("SIM:")!=std::string::npos);
   CHECK(Serial.output.find("CAN ready")==std::string::npos);
   command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
+
   // Complete the real startup wizard through Application with fake raw samples.
   command("touch calibrate"); tick(5);
   for(uint8_t i=0;i<5;++i) {
@@ -248,6 +249,7 @@ void applicationScenarios() {
   for(uint8_t s=0;s<uint8_t(DebugScenario::Count);++s) {
     command(std::string("ui-debug scenario ")+scenarioName(DebugScenario(s)).data); tick(1900);
     command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
+
     CHECK(Serial.output.find("ERR")==std::string::npos);
     CHECK(hasText(appFrame,"SIM"));
     if (DebugScenario(s)==DebugScenario::Empty) {
@@ -257,6 +259,12 @@ void applicationScenarios() {
     else if (DebugScenario(s)==DebugScenario::Extremes) CHECK(hasText(appFrame,"LONGGRP1"));
     CHECK(Serial.output.find("ERR console output truncated")==std::string::npos);
     switch (DebugScenario(s)) {
+      case DebugScenario::Standby:
+        CHECK(hasText(appFrame,"STANDBY: SERIAL OFF")); snapshot("touch-standby",appFrame); break;
+      case DebugScenario::StandbyReject:
+        CHECK(hasText(appFrame,"STOP UNCONFIRMED")); snapshot("touch-stop-unconfirmed",appFrame); break;
+      case DebugScenario::FanReject: case DebugScenario::WakeCurrent:
+        CHECK(hasText(appFrame,"START BLOCKED")); snapshot("touch-control-fault",appFrame); break;
       case DebugScenario::Changed:
         editCurrent(); CHECK(hasText(appFrame,"CONFIG / DEVICES CHANGED")); snapshot("touch-changed",appFrame); break;
       case DebugScenario::Missing:
@@ -291,6 +299,13 @@ void applicationScenarios() {
   // respect that policy rather than waiting forever for a full-fixture restore.
   command("autoresume off"); command("save"); tick(300); command("ui-debug restart"); tick(800);
   command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
+  command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
+  CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
+  command("autoresume off"); tick(1000); command("diag control"); tick(150);
+  CHECK(Serial.output.find("enable=OFF source=autoresume/serial")!=std::string::npos && hasText(appFrame,"STANDBY: SERIAL OFF"));
+  command("ui-debug enable-input off"); tick(10); command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
+  CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
+
 }
 
 }

@@ -46,7 +46,7 @@ See [serial connection behaviour](docs/SERIAL.md).
 | `mega2560_touch_debug_local` | SIM touch/editor; no CAN | No | No |
 
 Commission identities/groups using a serial-enabled build before using
-`mega2560_local`; voltage/current editing is then available on the display. Reboot restoration is separately opt-in. Dependencies
+`mega2560_local`; voltage/current editing is then available on the display. Live enable/standby and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
 The supported target is Mega 2560, with a **512-byte EEPROM budget** even though
 Mega provides more. The original Nano was already at 99.7% flash.
@@ -108,8 +108,11 @@ outputs off when groups are deleted or members disappear.
 Controller EEPROM stores drafts **separately** from the authorized operating
 profile. `save` alone cannot activate drafts. A known returning unit can restore
 its authorized settings once the full installation is identified and ready.
-`autoresume on` followed by `save` explicitly enables this after a controller
-reboot. PSU nonvolatile defaults are a separate, explicit `offline all` operation.
+`autoresume on/off` controls live enable/standby; `save` persists the preference.
+Boot and returning units reconcile through standby, maximum fan, common voltage,
+zero current and verified wake before restoring authorized current. Optional
+ENABLE_IN is a latching switch with latest-event-wins semantics. See
+[control policy and wiring](docs/CONTROL.md). PSU nonvolatile defaults are a separate, explicit `offline all` operation.
 
 Old EEPROM records are preserved for inspection with `legacy`. Compatible
 uniform settings migrate to an unbound GROUP1 in RAM with auto-resume disabled;

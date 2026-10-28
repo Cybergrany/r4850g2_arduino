@@ -8,7 +8,7 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 sources = [
     "src/config/ChargerConfig.cpp", "src/protocol/HuaweiProtocol.cpp",
-    "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp",
+    "src/psu/PsuControl.cpp", "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp",
     "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "src/psu/Presentation.cpp",
     "src/ui/Touch.cpp", "src/ui/UiLayout.cpp", "src/ui/UiModel.cpp", "src/ui/UiFrame.cpp", "src/ui/UiView.cpp", "test/test_main.cpp",
 ]

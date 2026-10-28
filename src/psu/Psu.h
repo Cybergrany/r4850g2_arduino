@@ -2,7 +2,7 @@
 #include "../config/ChargerConfig.h"
 #include "../protocol/HuaweiProtocol.h"
 namespace psu {
-enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed };
+enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed, ObservationTimeout };
 struct CommandStatus { CommandState state; uint8_t reg; uint32_t rawValue; };
 struct Telemetry {
   float values[protocol::MetricCount];

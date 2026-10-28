@@ -114,7 +114,7 @@ void SerialConsole::storageReply(StorageResult r) {
 #endif
   switch (r) {
     case StorageResult::Ok: io_.println(F("EEPROM OK; saved drafts and authorized profile are separate")); break;
-    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; no settings applied")); break;
+    case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled bindings reconcile in standby")); break;
     case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs 512 bytes")); break;
     case StorageResult::InvalidConfig: io_.println(F("ERR invalid configuration")); break;
     case StorageResult::WriteFailed: io_.println(F("ERR EEPROM verification failed")); break;
@@ -160,6 +160,7 @@ void SerialConsole::execute() {
   if (!strcmp(args[0], "legacy") && argc == 1) { startView(View::Legacy); return; }
   if (!strcmp(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
   if (!strcmp(args[0], "diag") && argc >= 2) {
+    if (!strcmp(args[1], "control") && argc == 2) { startView(View::Control); return; }
     if (!strcmp(args[1], "bus") && argc == 2) { startView(View::Bus); return; }
     if (!strcmp(args[1], "group") && argc == 3) {
       const int8_t g = controller_.groupIndex(args[2]);
@@ -207,7 +208,7 @@ void SerialConsole::execute() {
       io_.println(F("BLOCKED different identity: verify replacement/physical wiring, then adopt <slot> <id> <rated-A>")); return;
     }
     const auto result = controller_.bind(n - 1, id, value, now_); reply(result);
-    if (result == Result::Ok) io_.println(F("Binding confirms compatible hardware/rating; apply common voltage before group current. No PSU writes made."));
+    if (result == Result::Ok) io_.println(F("Binding accepted; unit is now managed and will reconcile in standby. Check diag control before enable/apply."));
     else io_.println(F("Binding unchanged; diag bus must show a fresh verified unique identity. Check rating and existing bindings."));
     return;
   }
@@ -240,7 +241,11 @@ void SerialConsole::execute() {
     }
   }
   if (!strcmp(args[0], "autoresume") && argc == 2 && (!strcmp(args[1], "on") || !strcmp(args[1], "off"))) {
-    reply(controller_.setAutoResume(!strcmp(args[1], "on"))); return;
+    reply(controller_.setAutoResume(!strcmp(args[1], "on")));
+    io_.println(F("Live enable request changed; save persists it. Latest switch edge or serial command wins. diag control")); return;
+  }
+  if (!strcmp(args[0], "reconcile") && argc == 1) {
+    controller_.reconcile(); io_.println(F("Reconciliation restarted; active apply cancelled; authorized profile retained. diag control")); return;
   }
   if (!strcmp(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
   if ((!strcmp(args[0], "apply") || !strcmp(args[0], "preview") || !strcmp(args[0], "offline")) && argc >= 2 && argc <= 3) {
@@ -417,6 +422,13 @@ void SerialConsole::tick(uint32_t now) {
     wasBusy_ = false; return;
   }
   wasBusy_ = controller_.busy();
+  const auto controlState = controller_.controlStatus(now);
+  const uint16_t controlKey = uint16_t(controlState.activity) | uint16_t(controlState.blocker) << 3 |
+      uint16_t(controlState.slot) << 8 | uint16_t(controller_.enableControl().source()) << 12 |
+      uint16_t(controller_.enableControl().enabled()) << 14;
+  if (controlNotice_ != controlKey && !length_ && view_ == View::None) {
+    controlNotice_ = controlKey; beginOutput(); printControl(now); prompt(); return;
+  }
   if (traceDrops_ != reportedTraceDrops_ && uint32_t(now - lastTraceNotice_) >= 1000) {
     reportedTraceDrops_ = traceDrops_; lastTraceNotice_ = now; beginOutput();
     io_.print(F("WARN trace/description frames dropped=")); io_.print(traceDrops_);
@@ -459,6 +471,16 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.print(F(" alarm-raw="));
     if (d->telemetry.alarmSeen) { io_.print(F("0x")); io_.println(d->telemetry.alarmBits, HEX); }
     else io_.println(F("unknown"));
+  } else if (field == 4) {
+    const auto& u = controller_.unitControl(i);
+    io_.print(F("  control=")); io_.print(phaseName(u.phase)); io_.print(F(" standby-confirmed=")); io_.println(u.standbyConfirmed);
+    io_.print(F("  control-last=")); io_.print(stateName(u.last)); io_.print(F(" reg=0x")); io_.println(u.lastRegister, HEX);
+    if (u.fault != CommandState::Idle) { io_.print(F("  LATCHED=")); io_.print(stateName(u.fault)); io_.print(F(" reg=0x")); io_.println(u.faultRegister, HEX); }
+  } else if (field == 5) {
+    const auto& u = controller_.unitControl(i);
+    io_.print(F("  fan requested=")); io_.print(fanName(u.fanRequested)); io_.print(F(" acknowledged=")); io_.print(fanName(u.fanAcknowledged));
+    io_.print(F(" reason=")); io_.println(fanReasonName(u.fanReason));
+    io_.println(F("  Fan ACK confirms mode acceptance, not measured RPM."));
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
@@ -467,9 +489,30 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.println(F(" (check freshness above)"));
   }
 }
+void SerialConsole::printControl(uint32_t now) {
+  const auto s = controller_.controlStatus(now); const auto& e = controller_.enableControl();
+  io_.print(activityName(s.activity)); io_.print(F(" enable=")); io_.print(e.enabled() ? F("ON") : F("OFF"));
+  io_.print(F(" source=")); io_.println(enableSourceName(e.source()));
+  if (s.blocker != Issue::None) {
+    io_.print(F("PSU ")); io_.print(s.slot + 1); io_.print(F(": ")); io_.println(issueName(s.blocker));
+  }
+}
 void SerialConsole::outputRow(uint32_t now) {
   const auto& c = controller_.configuration();
-  if (view_ == View::DiagnosticHelp) {
+  if (view_ == View::Control) {
+    const auto& e = controller_.enableControl();
+    if (row_ == 0) printControl(now);
+    else if (row_ == 1) {
+      io_.print(F("ENABLE_IN configured=")); io_.print(bool(PSU_ENABLE_ENABLE_IN)); io_.print(F(" sampled=")); io_.print(e.present());
+      io_.print(F(" raw=")); io_.print(e.raw()); io_.print(F(" debounced=")); io_.print(e.stable()); io_.print(F(" settled=")); io_.println(e.settled());
+      io_.print(F("pin=")); io_.print(control::enablePin); io_.print(F(" active-low=")); io_.print(control::enableActiveLow); io_.print(F(" pullup=")); io_.println(control::enablePullup);
+      io_.println(F("At boot: saved preference OR initial switch ON. Thereafter only switch edges override serial."));
+    } else if (row_ == 2) {
+      io_.print(F("Fan MAX: output C >= ")); io_.print(control::fanOutputTempThreshold); io_.print(F(" or per-PSU requested/measured A >= ")); io_.println(control::fanOutputCurrentThreshold / 100.0f);
+      io_.print(F("AUTO: C <= ")); io_.print(control::fanOutputTempRelease); io_.print(F(" and A <= ")); io_.print(control::fanOutputCurrentRelease / 100.0f); io_.print(F(" for ms=")); io_.println(control::fanReleaseMs);
+    } else { startView(View::Units); return; }
+    ++row_;
+  } else if (view_ == View::DiagnosticHelp) {
     switch (row_++) {
       case 0: io_.println(F("BUS / GROUP DIAGNOSTICS (read only; no battery/load needed)")); break;
       case 1: io_.println(F("discover: INFO sweep 1..127; diag bus: responders, identities, current addresses, broadcasts, CAN errors")); break;
@@ -479,6 +522,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
+      case 8: io_.println(F("diag control: enable/source/switch, reconciliation, per-PSU standby and fan acceptance/failures. reconcile retries latched faults.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -498,6 +542,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 12: io_.println(F("poll <all|GROUP>; describe <CAN-address>; interval <1000..10000>; reset-ah")); break;
       case 14: io_.println(F("touch status/calibrate/debug on/off/calibration export (touch builds)")); break;
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
+      case 16: io_.println(F("autoresume on/off = LIVE enable/standby + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
     }
@@ -551,7 +596,8 @@ void SerialConsole::outputRow(uint32_t now) {
         io_.print(F(" response-age-ms=")); io_.print(uint32_t(now - d.lastSeen));
         io_.print(F(" broadcast-age-ms=")); if (d.telemetry.broadcastSeen) io_.println(uint32_t(now - d.telemetry.lastBroadcast)); else io_.println(F("none"));
       }
-    } else { io_.println(F("Addresses are temporary; count responders, not the highest address. Unbound devices receive no setting writes.")); view_ = View::None; }
+    } else if (row_ == Discovery::capacity + 4) printControl(now);
+    else { io_.println(F("Addresses are temporary; count responders, not the highest address. Unbound devices receive no setting writes.")); view_ = View::None; }
     ++row_;
   } else if (view_ == View::Telemetry) {
     constexpr uint8_t rowsPerUnit = protocol::MetricCount + 5;
@@ -573,7 +619,7 @@ void SerialConsole::outputRow(uint32_t now) {
     while (row_ < c.count && !(viewMask_ & (1U << row_))) ++row_;
     if (row_ < c.count) {
       printUnit(row_, field_, now);
-      if (++field_ == 4) { field_ = 0; ++row_; }
+      if (++field_ == 6) { field_ = 0; ++row_; }
     } else view_ = View::None;
   } else if (view_ == View::Plan) {
     if (row_ == 0) {
@@ -631,6 +677,8 @@ void SerialConsole::printFrame(int8_t index, const CanFrame& f) {
     else if (f.data[1] <= protocol::OfflineCurrent) {
       out.print(F(" A=")); out.print(raw / float(protocol::fixedPointScale) * s.controller_.configuration().units[index].ratedCurrent / 100.0f);
     }
+    else if (f.data[1] == protocol::Standby) { out.print(F(" standby=")); out.print(f.data[3] ? F("ON") : F("OFF")); }
+    else if (f.data[1] == protocol::FanMode) { out.print(F(" fan=")); out.print(f.data[3] ? F("MAX") : F("AUTO")); }
     out.println();
   }
   if (s.raw_) {

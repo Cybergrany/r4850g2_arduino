@@ -22,6 +22,10 @@ void Application::begin() {
 #endif
   const StorageResult loaded = memory_.load(config);
   controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok);
+#if PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG
+  pinMode(control::enablePin, control::enablePullup ? INPUT_PULLUP : INPUT);
+  controller_.sampleEnableInput((digitalRead(control::enablePin) == LOW) == control::enableActiveLow, millis());
+#endif
   // Complete display reset/clear before CAN reception. Runtime drawing is bounded.
 #if PSU_ENABLE_DISPLAY
   localUi_.begin();
@@ -47,6 +51,9 @@ void Application::tick() {
   // advances only when EEPROM is ready, including serial-only builds.
 #if PSU_UI_DEBUG
   debugTick(millis());
+#endif
+#if PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG
+  controller_.sampleEnableInput((digitalRead(control::enablePin) == LOW) == control::enableActiveLow, millis());
 #endif
   controller_.tick(millis());
   memory_.stepSave();
@@ -88,7 +95,7 @@ void Application::resetDebug(bool restart, bool erase, DebugScenario scenario) {
 #endif
 }
 void Application::debugTick(uint32_t now) {
-  (void)now;
+  if (debugInputPresent_) controller_.sampleEnableInput(debugInput_, now);
   if (debugRequest_.kind != ActionKind::None && !controller_.busy() && !memory_.saving()) {
     const auto r = debugRequest_; debugRequest_ = {};
     resetDebug(r.kind == ActionKind::DebugRestart,r.kind == ActionKind::DebugReset,
@@ -96,6 +103,8 @@ void Application::debugTick(uint32_t now) {
   }
   if (priming_ && !controller_.busy() && controller_.report().succeeded == membersMask(controller_.count())) {
     priming_ = false; can_.scenario(desiredScenario_);
+    if (desiredScenario_ == DebugScenario::Standby || desiredScenario_ == DebugScenario::StandbyReject) controller_.setAutoResume(false);
+    if (desiredScenario_ == DebugScenario::FanReject || desiredScenario_ == DebugScenario::WakeCurrent) controller_.reconcile();
     eeprom_.failWrites = desiredScenario_ == DebugScenario::SaveFailed;
     if (desiredScenario_ == DebugScenario::BusOffline) controller_.begin();
     if (desiredScenario_ == DebugScenario::Empty) {
@@ -134,7 +143,10 @@ bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t n
 #endif
   if (strcmp(a[0],"ui-debug")) return false;
 #if PSU_UI_DEBUG
-  if (n==2 && !strcmp(a[1],"status")) {
+  if (n==3 && !strcmp(a[1],"enable-input") && (!strcmp(a[2],"on") || !strcmp(a[2],"off"))) {
+    app.debugInputPresent_ = true; app.debugInput_ = !strcmp(a[2],"on");
+    out.println(F("SIM ENABLE_IN changed; normal debounce and latest-wins policy apply"));
+  } else if (n==2 && !strcmp(a[1],"status")) {
     out.print(F("SIM: CAN excluded; RAM storage; scenario="));
     out.print(reinterpret_cast<const __FlashStringHelper*>(scenarioName(app.desiredScenario_).data));
     out.print(F(" priming=")); out.print(app.priming_); out.print(F(" pending=")); out.println(app.debugRequest_.kind!=ActionKind::None);

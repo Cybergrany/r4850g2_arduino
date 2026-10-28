@@ -31,6 +31,13 @@ FlashText scenarioName(DebugScenario s) {
     case DebugScenario::Changed: return UI_TEXT("changed");
     case DebugScenario::Extremes: return UI_TEXT("extremes");
     case DebugScenario::WrongDeployment: return UI_TEXT("wrong-deployment");
+    case DebugScenario::Standby: return UI_TEXT("standby");
+    case DebugScenario::Hot: return UI_TEXT("fan-hot");
+    case DebugScenario::Cool: return UI_TEXT("fan-cool");
+    case DebugScenario::SensorFault: return UI_TEXT("fan-sensor-fault");
+    case DebugScenario::FanReject: return UI_TEXT("fan-reject");
+    case DebugScenario::StandbyReject: return UI_TEXT("standby-reject");
+    case DebugScenario::WakeCurrent: return UI_TEXT("wake-current");
     default: return UI_TEXT("unknown");
   }
 }
@@ -52,11 +59,14 @@ void RamStorage::clear() { memset(bytes_, 0xff, sizeof(bytes_)); failWrites = fa
 void SimulatedCan::reset() {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { voltage_[i] = 5400; current_[i] = 1000; }
   pending_ = cycling_ = false; slot_ = field_ = budget_ = 0; lastCycle_ = 0;
+  standby_ = fanMax_ = 0;
   scenario_ = DebugScenario::Healthy;
 }
 bool SimulatedCan::present(uint8_t i) const { return !(scenario_ == DebugScenario::Missing && i == 1); }
 uint16_t SimulatedCan::measuredCurrent(uint8_t i) const {
-  return scenario_==DebugScenario::Extremes ? 6000 : current_[i]*9UL/10;
+  if (standby_ & (1U << i)) return 0;
+  if (scenario_ == DebugScenario::WakeCurrent && !current_[i]) return 200;
+  return scenario_==DebugScenario::Extremes && current_[i] ? 6000 : current_[i]*9UL/10;
 }
 CanFrame SimulatedCan::identityFrame(uint8_t i) const {
   auto f = protocol::request(i + 1, protocol::infoCommand); f.id &= ~0x80UL; f.data[1] = 2;
@@ -79,7 +89,8 @@ CanFrame SimulatedCan::metricFrame(uint8_t i, uint8_t m) const {
     case protocol::OutputVoltage: raw = uint32_t(voltage_[i]) * 1024 / 100; break;
     case protocol::CurrentCapacity: raw = 60UL * 1024; break;
     case protocol::InputVoltage: raw = 227UL * 1024; break;
-    case protocol::OutputTemperature: raw = (40UL + i * 3) * 1024; break;
+    case protocol::OutputTemperature: raw = (scenario_ == DebugScenario::SensorFault ? 1000UL :
+        scenario_ == DebugScenario::Hot ? 60UL : scenario_ == DebugScenario::Cool ? 25UL : 40UL + i * 3) * 1024; break;
     case protocol::InputTemperature: raw = scenario_ == DebugScenario::Extremes ? uint32_t(-12L * 1024) : 30UL * 1024; break;
     default: raw = amps * 1024 / 100; break;
   }
@@ -88,7 +99,7 @@ CanFrame SimulatedCan::metricFrame(uint8_t i, uint8_t m) const {
 CanFrame SimulatedCan::broadcastFrame(uint8_t i) const {
   CanFrame f = {}; f.extended = true; f.length = 8;
   f.id = 0x1000117eUL | uint32_t(i + 1) << 16; f.data[1] = 1;
-  f.data[3] = scenario_ == DebugScenario::NotReady && i == 1 ? 1 : 0;
+  f.data[3] = (standby_ & (1U << i)) || (scenario_ == DebugScenario::NotReady && i == 1) ? 1 : 0;
   const uint16_t raw = measuredCurrent(i) / 5; f.data[6] = raw >> 8; f.data[7] = raw; return f;
 }
 bool SimulatedCan::send(const CanFrame& f) {
@@ -101,12 +112,20 @@ bool SimulatedCan::send(const CanFrame& f) {
   else if (cmd == protocol::setCommand) {
     if (scenario_ == DebugScenario::Timeout && a == 2) return true;
     response_ = f; response_.id &= ~0x80UL;
-    const bool reject = scenario_ == DebugScenario::Reject || (scenario_ == DebugScenario::Partial && a == 2);
+    const bool reject = scenario_ == DebugScenario::Reject || (scenario_ == DebugScenario::Partial && a == 2) ||
+        (scenario_ == DebugScenario::FanReject && f.data[1] == protocol::FanMode) ||
+        (scenario_ == DebugScenario::StandbyReject && f.data[1] == protocol::Standby);
     response_.data[0] = reject ? 0x21 : 1;
     if (!reject) {
       const uint16_t value = uint16_t(f.data[6]) << 8 | f.data[7];
       if (f.data[1] == protocol::OnlineVoltage) voltage_[a - 1] = uint32_t(value) * 100 / 1024;
       if (f.data[1] == protocol::OnlineCurrent) current_[a - 1] = uint32_t(value) * 5000 / 1024;
+      if (f.data[1] == protocol::Standby) {
+        if (f.data[3]) standby_ |= 1U << (a - 1); else standby_ &= uint8_t(~(1U << (a - 1)));
+      }
+      if (f.data[1] == protocol::FanMode) {
+        if (f.data[3]) fanMax_ |= 1U << (a - 1); else fanMax_ &= uint8_t(~(1U << (a - 1)));
+      }
     }
   } else if (cmd == protocol::descriptionCommand) {
     response_ = f; response_.id &= ~0x80UL; memcpy(response_.data + 2, "SIMPSU", 6);

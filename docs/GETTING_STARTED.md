@@ -31,7 +31,8 @@ discover
 
 Discovery also starts automatically at boot. `discover` restarts a bounded,
 read-only INFO sweep of addresses 1–127. It does not assign addresses or change
-PSU settings. Allow roughly 30 seconds for a complete idle sweep; responsive
+PSU settings. Independently, bound units undergo [standby reconciliation](CONTROL.md),
+even with autoresume OFF. Allow roughly 30 seconds for a complete idle sweep; responsive
 units are usually found sooner through their unsolicited traffic. Repeat:
 
 ```text
@@ -106,16 +107,21 @@ letter; `all`, `voltage`, `current`, and `bus` are reserved. Membership accepts
 `1-2`, `1,2`, mixed selections such as `1,3-4`, or `all`. Groups cannot overlap.
 
 Check for `members=1,2 responding=1,2 ready=1,2 missing=-`. Each member must have
-fresh telemetry **and** unsolicited current/status broadcasts and report ready.
-`voltage-acked=0` is expected before the first online apply.
+fresh telemetry **and** unsolicited current/status broadcasts. Confirmed intentional
+standby is accepted while preparing release. Run `diag control` and wait for
+`held-in-standby` with `standby-confirmed=1` before the first apply.
 
 ## 3. Stage and apply voltage and current
 
 ```text
 set voltage 54
 set current GROUP1 55
+autoresume on
 preview all
 ```
+
+`autoresume on` is a live enable request. Without an authorized profile, units
+remain held until the following apply. It does not commit drafts itself.
 
 The preview should show the common 54 V and **27.50 A per member**. `set` and
 `preview` send no settings. Oversized shares are rejected with the limiting
@@ -130,8 +136,10 @@ apply all
 Wait for `RESULT accepted slots=1,2 failed=- incomplete/skipped=-`. `OK` and
 `QUEUED` mean the job was accepted, not that a PSU accepted its settings. Every
 write first rechecks identity at the destination address. All voltage ACKs must
-succeed before the current phase begins. Configuration changes and `save` are
-blocked while a job runs.
+succeed before the current phase begins. Initial startup also requires
+standby/fan/zero-current/wake reconciliation across all members. Configuration
+changes and `save` are blocked while a job runs; `autoresume off` can always
+interrupt it and request standby.
 
 Then inspect:
 
@@ -223,27 +231,24 @@ Controller EEPROM stores identities, ratings, groups, drafts, and a separate
 if a known unit reconnects, it restores its last authorized voltage/current,
 not a later staged edit. `config` and `diag group` distinguish these values.
 
-During the same controller session, a previously authorized unit may restore
-once its identity, ready status, telemetry, and broadcasting are verified again.
-Recovery waits until the whole configured installation is ready, then sends
-common voltage before authorized currents. A failed recovery is reported and
-is not retried repeatedly while the same readiness/identity state persists.
-An explicit apply or a genuine loss/recovery transition can start another attempt.
-Unaffected PSUs keep running; their current is not increased to compensate.
-Serial announces `RESTORE authorized profile` with recipient slots and labels
-the final result as `operation=restore-authorized-profile`.
+During the same controller session, returning authorized units reconcile through
+standby, maximum fan, common voltage, zero current, and verified wake before
+restoring their shares. Missing members block release; unaffected healthy PSUs
+keep their shares. No current is increased to compensate for absence. Control
+failures latch visibly; inspect `diag control`, fix the cause, and use `reconcile`
+to request a new attempt. Reconciliation never applies later staged drafts.
 
-Controller reboot restoration is **off by default**. To opt in:
+Enable is OFF by default. **`autoresume on/off` now controls live operation**, as
+well as the preference saved for next boot. `autoresume off` requests standby
+immediately, even during an apply; wait for confirmed standby or inspect the
+reported failure. `save` persists the effective preference. A saved ON preference
+allows the authorized profile to start only after successful reconciliation.
 
-```text
-autoresume on
-save
-```
-
-Now boot can restore the saved authorized profile after all required units pass
-verification. A saved draft still remains a draft. `autoresume off` then `save`
-disables restoration after the next controller reboot. `load` changes RAM only
-and never starts a replay, even if the record enables boot restoration.
+Optional `ENABLE_IN` uses a debounced latching switch with latest-event-wins
+semantics relative to serial commands. At boot only, saved ON or switch ON
+permits startup. `load`/`defaults` initiate held reconciliation without replaying
+a profile; enable explicitly afterwards. See [control behavior, wiring, fan
+thresholds and persistence](CONTROL.md).
 
 The authorized profile records explicitly accepted **apply intent**; a failed
 or interrupted CAN operation may not have reached every PSU. Check final
@@ -285,7 +290,8 @@ diag bus
 diag group GROUP1
 ```
 
-When operating only the reachable members is intentional:
+When changing the current of already reconciled online members is intentional
+(the override cannot bypass initial startup):
 
 ```text
 apply GROUP1 partial
@@ -427,7 +433,9 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `interval MS` | Target telemetry request interval, 1000–10000 ms; identity refresh is independent |
 | `reset-ah` | Reset session estimates for all discovered devices |
 | `save`, `load`, `defaults`, `legacy` | Controller EEPROM/template/migration operations |
-| `autoresume on/off` | Stage policy for restoration after controller reboot; save explicitly |
+| `autoresume on/off` | Live enable/standby request and boot preference; latest switch edge/serial wins; save explicitly |
+| `diag control` | Enable source/switch, reconciliation phases, standby/fan ACKs and faults |
+| `reconcile` | Cancel an apply, request standby and retry latched control faults |
 
 ## Checking scheduling under load
 
