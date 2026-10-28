@@ -510,6 +510,16 @@ void SerialConsole::outputRow(uint32_t now) {
     } else if (row_ == 2) {
       io_.print(F("Fan MAX: output C >= ")); io_.print(control::fanOutputTempThreshold); io_.print(F(" or per-PSU requested/measured A >= ")); io_.println(control::fanOutputCurrentThreshold / 100.0f);
       io_.print(F("AUTO: C <= ")); io_.print(control::fanOutputTempRelease); io_.print(F(" and A <= ")); io_.print(control::fanOutputCurrentRelease / 100.0f); io_.print(F(" for ms=")); io_.println(control::fanReleaseMs);
+    } else if (row_ == 3) {
+      const auto f = controller_.externalFanStatus(now);
+      io_.print(F("External fan PWM pin=")); io_.print(control::fanPwmPin);
+      io_.print(F(" physical=")); io_.print(control::fanPwmPin >= 0 && !PSU_UI_DEBUG);
+      io_.print(F(" inverted=")); io_.println(control::fanPwmInverted);
+      io_.print(F("  demand=")); io_.print(f.duty); io_.print(F("/255 max-output-C="));
+      if (f.telemetryComplete) io_.print(f.maximumTemperature); else io_.print(F("unknown"));
+      io_.print(F(" reason=")); io_.println(fanReasonName(f.reason));
+      io_.print(F("  S-curve off-C=")); io_.print(control::externalFanOffTemp);
+      io_.print(F(" full-C=")); io_.println(control::fanOutputTempThreshold);
     } else { startView(View::Units); return; }
     ++row_;
   } else if (view_ == View::DiagnosticHelp) {

@@ -1,4 +1,5 @@
 #include "PsuController.h"
+#include "FanPolicy.h"
 #include "../config/Deployment.h"
 #include <math.h>
 namespace psu {
@@ -30,16 +31,26 @@ void PsuController::cancelJob() {
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::reconcile() {
+  // Cooling has its own lifetime. A software stop/retry is not a new physical
+  // PSU: preserve its hysteresis and the accepted persistent fan mode.
+  const int8_t uncertainFan = controlActive_ && controlWaiting_ && controlRegister_ == protocol::FanMode ? controlSlot_ : -1;
   cancelJob(); controlActive_ = controlWaiting_ = controlVerified_ = false;
   voltageSynced_ = currentSynced_ = restoreBlocked_ = 0;
   restorePending_ = running_;
-  for (auto& u : control_) u = {};
+  for (uint8_t i = 0; i < count(); ++i) {
+    auto& u = control_[i];
+    UnitControl next;
+    next.coolSince = u.coolSince; next.cooling = u.cooling;
+    next.fanRequested = u.fanRequested; next.fanReason = u.fanReason;
+    next.fanAcknowledged = u.fanFailed || i == uncertainFan ? FanMode::Unknown : u.fanAcknowledged;
+    u = next;
+  }
 }
 void PsuController::enableChanged(bool wasEnabled) {
   // Save persists the effective preference; switch edges never write EEPROM.
   config_.autoResume = enable_.enabled(); ++revision_;
-  if (!enable_.enabled()) reconcile(); // OFF preempts even an active apply.
-  else if (!wasEnabled) {
+  if (wasEnabled && !enable_.enabled()) reconcile(); // OFF preempts even an active apply.
+  else if (!wasEnabled && enable_.enabled()) {
     running_ = config_.operating.voltageMask;
     restorePending_ |= running_;
   }
@@ -72,11 +83,9 @@ void PsuController::updateFan(uint8_t i, uint32_t now) {
   const bool data = freshMetric(i, protocol::OutputTemperature, temperature, now) && isfinite(temperature) &&
       temperature >= control::minimumTemperature && temperature <= control::maximumTemperature &&
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && amps >= 0;
-  const bool settled = u.phase == ControlPhase::Online || (u.phase == ControlPhase::Prepared && !enable_.enabled());
-  const uint16_t requested = u.standbyConfirmed ? 0 :
+  const uint16_t requested = !enable_.enabled() && u.standbyConfirmed ? 0 :
       (config_.operating.currentMask & (1U << i)) ? config_.operating.current[i] : 0;
-  if (!settled || u.fault != CommandState::Idle) u.fanReason = FanReason::Startup;
-  else if (!data) u.fanReason = FanReason::InvalidTelemetry;
+  if (!data || routingIssue(i, now) != Issue::None) u.fanReason = FanReason::InvalidTelemetry;
   else if (temperature >= control::fanOutputTempThreshold) u.fanReason = FanReason::Temperature;
   else if (requested >= control::fanOutputCurrentThreshold) u.fanReason = FanReason::RequestedCurrent;
   else if (amps * 100 >= control::fanOutputCurrentThreshold) u.fanReason = FanReason::MeasuredCurrent;
@@ -92,6 +101,28 @@ void PsuController::updateFan(uint8_t i, uint32_t now) {
   }
   u.cooling = false; u.fanRequested = FanMode::Max;
 }
+ExternalFanStatus PsuController::externalFanStatus(uint32_t now) const {
+  ExternalFanStatus s;
+  if (!ready_) return s;
+  bool maximum = false;
+  for (uint8_t i = 0; i < count(); ++i) {
+    float temperature, amps;
+    if (routingIssue(i, now) != Issue::None ||
+        !freshMetric(i, protocol::OutputTemperature, temperature, now) || !isfinite(temperature) ||
+        temperature < control::minimumTemperature || temperature > control::maximumTemperature ||
+        !freshMetric(i, protocol::OutputCurrent, amps, now) || !isfinite(amps) || amps < 0) {
+      s.slot = i; s.reason = FanReason::InvalidTelemetry; return s;
+    }
+    if (!i || temperature > s.maximumTemperature) s.maximumTemperature = temperature;
+    const auto& u = control_[i];
+    if (u.fanRequested != FanMode::Auto && !maximum) {
+      maximum = true; s.slot = i; s.reason = u.fanReason;
+    }
+  }
+  s.telemetryComplete = true;
+  if (!maximum) { s.duty = externalFanCurve(s.maximumTemperature); s.reason = FanReason::Cool; }
+  return s;
+}
 bool PsuController::controlsOnline(uint8_t mask) const {
   for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i))
     if (control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) return false;
@@ -105,7 +136,7 @@ bool PsuController::releaseAllowed(uint32_t now) const {
     if (issue(i, now) != Issue::None || u.fault != CommandState::Idle || !(voltageSynced_ & (1U << i))) return false;
     if (u.phase != ControlPhase::Prepared && u.phase != ControlPhase::Wake &&
         u.phase != ControlPhase::Starting && u.phase != ControlPhase::Online) return false;
-    if (u.phase != ControlPhase::Online && u.fanAcknowledged != FanMode::Max) return false;
+    if (u.phase != ControlPhase::Online && u.fanAcknowledged != u.fanRequested) return false;
     float amps;
     if (u.phase != ControlPhase::Online && (!freshMetric(i, protocol::OutputCurrent, amps, now) ||
         !isfinite(amps) || fabsf(amps) > control::stoppedCurrentAmps)) return false;
@@ -199,7 +230,7 @@ void PsuController::controlTick(uint32_t now) {
       restoreBlocked_ &= uint8_t(~(1U << i)); observedEpoch_[i] = epoch;
       if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
     }
-    if (!epoch) continue;
+    if (!epoch) { updateFan(i, now); continue; }
     if (u.phase == ControlPhase::AwaitIdentity) controlPhase(i, ControlPhase::Standby, now);
     // An unexpected AC/readiness loss invalidates volatile settings even if CAN
     // stays powered from the DC bus. Intentional standby does not retrigger this.
@@ -233,8 +264,8 @@ void PsuController::controlTick(uint32_t now) {
     }
     if (u.phase == ControlPhase::Prepared && config_.operating.voltageAuthorized && !(voltageSynced_ & (1U << i)))
       controlPhase(i, ControlPhase::Voltage, now);
-    if (u.phase == ControlPhase::Fan && u.fanAcknowledged == FanMode::Max) controlPhase(i, ControlPhase::Voltage, now);
     updateFan(i, now);
+    if (u.phase == ControlPhase::Fan && u.fanAcknowledged == u.fanRequested) controlPhase(i, ControlPhase::Voltage, now);
   }
   if (controlActive_) {
     const auto* d = deviceForSlot(controlSlot_, now);
@@ -273,12 +304,9 @@ void PsuController::controlTick(uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) {
     const auto& u = control_[i];
     if (routingIssue(i, now) != Issue::None || u.fanFailed) continue;
-    if (u.phase == ControlPhase::Fault && u.fanAcknowledged != FanMode::Max) {
-      controlCommand(i, protocol::FanMode, 1, now); return;
-    }
-    if (u.fault != CommandState::Idle) continue;
-    if (u.phase == ControlPhase::Fan || (u.phase == ControlPhase::Stopping && u.fanAcknowledged != FanMode::Max) ||
-        ((u.phase == ControlPhase::Prepared || u.phase == ControlPhase::Online) && u.fanRequested != u.fanAcknowledged)) {
+    // Cooling continues through every phase, including an output-control fault.
+    // Only a latched fan-command failure suppresses further fan writes.
+    if (u.fanRequested != u.fanAcknowledged) {
       controlCommand(i, protocol::FanMode, u.fanRequested == FanMode::Max, now); return;
     }
   }

@@ -219,5 +219,7 @@ navigate while all PSUs broadcast; inspect `touch status` and the existing
 
 `ui-debug enable-input on/off` feeds a virtual switch through the normal debounce
 and latest-event-wins logic. Debug builds never read ENABLE_IN GPIO, including
-when its build flag is enabled. See [CONTROL.md](CONTROL.md) for fan thresholds,
+when its build flag is enabled. The optional `PSU_FAN_PWM_PIN` also remains
+physically disconnected in debug builds; `diag control` still shows simulated
+demand. See [CONTROL.md](CONTROL.md) for fan thresholds,
 startup policy and control diagnostics.

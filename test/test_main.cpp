@@ -3,6 +3,7 @@
 #include "config/Deployment.h"
 #include "can/Mcp2515Transmit.h"
 #include "psu/PsuController.h"
+#include "psu/FanPolicy.h"
 #include "storage/MemoryManager.h"
 #include "ui/SerialConsole.h"
 #include "ui/UiView.h"
@@ -279,7 +280,7 @@ struct Rig {
       for(uint8_t i=0;i<c.count();++i) {
         const auto phase=c.unitControl(i).phase;
         pending |= phase!=ControlPhase::Prepared && phase!=ControlPhase::Online && phase!=ControlPhase::Fault && phase!=ControlPhase::AwaitIdentity;
-        pending |= phase==ControlPhase::Fault && !c.unitControl(i).fanFailed && c.unitControl(i).fanAcknowledged!=FanMode::Max && c.deviceForSlot(i,now);
+        pending |= phase==ControlPhase::Fault && !c.unitControl(i).fanFailed && c.unitControl(i).fanAcknowledged!=c.unitControl(i).fanRequested && c.deviceForSlot(i,now);
         pending |= c.enableControl().enabled() && phase==ControlPhase::Prepared && c.configuration().operating.voltageMask==membersMask(c.count()) && c.controlStatus(now).blocker==Issue::None;
       }
       if(!pending) break;
@@ -398,7 +399,64 @@ void controlLifecycle() {
   CHECK(leaking.c.unitControl(0).fault==CommandState::ObservationTimeout && leaking.c.unitControl(0).standbyConfirmed);
   for(const auto& f:leaking.can.writes()) CHECK(f.data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(f.data+4)==0);
 }
+void externalFanControl() {
+  CHECK(externalFanCurve(-40)==0 && externalFanCurve(20)==0);
+  CHECK(externalFanCurve(25)==40 && externalFanCurve(30)==128 && externalFanCurve(35)==215);
+  CHECK(externalFanCurve(40)==255 && externalFanCurve(150)==255 && externalFanCurve(NAN)==255);
+  uint8_t previous=0;
+  for (unsigned t=0;t<=2000;++t) {
+    const auto duty=externalFanCurve(20+t/100.0f);
+    CHECK(duty>=previous); previous=duty;
+  }
+  Rig r; r.temperature=20; r.step(35000);
+  auto s=r.c.externalFanStatus(r.now); CHECK(s.telemetryComplete && s.duty==0);
+  r.temperature=30; r.step(); CHECK(r.c.externalFanStatus(r.now).duty==128);
+  // One hot unit sets the common fan's demand; averaging would hide it.
+  r.can.incoming.push_back(data(2,0x7f,39*1024)); r.c.tick(++r.now);
+  s=r.c.externalFanStatus(r.now); CHECK(s.maximumTemperature==39 && s.duty==externalFanCurve(39));
+  r.current[1]=3000; r.step(); s=r.c.externalFanStatus(r.now);
+  CHECK(s.duty==255 && s.slot==1 && s.reason==FanReason::MeasuredCurrent);
+  r.current[1]=0; r.temperature=20; r.step(29000); CHECK(r.c.externalFanStatus(r.now).duty==255);
+  r.step(4000); CHECK(r.c.externalFanStatus(r.now).duty==0);
+  r.noTemperature=2; r.step(6500); s=r.c.externalFanStatus(r.now);
+  CHECK(s.duty==255 && !s.telemetryComplete && s.slot==1);
+  r.noTemperature=0; r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
+  r.c.setCurrent(0,6000); r.apply(); r.current[0]=r.current[1]=0; r.step();
+  s=r.c.externalFanStatus(r.now); CHECK(s.duty==255 && s.reason==FanReason::RequestedCurrent);
+  r.c.setAutoResume(false); r.finish(); r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
+  r.noCurrent=2; r.step(6500); s=r.c.externalFanStatus(r.now);
+  CHECK(s.duty==255 && !s.telemetryComplete && s.slot==1);
+  r.noCurrent=0; r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
+  r.live=1; r.step(6500); CHECK(r.c.externalFanStatus(r.now).duty==255);
+  FakeCan disconnected; disconnected.initOk=false; PsuController c(disconnected); CHECK(!c.begin());
+  CHECK(c.externalFanStatus(0).duty==255 && !c.externalFanStatus(0).telemetryComplete);
+}
 void fanControl() {
+  // Enable events do not restart fan policy, rewrite its persistent register,
+  // or discard time already spent cooling. Exercise both serial and switch.
+  Rig edges; edges.temperature=30; edges.step(35000);
+  CHECK(edges.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  auto edgeWrites=edges.can.writes().size();
+  edges.c.setAutoResume(false); edges.finish();
+  CHECK(edges.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  const auto heldSince=edges.c.unitControl(0).since;
+  edges.c.setAutoResume(false); edges.step();
+  CHECK(edges.c.unitControl(0).since==heldSince); // Repeating OFF is not a recovery request.
+  edges.c.setAutoResume(true); edges.finish();
+  const auto unchangedFans=edges.can.writes();
+  for(size_t n=edgeWrites;n<unchangedFans.size();++n) CHECK(unchangedFans[n].data[1]!=protocol::FanMode);
+  edges.temperature=40; edges.step(1500); CHECK(edges.c.unitControl(0).fanAcknowledged==FanMode::Max);
+  edges.temperature=30; edges.step(15000); const auto coolingSince=edges.c.unitControl(0).coolSince;
+  edges.c.sampleEnableInput(true,edges.now); edges.c.sampleEnableInput(true,edges.now+50);
+  edges.c.sampleEnableInput(false,edges.now+60); edges.c.sampleEnableInput(false,edges.now+110);
+  CHECK(!edges.c.enableControl().enabled()); edges.finish();
+  CHECK(edges.c.unitControl(0).coolSince==coolingSince && edges.c.unitControl(0).fanRequested==FanMode::Max);
+  edges.c.setAutoResume(true); edges.finish(); CHECK(edges.c.unitControl(0).coolSince==coolingSince);
+  edges.step(35000); CHECK(edges.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  Rig fault(authorized(false),true,false); fault.rejectRegister=protocol::OnlineVoltage; fault.finish();
+  CHECK(fault.c.unitControl(0).fault==CommandState::Rejected);
+  fault.temperature=30; fault.step(35000);
+  CHECK(fault.c.unitControl(0).phase==ControlPhase::Fault && fault.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   Rig r; r.c.setCurrent(0,2000); r.apply(); r.temperature=30;
   r.step(29000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.step(4000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
@@ -1189,6 +1247,8 @@ void controlPresentation() {
   auto text=terminal.input("diag control\n");
   CHECK(text.find("enable=OFF source=boot preference")!=std::string::npos);
   CHECK(text.find("standby-confirmed=1")!=std::string::npos && text.find("fan requested=MAX acknowledged=MAX")!=std::string::npos);
+  CHECK(text.find("External fan PWM pin=-1 physical=0")!=std::string::npos);
+  CHECK(text.find("demand=255/255 max-output-C=40.00")!=std::string::npos);
   CHECK(terminal.input("diag bus\n").find("output-overruns=0")!=std::string::npos);
   r.c.sampleEnableInput(true,r.now); r.c.sampleEnableInput(true,r.now+50);
   r.c.setAutoResume(false); r.finish(); r.c.sampleEnableInput(true,r.now);
@@ -1408,7 +1468,7 @@ void uiLayouts() {
 }
 int main() {
   try {
-    controlLifecycle(); fanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
+    controlLifecycle(); fanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
     eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();
     uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();

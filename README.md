@@ -109,7 +109,7 @@ Controller EEPROM stores drafts **separately** from the authorized operating
 profile. `save` alone cannot activate drafts. A known returning unit can restore
 its authorized settings once the full installation is identified and ready.
 `autoresume on/off` controls live enable/standby; `save` persists the preference.
-Boot and returning units reconcile through standby, maximum fan, common voltage,
+Boot and returning units reconcile through standby, checked fan mode, common voltage,
 zero current and verified wake before restoring authorized current. Optional
 ENABLE_IN is a latching switch with latest-event-wins semantics. See
 [control policy and wiring](docs/CONTROL.md). PSU nonvolatile defaults are a separate, explicit `offline all` operation.

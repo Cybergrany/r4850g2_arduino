@@ -61,6 +61,8 @@ class PsuController {
   void sampleEnableInput(bool active, uint32_t now);
   const EnableControl& enableControl() const { return enable_; }
   const UnitControl& unitControl(uint8_t slot) const { return control_[slot]; }
+  // Logical duty (0..255), independent of the optional physical pin and enable.
+  ExternalFanStatus externalFanStatus(uint32_t now) const;
   ControlStatus controlStatus(uint32_t now) const;
   // Explicit retry after an operator has reviewed a latched control failure.
   void reconcile();

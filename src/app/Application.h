@@ -9,6 +9,7 @@
 #include "../storage/ArduinoEeprom.h"
 #endif
 #include "../psu/PsuController.h"
+#include "../io/FanOutput.h"
 #include "../ui/LocalUi.h"
 #include "../ui/Ili9341Display.h"
 #include "../ui/SerialConsole.h"
@@ -35,6 +36,9 @@ class Application {
   ArduinoEeprom eeprom_;
 #endif
   PsuController controller_;
+#if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
+  FanOutput fanOutput_;
+#endif
   MemoryManager memory_;
 #if PSU_ENABLE_SERIAL
   SerialConsole console_;

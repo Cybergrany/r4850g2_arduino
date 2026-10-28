@@ -14,6 +14,9 @@ Application::Application() : controller_(can_), memory_(eeprom_)
 {}
 void Application::begin() {
   static_assert(board::eepromBudget == MemoryManager::budget, "EEPROM budgets must agree");
+#if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
+  fanOutput_.begin();
+#endif
 #if PSU_UI_DEBUG
   can_.reset();
   Configuration config = debugConfiguration();
@@ -56,6 +59,10 @@ void Application::tick() {
   controller_.sampleEnableInput((digitalRead(control::enablePin) == LOW) == control::enableActiveLow, millis());
 #endif
   controller_.tick(millis());
+#if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
+  const uint32_t fanNow = millis();
+  if (fanOutput_.due(fanNow)) fanOutput_.write(controller_.externalFanStatus(fanNow).duty);
+#endif
   memory_.stepSave();
 #if PSU_ENABLE_DISPLAY
   localUi_.storageTick();
@@ -104,7 +111,10 @@ void Application::debugTick(uint32_t now) {
   if (priming_ && !controller_.busy() && controller_.report().succeeded == membersMask(controller_.count())) {
     priming_ = false; can_.scenario(desiredScenario_);
     if (desiredScenario_ == DebugScenario::Standby || desiredScenario_ == DebugScenario::StandbyReject) controller_.setAutoResume(false);
-    if (desiredScenario_ == DebugScenario::FanReject || desiredScenario_ == DebugScenario::WakeCurrent) controller_.reconcile();
+    // A software reconcile preserves an accepted fan mode. Model a fresh
+    // controller startup here so the rejection scenario actually needs a write.
+    if (desiredScenario_ == DebugScenario::FanReject) scenarioResult_ = controller_.configure(controller_.configuration(),true);
+    if (desiredScenario_ == DebugScenario::WakeCurrent) controller_.reconcile();
     eeprom_.failWrites = desiredScenario_ == DebugScenario::SaveFailed;
     if (desiredScenario_ == DebugScenario::BusOffline) controller_.begin();
     if (desiredScenario_ == DebugScenario::Empty) {

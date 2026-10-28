@@ -6,6 +6,12 @@ enum class ControlPhase : uint8_t { AwaitIdentity, Standby, Stopping, Fan, Volta
 enum class FanMode : uint8_t { Unknown, Auto, Max };
 enum class FanReason : uint8_t { Startup, Temperature, RequestedCurrent, MeasuredCurrent, InvalidTelemetry, Cooling, Cool };
 enum class Activity : uint8_t { Reconciling, Stopping, Standby, Starting, Running, StartBlocked, StopUnconfirmed };
+struct ExternalFanStatus {
+  float maximumTemperature = 0;
+  uint8_t duty = 255, slot = 0;
+  FanReason reason = FanReason::Startup;
+  bool telemetryComplete = false;
+};
 struct UnitControl {
   uint32_t since = 0, coolSince = 0;
   ControlPhase phase = ControlPhase::AwaitIdentity;

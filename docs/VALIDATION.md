@@ -2,17 +2,18 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended with fan/enable/reconciliation coverage on 2026-10-27. No firmware upload or physical touch/multi-PSU test was performed.
+extended with continuous cooling and external PWM coverage on 2026-10-28. No firmware upload or physical touch/multi-PSU test was performed.
 
 ```sh
 python3 tools/test_host.py
 python3 tools/test_touch.py
+python3 tools/test_fan_output.py
 PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560 -e mega2560_serial -e mega2560_display \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
   -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
-  -e mega2560_touch_enable -j 4
+  -e mega2560_touch_enable -e mega2560_touch_fan -j 4
 python3 tools/check_debug_build.py
 git diff --check
 ```
@@ -20,7 +21,7 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All twelve profiles build successfully
+All thirteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -28,22 +29,24 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6829 | 93748 |
-| `mega2560_serial` | 5001 | 62894 |
-| `mega2560_display` | 6804 | 90990 |
+| `mega2560` | 6829 | 95022 |
+| `mega2560_serial` | 5001 | 63778 |
+| `mega2560_display` | 6804 | 92264 |
 | `mega2560_local` | 5537 | 64598 |
-| `mega2560_minimal` | 3657 | 28070 |
-| `mega2560_touch` | 7139 | 103728 |
-| `mega2560_touch_wheel` | 7164 | 105196 |
-| `mega2560_ui_debug` | 6823 | 93180 |
-| `mega2560_touch_debug` | 7133 | 103648 |
+| `mega2560_minimal` | 3657 | 28060 |
+| `mega2560_touch` | 7139 | 104930 |
+| `mega2560_touch_wheel` | 7164 | 106398 |
+| `mega2560_ui_debug` | 6823 | 94490 |
+| `mega2560_touch_debug` | 7133 | 104872 |
 | `mega2560_touch_local` | 5821 | 72242 |
-| `mega2560_touch_debug_local` | 5783 | 72036 |
-| `mega2560_touch_enable` | 7139 | 104010 |
+| `mega2560_touch_debug_local` | 5783 | 72086 |
+| `mega2560_touch_enable` | 7139 | 105210 |
+| `mega2560_touch_fan` | 7144 | 106072 |
 
-The touch/serial build uses 87.1% static RAM and 40.8% flash, leaving 1053 bytes
+The touch/serial build uses 87.1% static RAM and 41.3% flash, leaving 1053 bytes
 for stack/runtime use (1028 bytes with touch and wheel). Omitting serial leaves
-2371 bytes in the production touch profile. Static RAM excludes worst-case stack/interrupt nesting.
+2371 bytes in the production touch profile. Enabling external PWM adds 5 bytes
+of static RAM (1048 bytes remain in the touch/enable/fan build). Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
@@ -63,7 +66,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **425086 host checks** and **952 touch/simulator checks** with
+Both suites pass: **428723 host checks** and **952 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -237,8 +240,13 @@ reconciliation recovery; fan temperature/requested/measured-current triggers;
 invalid/stale sensors; 30-second hysteresis; no repeat writes at steady demand;
 and a pending AUTO overtaken by a new hot reading. UI assertions check source
 labels, color, fault details and continued telemetry. Simulator tests run with
-ENABLE_IN enabled at compile time but without GPIO APIs, proving the debug
-application path remains virtual.
+ENABLE_IN and external PWM enabled at compile time but without GPIO APIs,
+proving both debug application paths remain virtual. Fan tests cover preserved
+AUTO/MAX mode and cooldown time across serial/switch edges, maximum-temperature
+aggregation, stale/missing-member fallback, S-curve endpoints/monotonicity,
+per-unit current overrides and 30-second release. The physical adapter harness
+checks boot-full polarity, changed-only writes, 100 ms cadence and millis wrap;
+compile checks reject CAN, ENABLE_IN, non-PWM and encoder Timer1 conflicts.
 
 Before using the new sequence on hardware, verify `0x0132` and `0x0134` acceptance
 on the actual G2 firmware, actual standby current, zero-current retention across
@@ -248,3 +256,8 @@ standby. Exercise the wired D26 switch, serial overrides and power cycling with
 the switch held ON (boot OR deliberately permits restarting). Confirm absence
 and replacement cases with all intended PSUs, and measure stack/interrupt margin
 in the chosen Mega profile. Software simulation does not establish these results.
+
+External fan validation still requires the selected physical driver: confirm
+PWM frequency/polarity, zero-duty behavior, startup torque at low duty, full-duty
+cooling and cooling through an enable change. The host harness proves requested
+electrical values, not actual motor operation.

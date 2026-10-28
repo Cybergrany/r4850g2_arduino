@@ -54,3 +54,12 @@ class TestHardwareSerial : public Stream {
   size_t write(uint8_t c) override { output.push_back(char(c)); return 1; }
 };
 extern TestHardwareSerial Serial;
+
+// Only the dedicated physical fan-adapter test exposes GPIO. The UI-debug
+// application tests intentionally compile without these APIs.
+#ifdef PSU_TEST_FAN_GPIO
+constexpr uint8_t LOW = 0, HIGH = 1, OUTPUT = 1;
+void digitalWrite(uint8_t pin, uint8_t value);
+void pinMode(uint8_t pin, uint8_t mode);
+void analogWrite(uint8_t pin, int value);
+#endif

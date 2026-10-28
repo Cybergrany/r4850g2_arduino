@@ -130,5 +130,6 @@ startup and storage replies identify simulation explicitly.
 `autoresume on/off` now changes the live enable request as well as its savable
 boot preference. OFF interrupts active apply work; console reset/reconnect does
 not. `diag control` reports the winning serial/switch/boot source, physical
-switch state, reconciliation and per-unit standby/fan outcomes. `reconcile`
+switch state, reconciliation, per-unit standby/fan outcomes and external PWM
+demand/temperature/reason. `reconcile`
 explicitly retries after faults are reviewed. See [CONTROL.md](CONTROL.md).

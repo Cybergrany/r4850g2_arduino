@@ -9,7 +9,7 @@ unbound, ambiguous and wrong-deployment devices receive no setting writes.
 
 1. Follow [GETTING_STARTED.md](GETTING_STARTED.md) to discover, inspect, bind,
    and group the actual identities. Binding makes the unit managed: background
-   reconciliation will request standby, maximum fan, common voltage and zero
+   reconciliation will request standby, evaluate the fan policy, set common voltage and zero
    current. `bind` itself does not transmit.
 2. Run `diag control` and `diag group GROUP1`. Wait for `held-in-standby`,
    `standby-confirmed=1`, fresh telemetry and broadcasts. A deliberate standby
@@ -38,9 +38,10 @@ serial, input or drawing:
    identity immediately before every write, including standby and fan writes.
 2. Request standby (`0x0132`, flag 1), require its matching ACK, and observe a
    **new** output-current sample within ±0.5 A. The measurement window is the
-   greater of 5 seconds and three poll periods. Maximum fan is requested while
-   waiting. An ACK alone does not establish that output stopped.
-3. Require maximum fan acceptance (`0x0134`, flag 1); prepare the authorized
+   greater of 5 seconds and three poll periods. Cooling continues while waiting.
+   An ACK alone does not establish that output stopped.
+3. Evaluate cooling and require its requested fan mode acceptance (`0x0134`);
+   prepare the authorized
    common voltage and temporary zero online current while held in standby.
    Before the first authorized profile, use the compiled deployment voltage,
    not a staged edit. Preparation does not replace saved authorized currents.
@@ -117,14 +118,20 @@ allocated authorized current, never the whole group total:
 
 - MAX when output temperature is **≥40°C**, requested operating current is
   **≥30 A**, or fresh measured output current is **≥30 A**.
-- MAX during startup/reconciliation or when required telemetry is missing,
-  stale, nonfinite or implausible. A new high-current apply requires the MAX ACK
+- Start at MAX when the physical unit is unknown. MAX when required telemetry
+  is missing, stale, nonfinite or implausible. A new high-current apply requires the MAX ACK
   before its current increase can be sent.
 - Return to AUTO only after temperature is **≤35°C** and both requested and
   measured current are **≤25 A**, continuously for **30 seconds**. Within the
   hysteresis band retain the previous requested mode.
-- In confirmed standby, effective requested current is zero while the authorized
-  profile remains intact. A cool stopped unit can therefore return to AUTO.
+- While OFF and confirmed stopped, effective requested current is zero while
+  the authorized profile remains intact. Enabling anticipates the authorized
+  current before release, including while the PSU is still stopped.
+- Fan decisions continue in every control phase, including output-control
+  faults. Serial/switch changes and explicit `reconcile` preserve the accepted
+  fan mode and elapsed cooldown. They do not force MAX or restart the 30-second
+  timer. A real identity/connection reset starts conservatively at MAX again.
+  A rejected fan command still latches and requires explicit recovery.
 
 Only mode changes or bounded recovery attempts are transmitted. `0x0134` is
 persistent **inside the PSU**, so it is not rewritten on each polling cycle.
@@ -133,6 +140,53 @@ An ACK confirms mode acceptance, not fan RPM or physical cooling. A plausibly
 stuck temperature sensor is not detectable from that reading alone; the separate
 current condition still applies. Fan policy never reduces requested current.
 A required fan failure instead produces an explicit latched fault and stop.
+
+## Optional external PWM fan
+
+Set **`PSU_FAN_PWM_PIN=6`** to enable a fan-driver output on Mega D6; `-1`
+(default) disables the physical output. `mega2560_touch_fan` supplies an example
+touch + ENABLE_IN + external fan build. Keep the other flags when extending a
+different environment. `PSU_FAN_PWM_INVERTED=1` supports an inverting driver;
+default 0 means a higher electrical duty requests more cooling.
+
+Use a suitable powered fan driver with a common ground. The GPIO is a logic
+signal, not a fan power supply. This adapter uses ordinary Arduino `analogWrite`
+(approximately 490 Hz on D6), not the 25 kHz control waveform expected by many
+four-wire PC fans. Check the selected driver's input requirements. The
+[Arduino AVR Mega mapping](https://github.com/arduino/ArduinoCore-avr/blob/master/variants/mega/pins_arduino.h)
+places D6 on Timer4; the adapter does not reconfigure timers or add interrupts.
+Compile-time checks reject conflicts with CAN, display, touch, ENABLE_IN, wheel
+pins, and the wheel's Timer1 PWM channels D11/D12.
+
+The backend computes one demand across **all configured PSU members**:
+
+- Use the maximum fresh output temperature, not an average.
+- Duty is 100% if any PSU requests MAX under the existing temperature/current
+  policy, including its 30-second cooldown hold. The current threshold remains
+  **per PSU**, not the sum of group/bus current.
+- Missing/unverified units, invalid/stale temperature or current, and CAN
+  initialization failure request 100%. Missing hardware cannot silently lower
+  cooling demand. Unmanaged discovery-only units do not contribute.
+- Once all units permit AUTO, use smoothstep `x²(3−2x)`, where
+  `x = clamp((temperature−20)/(40−20), 0, 1)`. The upper endpoint uses
+  `fanOutputTempThreshold`, so changing that single constant updates both
+  internal fan policy and this curve. The off endpoint is `externalFanOffTemp`.
+
+| Maximum output temperature | Duty after any MAX hold clears |
+| --- | ---: |
+| ≤20°C | 0% |
+| 25°C | ~16% |
+| 30°C | ~50% |
+| 35°C | ~84% |
+| ≥40°C | 100% |
+
+The implementation uses fixed-point integer smoothstep, no allocation or
+transcendental math. The output starts at full duty before display/CAN setup,
+re-evaluates at most every 100 ms, and writes GPIO only when duty changes. Enable
+events do not turn it off. `diag control` shows whether a physical pin is enabled,
+logical demand `/255`, maximum temperature and the demand reason. Demand is a
+command, not measured fan speed. Debug builds compute/display it without
+accessing the fan GPIO, even if the pin is configured. No EEPROM layout changes.
 
 ## Operator and UI hooks
 
@@ -150,8 +204,10 @@ screens share their title line with a compact source/status tag. Details show
 fan request/ACK and the exact failed control register. Fresh measurements keep
 updating while held. A stop request is never presented as confirmed standby.
 
-Future UIs can consume `enableControl()`, `controlStatus(now)`, and
-`unitControl(slot)` directly; policy belongs to the backend.
+Future UIs can consume `enableControl()`, `controlStatus(now)`,
+`unitControl(slot)`, and `externalFanStatus(now)` directly; policy belongs to the
+backend. External fan status includes logical duty, maximum temperature,
+telemetry completeness, and the PSU/reason causing a full-duty override.
 
 `PSU_UI_DEBUG` models standby, fan acceptance and zero-current wake, with no
 physical CAN, EEPROM or ENABLE_IN GPIO access. Additional scenarios are

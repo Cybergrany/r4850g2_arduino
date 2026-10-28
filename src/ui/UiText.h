@@ -65,7 +65,7 @@ inline const __FlashStringHelper* phaseName(ControlPhase s) {
     case ControlPhase::AwaitIdentity: return F("await-identity");
     case ControlPhase::Standby: return F("request-standby");
     case ControlPhase::Stopping: return F("verify-stopped-current");
-    case ControlPhase::Fan: return F("require-max-fan");
+    case ControlPhase::Fan: return F("require-fan-policy");
     case ControlPhase::Voltage: return F("prepare-voltage");
     case ControlPhase::Zero: return F("prepare-zero-current");
     case ControlPhase::Prepared: return F("held-in-standby");

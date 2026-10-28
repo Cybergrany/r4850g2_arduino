@@ -370,3 +370,12 @@ the configuration revision, invalidating pending UI edits/confirmations.
 EEPROM schema are added: save snapshots the existing autoResume preference, and
 fan thresholds/pins live in `ControlConfig.h`. See [CONTROL.md](CONTROL.md) for
 ordering, exact thresholds, failure handling and hardware limits.
+
+Fan hysteresis and accepted mode survive software reconciliation and enable
+events; identity/connection changes invalidate them. Cooling is evaluated in
+every control phase. `externalFanStatus(now)` folds per-unit policy and the
+hottest fresh output temperature into one logical PWM demand, using the small
+fixed-point curve in `FanPolicy.h`. Missing telemetry requests full duty.
+`io/FanOutput` owns only the optional GPIO, polarity, 100 ms cadence and changed
+duty writes. Application initializes it before display/CAN setup; debug builds
+exclude physical fan access. Neither adapter nor policy modifies EEPROM.
