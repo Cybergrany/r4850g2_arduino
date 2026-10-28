@@ -564,6 +564,80 @@ void fanControl() {
   CHECK(r.c.unitControl(0).fault==CommandState::Changed && !r.c.unitControl(0).standbyConfirmed);
   r.finish(); CHECK(r.c.unitControl(0).standbyConfirmed);
 }
+void manualFanControl() {
+  Rig r(authorized(false),true,false); r.finish();
+  const auto profile = r.c.configuration(); const auto first = r.can.writes().size();
+  CHECK(r.c.setFanOverride(0,FanOverride::Max,r.now)==Result::Invalid);
+  CHECK(r.c.setFanOverride(4,FanOverride::Max,r.now)==Result::Invalid);
+  CHECK(r.c.setFanOverride(3,FanOverride::Auto,r.now)==Result::Ok); r.step(2000);
+  CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto && r.c.unitControl(1).fanAcknowledged==FanMode::Auto);
+  CHECK(r.c.unitControl(0).fanReason==FanReason::ManualAuto);
+  CHECK(!r.c.enableControl().enabled() && r.c.controlStatus(r.now).activity==Activity::Holding);
+  CHECK(r.c.configuration().operating.current[0]==profile.operating.current[0] && r.c.configuration().voltage==profile.voltage);
+  CHECK(r.c.setFanOverride(1,FanOverride::Max,r.now)==Result::Ok); r.step(2000);
+  CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max && r.c.unitControl(1).fanAcknowledged==FanMode::Auto);
+  CHECK(r.c.externalFanStatus(r.now).reason==FanReason::ManualMax);
+  const auto settled=r.can.writes().size();
+  CHECK(r.c.setFanOverride(1,FanOverride::Max,r.now)==Result::Ok); r.step(6000);
+  CHECK(r.can.writes().size()==settled);
+  const auto writes=r.can.writes();
+  for(size_t i=first;i<writes.size();++i) CHECK(writes[i].data[1]==protocol::FanMode);
+  CHECK(writes.size()==first+3 && !writes[first].data[3] && !writes[first+1].data[3] && writes.back().data[3]==1);
+  // Leaving manual AUTO cannot retain AUTO through the policy deadband.
+  r.temperature=36; CHECK(r.c.setFanOverride(3,FanOverride::Policy,r.now)==Result::Ok); r.step(2000);
+  CHECK(r.c.unitControl(1).fanAcknowledged==FanMode::Max && r.c.unitControl(1).fanOverride==FanOverride::Policy);
+  r.temperature=30; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  // Validate all selected targets first; no partial or delayed test on a missing unit.
+  r.live=1; r.step(6000);
+  CHECK(r.c.setFanOverride(3,FanOverride::Max,r.now)==Result::Blocked);
+  CHECK(r.c.unitControl(0).fanOverride==FanOverride::Policy);
+  CHECK(r.c.setFanOverride(3,FanOverride::Policy,r.now)==Result::Ok);
+  r.live=3; r.finish(); r.step(3000);
+  CHECK(r.c.setFanOverride(2,FanOverride::Auto,r.now)==Result::Ok); r.step(2000);
+  r.live=1; r.step(6000); CHECK(r.c.unitControl(1).fanOverride==FanOverride::Policy);
+  r.step(limits::identityLeaseMs); // A different address must wait out the old identity lease.
+  r.addresses[1]=17; r.live=3; r.finish(); r.step(3000);
+  CHECK(r.c.unitControl(1).fanOverride==FanOverride::Policy && r.c.unitControl(1).fanAcknowledged==FanMode::Max);
+  CHECK(r.c.setFanOverride(1,FanOverride::Max,r.now)==Result::Ok); r.c.reconcile(); r.finish();
+  CHECK(r.c.unitControl(0).fanOverride==FanOverride::Policy);
+  // Enable cancels AUTO and requires MAX acceptance before a high-current restore.
+  auto high=authorized(false); high.operating.current[0]=high.operating.current[1]=3000;
+  Rig resume(high,true,false); resume.finish();
+  CHECK(resume.c.setFanOverride(3,FanOverride::Auto,resume.now)==Result::Ok); resume.step(2000);
+  const auto enabled=resume.can.writes().size(); resume.c.setAutoResume(true); resume.finish();
+  CHECK(resume.c.unitControl(0).fanOverride==FanOverride::Policy && resume.c.unitControl(1).fanAcknowledged==FanMode::Max);
+  uint8_t maxAccepted=0; const auto restored=resume.can.writes();
+  for(size_t i=enabled;i<restored.size();++i) {
+    const auto& f=restored[i]; const uint8_t bit=1U<<(protocol::address(f.id)-1);
+    if(f.data[1]==protocol::FanMode && f.data[3]) maxAccepted|=bit;
+    if(f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)) CHECK(maxAccepted&bit);
+  }
+  CHECK(maxAccepted==3 && resume.c.report().succeeded==3);
+  CHECK(resume.c.setFanOverride(1,FanOverride::Auto,resume.now)==Result::Blocked);
+  // An AUTO waiting on identity is cancelled if a switch enables charging.
+  Rig race(high,true,false); race.finish(); race.answerIdentityQueries=false;
+  CHECK(race.c.setFanOverride(3,FanOverride::Auto,race.now)==Result::Ok); race.step(1);
+  CHECK(race.c.unitControl(0).last==CommandState::VerifyingIdentity);
+  const auto before=race.can.writes().size();
+  race.c.sampleEnableInput(true,race.now); race.c.sampleEnableInput(true,race.now+50); race.finish();
+  CHECK(race.c.unitControl(0).fanOverride==FanOverride::Policy);
+  const auto raced=race.can.writes();
+  for(size_t i=before;i<raced.size();++i) CHECK(raced[i].data[1]!=protocol::FanMode || raced[i].data[3]);
+  // Rejection stays latched; a fan command cannot silently retry/clear it.
+  Rig rejected(authorized(false),true,false); rejected.finish(); rejected.rejectRegister=protocol::FanMode;
+  CHECK(rejected.c.setFanOverride(1,FanOverride::Auto,rejected.now)==Result::Ok); rejected.step(2000);
+  CHECK(rejected.c.unitControl(0).fanFailed && rejected.c.unitControl(0).fault==CommandState::Rejected);
+  CHECK(rejected.c.setFanOverride(1,FanOverride::Max,rejected.now)==Result::Blocked);
+  const auto failed=rejected.can.writes().size(); rejected.step(5000); CHECK(rejected.can.writes().size()==failed);
+  // Dropped ACKs use the existing two-attempt budget; late replies cannot unlock a fault.
+  Rig timeout(authorized(false),true,false); timeout.finish(); timeout.dropRegister=protocol::FanMode;
+  const auto start=timeout.can.writes().size();
+  CHECK(timeout.c.setFanOverride(1,FanOverride::Auto,timeout.now)==Result::Ok); timeout.step(6000);
+  CHECK(timeout.c.unitControl(0).fault==CommandState::Timeout);
+  const auto timed=timeout.can.writes(); CHECK(timed.size()==start+control::commandAttempts);
+  timeout.can.incoming.push_back(ack(timed.back())); timeout.c.tick(timeout.now);
+  CHECK(timeout.c.unitControl(0).fanFailed && timeout.c.unitControl(0).fault==CommandState::Timeout);
+}
 void protocolAndConfiguration() {
   CHECK(protocol::request(1).id == 0x108140fe);
   CHECK(protocol::request(127).id == 0x10ff40fe);
@@ -1057,6 +1131,33 @@ struct Terminal {
     return io.output;
   }
 };
+void serialFanControl() {
+  Rig r(installation(3),false,false); r.finish(); Terminal t(r);
+  CHECK(t.input("fan all auto\n").find("Fan override=AUTO slots=1,2,3")!=std::string::npos); r.step(2500);
+  CHECK(t.input("diag psu 1\n").find("fan requested=AUTO acknowledged=AUTO")!=std::string::npos);
+  CHECK(t.input("fan 1,3 max\n").find("Fan override=MAX slots=1,3")!=std::string::npos); r.step(2000);
+  CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max && r.c.unitControl(1).fanAcknowledged==FanMode::Auto && r.c.unitControl(2).fanAcknowledged==FanMode::Max);
+  CHECK(t.input("fan 1-2 policy\n").find("Normal policy restored")!=std::string::npos);
+  CHECK(t.input("fan group1 auto\n").find("Fan override=AUTO slots=1,2,3")!=std::string::npos); r.step(2500);
+  CHECK(t.input("diag group GROUP1\n").find("override=AUTO;")!=std::string::npos);
+  const auto writes=r.can.writes().size();
+  for(const auto bad:{"fan all stop\n","fan auto\n","fan 0 max\n","fan 4 max\n","fan 1, max\n","fan NO_GROUP auto\n","fan all auto extra\n"})
+    CHECK(t.input(bad).find("ERR")!=std::string::npos);
+  CHECK(r.can.writes().size()==writes);
+  // Console reconnect leaves the live test alone; EEPROM never stores it.
+  t.input("hello\n"); CHECK(r.c.unitControl(0).fanOverride==FanOverride::Auto);
+  CHECK(t.input("save\n").find("EEPROM OK")!=std::string::npos);
+  Configuration saved; CHECK(t.memory.load(saved)==StorageResult::Ok);
+  Rig reboot(saved,true,false); reboot.finish(); CHECK(reboot.c.unitControl(0).fanOverride==FanOverride::Policy);
+  t.input("autoresume on\n"); r.finish();
+  CHECK(t.input("fan all auto\n").find("manual AUTO requires autoresume off")!=std::string::npos);
+  CHECK(t.input("fan all max\n").find("Fan override=MAX")!=std::string::npos); r.step(2500);
+  r.live=3; r.step(6000);
+  CHECK(t.input("fan all max\n").find("BLOCKED fan PSU 3: missing")!=std::string::npos);
+  CHECK(t.input("fan all policy\n").find("Fan override=POLICY")!=std::string::npos);
+  CHECK(t.input("help\n").find("fan <all|GROUP|slots>")!=std::string::npos);
+  CHECK(t.input("diag bus\n").find("output-overruns=0")!=std::string::npos);
+}
 void serialWorkflow() {
   Rig r; Terminal t(r);
   CHECK(t.input("help diagnostics\n").find("BUS / GROUP DIAGNOSTICS") != std::string::npos);
@@ -1540,9 +1641,9 @@ void uiLayouts() {
 }
 int main() {
   try {
-    controlLifecycle(); zeroHoldEdges(); fanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
+    controlLifecycle(); zeroHoldEdges(); fanControl(); manualFanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
-    eepromAndMigration(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();
+    eepromAndMigration(); serialFanControl(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();
     uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

@@ -113,6 +113,33 @@ and wait for `held-at-zero-awake` with
 `zero-confirmed=1 awake=1` before the first apply. Normal OFF keeps units awake
 with a zero current limit; it does not request hardware standby.
 
+### Test the fans without charging
+
+Keep `autoresume off` and wait for the confirmed awake zero hold above. Then:
+
+```text
+fan all max
+diag control
+```
+
+Wait for `fan requested=MAX acknowledged=MAX`. To test the PSU's internal
+automatic fan control:
+
+```text
+fan all auto
+diag control
+```
+
+Wait for `fan requested=AUTO acknowledged=AUTO`. No voltage/current edit or
+`apply` is required. Replace `all` with a group name, a slot such as `1`, or a
+selection such as `1,3-4`. AUTO testing requires OFF/confirmed zero hold; it
+bypasses the Mega thresholds while active and clears when charging is enabled.
+
+Finish with `fan all policy` to restore the Mega's normal temperature/current
+rules. Its usual MAX/cooldown can apply before AUTO returns. Overrides are
+temporary and are not included in `save`; `reconcile` also clears them.
+See [fan test behavior and failures](CONTROL.md#manual-fan-tests-over-serial).
+
 ## 3. Stage and apply voltage and current
 
 ```text
@@ -443,6 +470,7 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `autoresume on/off` | Live enable/zero-current hold request and boot preference; latest switch edge/serial wins; save explicitly |
 | `diag control` | Enable source/switch, reconciliation phases, zero/awake/fan ACKs and faults |
 | `reconcile` | Cancel an apply, request zero current and retry latched control faults |
+| `fan all/GROUP/slots auto/max/policy` | Immediate fan override; AUTO requires OFF/confirmed zero hold; policy restores normal rules |
 
 ## Checking scheduling under load
 

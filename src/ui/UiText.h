@@ -42,6 +42,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::Reconciling: return F("reconciling zero/fan/voltage/wake; wait and inspect diag control");
     case Issue::ControlFault: return F("control fault latched; diag control/psu; correct cause then reconcile");
     case Issue::NoProfile: return F("no complete authorized voltage profile; stage settings then apply all/voltage");
+    case Issue::FanTestRequiresHold: return F("manual AUTO requires autoresume off and confirmed awake zero hold; diag control");
   }
   return F("unknown");
 }
@@ -81,6 +82,9 @@ inline const __FlashStringHelper* phaseName(ControlPhase s) {
 inline const __FlashStringHelper* fanName(FanMode m) {
   return m == FanMode::Max ? F("MAX") : m == FanMode::Auto ? F("AUTO") : F("UNKNOWN");
 }
+inline const __FlashStringHelper* fanOverrideName(FanOverride m) {
+  return m == FanOverride::Max ? F("MAX") : m == FanOverride::Auto ? F("AUTO") : F("POLICY");
+}
 inline const __FlashStringHelper* fanReasonName(FanReason r) {
   switch (r) {
     case FanReason::Startup: return F("startup/uncertain-state");
@@ -90,6 +94,8 @@ inline const __FlashStringHelper* fanReasonName(FanReason r) {
     case FanReason::InvalidTelemetry: return F("invalid/stale-telemetry");
     case FanReason::Cooling: return F("hysteresis/cooldown");
     case FanReason::Cool: return F("cool/low-current");
+    case FanReason::ManualAuto: return F("manual-PSU-auto");
+    case FanReason::ManualMax: return F("manual-max");
   }
   return F("unknown");
 }

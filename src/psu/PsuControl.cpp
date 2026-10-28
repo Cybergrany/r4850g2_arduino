@@ -39,6 +39,7 @@ void PsuController::reconcile() {
   restorePending_ = running_;
   for (uint8_t i = 0; i < count(); ++i) {
     auto& u = control_[i];
+    clearFanOverride(i);
     UnitControl next;
     next.coolSince = u.coolSince; next.cooling = u.cooling;
     next.fanRequested = u.fanRequested; next.fanReason = u.fanReason;
@@ -62,6 +63,8 @@ void PsuController::enableChanged(bool wasEnabled) {
     }
   }
   else if (!wasEnabled && enable_.enabled()) {
+    for (uint8_t i = 0; i < count(); ++i)
+      if (control_[i].fanOverride == FanOverride::Auto) clearFanOverride(i);
     running_ = config_.operating.voltageMask;
     restorePending_ |= running_;
   }
@@ -73,6 +76,44 @@ Result PsuController::setAutoResume(bool on) {
 void PsuController::sampleEnableInput(bool active, uint32_t now) {
   const bool was = enable_.enabled();
   if (enable_.sample(active, now)) enableChanged(was);
+}
+Issue PsuController::fanOverrideIssue(uint8_t i, FanOverride mode, uint32_t now) const {
+  if (i >= count() || (mode != FanOverride::Policy && mode != FanOverride::Auto && mode != FanOverride::Max)) return Issue::Invalid;
+  if (mode == FanOverride::Policy) return Issue::None; // Always permit clearing a test, even if a unit vanished.
+  if (!ready_) return Issue::Invalid;
+  const auto route = routingIssue(i, now);
+  if (route != Issue::None) return route;
+  const auto& u = control_[i];
+  if (u.fanFailed) return Issue::ControlFault; // A test is not a fault-reset command.
+  if (mode == FanOverride::Auto) {
+    const auto* d = deviceForSlot(i, now); float amps;
+    if (enable_.enabled() || u.fault != CommandState::Idle || u.phase != ControlPhase::Held ||
+        !u.zeroConfirmed || !u.awakeConfirmed || !d || !d->telemetry.broadcastSeen || !d->telemetry.ready ||
+        uint32_t(now - d->telemetry.lastBroadcast) > staleMs() ||
+        !freshMetric(i, protocol::OutputCurrent, amps, now) || !isfinite(amps) || fabsf(amps) > control::stoppedCurrentAmps)
+      return Issue::FanTestRequiresHold;
+  }
+  return Issue::None;
+}
+void PsuController::clearFanOverride(uint8_t i) {
+  auto& u = control_[i];
+  if (u.fanOverride == FanOverride::Policy) return;
+  u.fanOverride = FanOverride::Policy;
+  // Do not inherit a manually forced AUTO through the policy's deadband.
+  u.fanRequested = FanMode::Max; u.fanReason = FanReason::Startup; u.cooling = false;
+}
+Result PsuController::setFanOverride(uint8_t mask, FanOverride mode, uint32_t now) {
+  if (!mask || (mask & ~membersMask(count())) ||
+      (mode != FanOverride::Policy && mode != FanOverride::Auto && mode != FanOverride::Max)) return Result::Invalid;
+  if (busy()) return Result::Busy;
+  for (uint8_t i = 0; i < count(); ++i) if ((mask & (1U << i)) && fanOverrideIssue(i, mode, now) != Issue::None)
+    return Result::Blocked; // Validate the complete selection before changing any member.
+  for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
+    if (mode == FanOverride::Policy) clearFanOverride(i);
+    else control_[i].fanOverride = mode;
+    updateFan(i, now);
+  }
+  return Result::Ok;
 }
 uint16_t PsuController::reconciliationVoltage() const {
   return config_.operating.voltageAuthorized ? config_.operating.voltage : deployment::voltage;
@@ -98,6 +139,14 @@ void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t 
 }
 void PsuController::updateFan(uint8_t i, uint32_t now) {
   auto& u = control_[i]; float temperature = 0, amps = 0;
+  if (u.fanOverride == FanOverride::Auto && fanOverrideIssue(i, FanOverride::Auto, now) != Issue::None)
+    clearFanOverride(i);
+  if (u.fanOverride != FanOverride::Policy) {
+    const bool maximum = u.fanOverride == FanOverride::Max;
+    u.fanRequested = maximum ? FanMode::Max : FanMode::Auto;
+    u.fanReason = maximum ? FanReason::ManualMax : FanReason::ManualAuto;
+    return;
+  }
   const bool data = freshMetric(i, protocol::OutputTemperature, temperature, now) && isfinite(temperature) &&
       temperature >= control::minimumTemperature && temperature <= control::maximumTemperature &&
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && amps >= 0;

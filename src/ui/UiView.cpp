@@ -43,6 +43,7 @@ FlashText shortIssue(Issue issue) {
     case Issue::Disabled: return UI_TEXT("ENABLE IS OFF");
     case Issue::Reconciling: return UI_TEXT("RECONCILING");
     case Issue::NoProfile: return UI_TEXT("NEEDS PROFILE");
+    case Issue::FanTestRequiresHold: return UI_TEXT("FAN TEST: ZERO HOLD");
     case Issue::VoltageUnsynced: return UI_TEXT("APPLY BUS VOLTAGE FIRST");
     case Issue::DeploymentMismatch: return UI_TEXT("WRONG DEPLOYMENT");
     case Issue::Busy: return UI_TEXT("BUSY");

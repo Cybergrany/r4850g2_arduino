@@ -6,7 +6,7 @@ enum class Result : uint8_t { Ok, Invalid, Busy, TransportError, Blocked, Confir
 enum class Issue : uint8_t {
   None, Missing, Unbound, Unassigned, IdentityPending, Conflict, NoTelemetry,
   NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity,
-  Disabled, Reconciling, ControlFault, NoProfile
+  Disabled, Reconciling, ControlFault, NoProfile, FanTestRequiresHold
 };
 enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
@@ -61,6 +61,10 @@ class PsuController {
   void sampleEnableInput(bool active, uint32_t now);
   const EnableControl& enableControl() const { return enable_; }
   const UnitControl& unitControl(uint8_t slot) const { return control_[slot]; }
+  // Immediate, volatile fan test; targets are configured slots, not CAN addresses.
+  // AUTO is only allowed while OFF and confirmed awake at zero current.
+  Issue fanOverrideIssue(uint8_t slot, FanOverride mode, uint32_t now) const;
+  Result setFanOverride(uint8_t mask, FanOverride mode, uint32_t now);
   // Logical duty (0..255), independent of the optional physical pin and enable.
   ExternalFanStatus externalFanStatus(uint32_t now) const;
   ControlStatus controlStatus(uint32_t now) const;
@@ -128,6 +132,7 @@ class PsuController {
   void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now);
   void controlPhase(uint8_t slot, ControlPhase phase, uint32_t now);
   void updateFan(uint8_t slot, uint32_t now);
+  void clearFanOverride(uint8_t slot);
   bool wakeAllowed(uint8_t slot, uint32_t now) const;
   bool releaseAllowed(uint32_t now) const;
   bool controlsOnline(uint8_t mask) const;

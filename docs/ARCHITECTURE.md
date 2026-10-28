@@ -390,3 +390,12 @@ voltage before any held unit becomes Online. Every zero stop observes new
 current after its ACK; every initial wake also observes a new ready broadcast.
 `UnitControl::zeroConfirmed`, `awakeConfirmed` and `standbyConfirmed` distinguish
 normal holding, wake verification and exceptional hardware fallback.
+
+`setFanOverride(mask, mode, now)` validates the entire slot selection using
+`fanOverrideIssue` before changing any member. `UnitControl::fanOverride` is
+volatile; effective `fanRequested` uses the existing identity/ACK/retry worker.
+Manual AUTO is restricted to confirmed awake zero hold while disabled, and is
+cleared before enable can release a high-current profile. Removing an override
+returns conservatively to MAX and normal cooldown. Configuration/identity resets
+cannot transfer an override to a replacement. Serial exposes the override and
+ACK separately; future UI controls can use the same backend API.

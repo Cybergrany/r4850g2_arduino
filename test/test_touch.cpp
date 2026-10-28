@@ -303,6 +303,11 @@ void applicationScenarios() {
   CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
   command("autoresume off"); tick(1000); command("diag control"); tick(150);
   CHECK(Serial.output.find("enable=OFF source=autoresume/serial")!=std::string::npos && hasText(appFrame,"ZERO A: SERIAL OFF"));
+  command("fan all auto"); tick(300); command("diag psu 1"); tick(100);
+  CHECK(Serial.output.find("fan requested=AUTO acknowledged=AUTO")!=std::string::npos && Serial.output.find("override=AUTO;")!=std::string::npos);
+  command("fan GROUP1 max"); tick(300); command("diag psu 1"); tick(100);
+  CHECK(Serial.output.find("fan requested=MAX acknowledged=MAX")!=std::string::npos && Serial.output.find("override=MAX;")!=std::string::npos);
+  command("fan all policy"); tick(100);
   command("ui-debug enable-input off"); tick(10); command("ui-debug enable-input on"); tick(1000); command("diag control"); tick(150);
   CHECK(Serial.output.find("enable=ON source=ENABLE_IN")!=std::string::npos);
 

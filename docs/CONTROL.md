@@ -141,7 +141,7 @@ allocated authorized current, never the whole group total:
   the authorized profile remains intact. Enabling anticipates the authorized
   current before release, including while the PSU is still stopped.
 - Fan decisions continue in every control phase, including output-control
-  faults. Serial/switch changes and explicit `reconcile` preserve the accepted
+  faults. In normal policy mode, serial/switch changes and explicit `reconcile` preserve the accepted
   fan mode and elapsed cooldown. They do not force MAX or restart the 30-second
   timer. A real identity/connection reset starts conservatively at MAX again.
   A rejected fan command still latches and requires explicit recovery.
@@ -153,6 +153,43 @@ An ACK confirms mode acceptance, not fan RPM or physical cooling. A plausibly
 stuck temperature sensor is not detectable from that reading alone; the separate
 current condition still applies. Fan policy never reduces requested current.
 A required fan failure instead produces an explicit latched fault and stop.
+
+### Manual fan tests over serial
+
+Use `fan <all|GROUP|slots> <auto|max|policy>` to change fan control immediately;
+no voltage/current edit, `apply`, or `save` is needed. Targets are configured
+slots, not temporary CAN addresses. Examples: `fan all max`, `fan GROUP1 auto`,
+`fan 1 max`, `fan 1,3-4 policy`.
+
+- `max` holds the selected PSUs' fans in MAX. It works while held or enabled.
+- `auto` selects the **PSU's own AUTO mode**, bypassing the Mega's temperature,
+  current and cooldown decision for the selected units. This bench override
+  requires effective enable OFF and confirmed awake zero-current holding.
+  Run `autoresume off`, then wait for `zero-confirmed=1 awake=1` in `diag control`.
+  AUTO is cleared if enable turns ON or the zero-hold conditions cease to hold.
+- `policy` removes the override and returns to the normal Mega thresholds.
+  Leaving a manual override starts conservatively at MAX; the usual 30-second
+  cooldown can then release it. It does not necessarily send AUTO immediately.
+
+Read `diag psu 1`, `diag group GROUP1`, or `diag control` after each command.
+Check `override`, `fan requested`, `acknowledged`, `control-last`, and `LATCHED`.
+An accepted serial request is not a PSU ACK. A changed mode uses the normal
+per-write identity check, exact ACK match and bounded retry path. A mode already
+ACKed is not rewritten repeatedly. Missing/ambiguous targets block the entire
+selection before any override changes; active apply jobs report busy. Fan
+failures remain latched and require `reconcile` after fixing the cause.
+
+Overrides are RAM-only and survive a console reconnect without MCU reset.
+They clear on `policy`, `reconcile`, configuration load/reset, or that unit's
+identity/connection reset; AUTO also clears on enable. `save` does not persist
+them. The PSU's fan-mode register itself is persistent, so finish with
+`fan all policy` before disconnecting the controller. These commands change no
+voltage/current profile and grant no charging authorization.
+
+If external PWM is enabled, it uses the resulting per-unit demands: any manual
+MAX holds full duty; with every unit in AUTO, the temperature curve applies.
+Missing/invalid telemetry still forces external full duty. Fan mode acceptance
+does not measure RPM or guarantee a physical speed change.
 
 ## Optional external PWM fan
 

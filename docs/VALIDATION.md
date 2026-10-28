@@ -2,7 +2,7 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended with awake zero-current holding and four-wire 25 kHz fan coverage on
+extended with awake zero-current holding, manual fan tests and four-wire 25 kHz fan coverage on
 2026-10-28. No firmware upload or physical fan/touch/multi-PSU test was performed.
 
 ```sh
@@ -30,26 +30,26 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
 | --- | ---: | ---: |
-| `mega2560` | 6849 | 96210 |
-| `mega2560_serial` | 5021 | 64884 |
-| `mega2560_display` | 6824 | 93450 |
-| `mega2560_local` | 5553 | 65420 |
-| `mega2560_minimal` | 3673 | 28640 |
-| `mega2560_touch` | 7159 | 106114 |
-| `mega2560_touch_wheel` | 7184 | 107582 |
-| `mega2560_ui_debug` | 6844 | 95958 |
-| `mega2560_touch_debug` | 7154 | 106340 |
-| `mega2560_touch_local` | 5837 | 73166 |
-| `mega2560_touch_debug_local` | 5800 | 73220 |
-| `mega2560_touch_enable` | 7159 | 106424 |
-| `mega2560_touch_fan` | 7164 | 106742 |
-| `mega2560_serial_fan` | 5026 | 65194 |
+| `mega2560` | 6883 | 98662 |
+| `mega2560_serial` | 5055 | 67452 |
+| `mega2560_display` | 6858 | 95898 |
+| `mega2560_local` | 5563 | 66232 |
+| `mega2560_minimal` | 3681 | 29222 |
+| `mega2560_touch` | 7193 | 108572 |
+| `mega2560_touch_wheel` | 7218 | 110040 |
+| `mega2560_ui_debug` | 6878 | 98420 |
+| `mega2560_touch_debug` | 7188 | 108802 |
+| `mega2560_touch_local` | 5847 | 73864 |
+| `mega2560_touch_debug_local` | 5810 | 74026 |
+| `mega2560_touch_enable` | 7193 | 108882 |
+| `mega2560_touch_fan` | 7198 | 109202 |
+| `mega2560_serial_fan` | 5060 | 67620 |
 
-The touch/serial build uses 87.4% static RAM and 41.8% flash, leaving 1033 bytes
-for stack/runtime use (1008 bytes with touch and wheel). Omitting serial leaves
-2355 bytes in the production touch profile. Enabling external PWM adds 5 bytes
-of static RAM (1028 bytes remain in the touch/enable/fan build). The serial-only
-fan build leaves 3166 bytes. Static RAM excludes worst-case stack/interrupt nesting.
+The touch/serial build uses 87.8% static RAM and 42.8% flash, leaving 999 bytes
+for stack/runtime use (974 bytes with touch and wheel). Omitting serial leaves
+2345 bytes in the production touch profile. Enabling external PWM adds 5 bytes
+of static RAM (994 bytes remain in the touch/enable/fan build). The serial-only
+fan build leaves 3132 bytes. Static RAM excludes worst-case stack/interrupt nesting.
 There is no full colour framebuffer; two text/style scenes use 1170 bytes.
 Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
 512 bytes, with two 256-byte slots and a 216-byte schema-2 record at this capacity.
@@ -69,7 +69,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **428919 host checks** and **958 touch/simulator checks** with
+Both suites pass: **437791 host checks** and **960 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -259,6 +259,16 @@ phase-correct mode/TOP/prescaler, DC endpoints, unselected timer/channel
 isolation, boot-full polarity, changed-only writes, 100 ms cadence and millis
 wrap. All six pin variants also compile against the real AVR register headers.
 Compile checks reject CAN, ENABLE_IN, unsupported PWM and encoder Timer1 conflicts.
+
+Manual AUTO/MAX/policy tests cover all/group/slot/range selection, malformed
+commands, exact fan-only writes, accepted-mode deduplication, all-or-none
+validation with a missing member, connection/address recovery, explicit policy
+and reconciliation reset, EEPROM exclusion, and console reconnect retention.
+AUTO is cancelled by serial/switch enable before a high-current restore; an
+unsent AUTO cannot overtake that change. Rejected and missing fan ACKs retain
+the normal fault latch/two-attempt budget, including a late ACK after failure.
+The production debug application accepts the same commands and reports matched
+requested/ACKed modes. These tests do not measure real fan RPM.
 
 Before using the new sequence on hardware, verify zero `0x0103`, `0x0132` and
 `0x0134` acceptance on the actual G2 firmware, actual zero/standby current,

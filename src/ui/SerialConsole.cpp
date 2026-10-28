@@ -247,6 +247,33 @@ void SerialConsole::execute() {
   if (!strcmp(args[0], "reconcile") && argc == 1) {
     controller_.reconcile(); io_.println(F("Reconciliation restarted; active apply cancelled; authorized profile retained. diag control")); return;
   }
+  if (!strcmp(args[0], "fan")) {
+    if (argc != 3 || (strcmp(args[2], "auto") && strcmp(args[2], "max") && strcmp(args[2], "policy"))) {
+      io_.println(F("ERR fan <all|GROUP|slots> <auto|max|policy>; slots: 1 or 1,3-4")); return;
+    }
+    const int8_t group = controller_.groupIndex(args[1]);
+    if (group >= 0) mask = controller_.configuration().groups[group].members;
+    else if (!selection(args[1], controller_.count(), mask)) { reply(Result::Invalid); return; }
+    const auto mode = !strcmp(args[2], "auto") ? FanOverride::Auto : !strcmp(args[2], "max") ? FanOverride::Max : FanOverride::Policy;
+    const auto result = controller_.setFanOverride(mask, mode, now_);
+    if (result == Result::Blocked) {
+      for (uint8_t i = 0; i < controller_.count(); ++i) if (mask & (1U << i)) {
+        const auto issue = controller_.fanOverrideIssue(i, mode, now_);
+        if (issue != Issue::None) {
+          io_.print(F("BLOCKED fan PSU ")); io_.print(i + 1); io_.print(F(": ")); io_.println(issueName(issue));
+          io_.println(F("No fan overrides changed.")); return;
+        }
+      }
+    }
+    reply(result);
+    if (result == Result::Ok) {
+      io_.print(F("Fan override=")); io_.print(fanOverrideName(mode)); io_.print(F(" slots=")); printMembers(mask);
+      io_.println(F("; no apply/save needed. Check requested/acknowledged in diag control."));
+      if (mode == FanOverride::Auto) io_.println(F("AUTO tests PSU internal control; Mega thresholds bypassed while held. Enable clears AUTO."));
+      else if (mode == FanOverride::Policy) io_.println(F("Normal policy restored; MAX/cooldown may apply."));
+    }
+    return;
+  }
   if (!strcmp(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
   if ((!strcmp(args[0], "apply") || !strcmp(args[0], "preview") || !strcmp(args[0], "offline")) && argc >= 2 && argc <= 3) {
     const bool offline = !strcmp(args[0], "offline");
@@ -481,7 +508,7 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     const auto& u = controller_.unitControl(i);
     io_.print(F("  fan requested=")); io_.print(fanName(u.fanRequested)); io_.print(F(" acknowledged=")); io_.print(fanName(u.fanAcknowledged));
     io_.print(F(" reason=")); io_.println(fanReasonName(u.fanReason));
-    io_.println(F("  Fan ACK confirms mode acceptance, not measured RPM."));
+    io_.print(F("  override=")); io_.print(fanOverrideName(u.fanOverride)); io_.println(F("; ACK is mode acceptance, not RPM."));
     if (u.standbyConfirmed) io_.println(F("  FAULT fallback: hardware standby confirmed; explicit reconcile required"));
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
@@ -555,6 +582,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 14: io_.println(F("touch status/calibrate/debug on/off/calibration export (touch builds)")); break;
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
+      case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
     }

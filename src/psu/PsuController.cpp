@@ -128,6 +128,7 @@ void PsuController::reconcileSessions(const Configuration& next) {
     if (next.deploymentId != config_.deploymentId || i >= next.count ||
         !sameIdentity(next.units[i].identity, config_.units[i].identity)) {
       sessionAh_[i] = 0; sessionSeen_ &= uint8_t(~(1U << i));
+      clearFanOverride(i);
     }
 }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
