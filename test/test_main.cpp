@@ -210,12 +210,13 @@ struct Rig {
   bool reportAc = false;
   bool notReadyAtZero = false;
   uint32_t statusFlags = 0, outputReadyDelay = 0, outputReadyAt[PSU_MAX_UNITS] = {};
-  uint8_t noAc = 0;
+  uint8_t noAc = 0, notReady = 0, noBroadcast = 0;
+  uint16_t voltage = 5400;
   uint32_t notReadyUntil = 0;
-  uint8_t noTemperature = 0, noCurrent = 0, rejectRegister = 0xff, dropRegister = 0xff;
+  uint8_t noTemperature = 0, noCurrent = 0, noVoltage = 0, rejectRegister = 0xff, dropRegister = 0xff;
   bool leaking = false, leakOnWake = false;
   size_t acknowledged = 0;
-  explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true) : c(can), live(membersMask(config.count)) {
+  explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true, uint32_t start = 100) : c(can), now(start), live(membersMask(config.count)) {
     for (uint8_t i = 0; i < config.count; ++i) addresses[i] = i + 1;
     CHECK(c.configure(config, bootResume) == Result::Ok); CHECK(c.begin());
     heartbeat(); c.tick(now);
@@ -243,12 +244,13 @@ struct Rig {
   void heartbeat() {
     for (uint8_t i = 0; i < c.count(); ++i) if (live & (1U << i)) {
       can.incoming.push_back(info(addresses[i], identity(i + 1)));
-      can.incoming.push_back(data(addresses[i], 0x75, 54 * 1024));
+      if (!(noVoltage & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x75, uint32_t(voltage) * 1024 / 100));
       if (!(noCurrent & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x81, (standby & (1U<<i)) ? 0 :
           leaking || (leakOnWake && (woken & (1U<<i))) ? 2048 : uint32_t(current[i])*1024/100));
       if (!(noTemperature & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x7f, int32_t(temperature)*1024));
-      can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) && now >= notReadyUntil &&
-          !(notReadyAtZero && current[i] == 0) && now >= outputReadyAt[i]));
+      if (!(noBroadcast & (1U<<i))) can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) &&
+          !(notReady & (1U<<i)) && (!notReadyUntil || int32_t(now - notReadyUntil) >= 0) &&
+          !(notReadyAtZero && current[i] == 0) && (!outputReadyDelay || int32_t(now - outputReadyAt[i]) >= 0)));
       if (reportAc) can.incoming.push_back(data(addresses[i], 0x83, statusFlags | ((noAc & (1U<<i)) ? protocol::statusAcAbsent : 0)));
     }
   }
@@ -876,13 +878,15 @@ void restorationAndDeployment() {
   }
   written=r.can.writes().size();
   r.addresses[1] = 17; r.live = 3; r.step(250); // One identity sample cannot restore.
-  CHECK(r.can.writes().size() == written);
+  for(size_t n=written;n<r.can.writes().size();++n) CHECK(protocol::address(r.can.writes()[n].id)==1);
   r.step(250); r.finish();
   const auto restored = r.can.writes(); CHECK(restored.size() > written + 2);
-  CHECK(restored[written].data[1] == protocol::OnlineCurrent && !protocol::readBigEndian(restored[written].data+4));
   CanFrame lastReturned = {};
   for(size_t n=written;n<restored.size();++n) {
-    if(protocol::address(restored[n].id)==17) lastReturned=restored[n];
+    if(protocol::address(restored[n].id)==17) {
+      if(!lastReturned.id) CHECK(restored[n].data[1] == protocol::OnlineCurrent && !protocol::readBigEndian(restored[n].data+4));
+      lastReturned=restored[n];
+    }
     else {
       CHECK(protocol::address(restored[n].id)==1);
       CHECK(restored[n].data[1]==protocol::OnlineVoltage || restored[n].data[1]==protocol::OnlineCurrent);
@@ -927,8 +931,13 @@ void restorationAndDeployment() {
   for(size_t n=4;n<regrouped.size();++n) CHECK(regrouped[n].data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(regrouped[n].data+4)==0); // No redistribution.
 }
 void schedulerAndBounds() {
-  Rig full(installation(PSU_MAX_UNITS)); full.apply();
+  Rig full(installation(PSU_MAX_UNITS));
+  CHECK(full.c.queue(full.c.preview(Operation::All,-1,full.now),false,full.now)==Result::Ok);
+  for(unsigned n=0;n<300 && full.c.busy();++n) full.step();
+  CHECK(!full.c.busy() && full.c.report().succeeded==membersMask(PSU_MAX_UNITS));
   CHECK(full.can.writes().size() == PSU_MAX_UNITS * 2);
+  full.finish(); // Qualifying the last unit may overlap a healthy peer's periodic refresh.
+  for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(full.c.unitControl(i).outputDemand==OutputDemand::Active);
   // Cached identity/telemetry alone cannot authorize a setting at a reused address.
   Rig guarded; guarded.answerIdentityQueries = false;
   CHECK(guarded.c.queue(guarded.c.preview(Operation::Voltage, -1, guarded.now), false, guarded.now) == Result::Ok);
@@ -1695,10 +1704,12 @@ void uiLayouts() {
 }
 #include "test_availability.inc"
 #include "test_zero_hold.inc"
+#include "test_output_readiness.inc"
 }
 int main() {
   try {
     zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();
+    readinessQualification(); readinessFrameOrdering(); readinessAckOrdering(); readinessDeadlineAndLatch(); readinessTelemetryAndBoundary(); readinessSafetyEdges(); readinessMultiUnitAndWrap();
     availabilityProtocol(); startupPowerPolicy(); acceptedAbsences(); availabilityDecisionsAndStorage(); availabilityRefreshAndSoak(); availabilityInterfaces();
     controlLifecycle(); zeroHoldEdges(); fanControl(); manualFanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
     missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();

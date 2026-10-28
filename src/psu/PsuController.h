@@ -56,6 +56,7 @@ class PsuController {
   void sampleEnableInput(bool active, uint32_t now);
   const EnableControl& enableControl() const { return enable_; }
   const UnitControl& unitControl(uint8_t slot) const { return control_[slot]; }
+  ReadinessStatus readinessStatus(uint8_t slot, uint32_t now) const;
   // Immediate, volatile fan test; targets are configured slots, not CAN addresses.
   // AUTO is only allowed while OFF and confirmed awake at zero current.
   Issue fanOverrideIssue(uint8_t slot, FanOverride mode, uint32_t now) const;
@@ -152,6 +153,8 @@ class PsuController {
   void updateFan(uint8_t slot, uint32_t now);
   void clearFanOverride(uint8_t slot);
   bool readinessAcceptable(uint8_t slot, uint32_t now) const;
+  bool readinessEvidence(uint8_t slot, uint32_t now) const;
+  void readinessReceive(uint8_t slot, const CanFrame& frame, uint32_t now);
   void currentSent(uint8_t slot, uint16_t raw, uint32_t now);
   void currentAccepted(uint8_t slot, uint16_t raw);
   bool wakeAllowed(uint8_t slot, uint32_t now) const;

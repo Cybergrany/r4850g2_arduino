@@ -78,10 +78,41 @@ An online apply or authorized restore sends **the requested current limit**;
 there is no extra startup current or hidden redistribution. A nonzero write
 from zero starts a bounded max(15 seconds, three poll periods) output-readiness
 observation. `current-state=waiting-for-output-ready` and the serial/UI starting
-banner distinguish it from confirmed operation. A matching current ACK and
-fresh ready broadcast complete it. Repeated commands or periodic refresh do
-not extend this deadline. A timeout latches `output readiness timed out` and
-uses the existing stop fallback/cutoff; explicit `reconcile` is required.
+banner distinguish it from confirmed operation. After the matching current ACK,
+require **at least three received ready broadcasts spanning two seconds**, with
+**no gap over one second** and fresh voltage/current telemetry from the same
+verified identity. Each frame is processed in arrival order. One ready pulse,
+repeated reads of the same frame, or a burst at one timestamp cannot qualify.
+These defaults live in `ControlConfig.h`.
+
+A not-ready frame or excessive gap restarts only the two-second qualification;
+it does not re-zero/re-wake the PSU or extend the original startup deadline.
+The deadline is fixed at the first nonzero-current transmission, before the ACK;
+changing poll timing later cannot extend it. Draft edits remain available, but
+another live voltage or positive-current apply affecting a qualifying unit is
+blocked with an explanation. A zero-current group apply or `autoresume off`
+can stop it. Periodic settings refresh does not resend current while qualifying.
+Other units qualify independently; this does not change group membership or
+redistribute current.
+
+`diag control` / `diag psu 1` show, for example:
+
+```text
+Current accepted; verifying readiness
+ready-stable=750/2000ms frames=3/3 startup-remaining=11200ms; output may be live
+```
+
+The PSU detail screen shows the same progress and deadline, with `VERIFY` on its
+group card. **Current may already flow during qualification.** Measured voltage
+need not equal its limit (for example 52.63 V while charging with a 57 V limit),
+and measured current need not reach the requested limit. Check those readings
+separately; qualification checks the ready indication, not load delivery.
+
+A timeout latches `output readiness timed out` and uses the existing bounded
+standby fallback/cutoff. This fault survives CAN loss, AC transitions and address
+recovery in the same controller session; explicit `reconcile` is required.
+If stop proof was lost with the link, diagnostics show it as unconfirmed; a
+verified return attempts the bounded fault stop without restoring current.
 An accepted apply report still means command acceptance, not measured delivery;
 check `diag control` and measured voltage/current before increasing a load.
 
@@ -111,7 +142,8 @@ continues; a fan-command failure itself suppresses further fan writes until retr
 Fix the cause, then use **`reconcile`** to cancel an apply and retry from zero
 current while retaining the authorized profile and fan hysteresis. ON alone
 cannot clear a latched fault or wake a unit from the emergency fallback. A genuine
-identity/connection recovery also creates a new reconciliation attempt.
+identity/connection recovery normally creates a new reconciliation attempt, but
+does **not** clear an output-readiness timeout or a latched common-cutoff fault.
 
 The output can remain electrically live while held at zero. A zero-current
 limit is not isolation. The optional CHG_ALLOW output operates the installation's

@@ -569,6 +569,14 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.println(u.fault != CommandState::Idle ? F("fault") :
         u.outputDemand == OutputDemand::Zero ? F("zero") : u.outputDemand == OutputDemand::Starting ? F("waiting-for-output-ready") :
         u.outputDemand == OutputDemand::Active ? F("active") : u.outputDemand == OutputDemand::Stopping ? F("waiting-for-zero-ACK") : F("unknown"));
+  } else if (field == 7) {
+    const auto ready = controller_.readinessStatus(i, now);
+    if (ready.pending) {
+      io_.println(ready.acknowledged ? F("  Current accepted; verifying readiness") : F("  Current sent; waiting for ACK"));
+      io_.print(F("  ready-stable=")); io_.print(ready.stableMs); io_.print('/'); io_.print(control::outputReadyStableMs);
+      io_.print(F("ms frames=")); io_.print(ready.frames); io_.print('/'); io_.print(control::outputReadyFrames);
+      io_.print(F(" startup-remaining=")); io_.print(ready.remainingMs); io_.println(F("ms; output may be live"));
+    }
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
@@ -778,7 +786,7 @@ void SerialConsole::outputRow(uint32_t now) {
     while (row_ < c.count && !(viewMask_ & (1U << row_))) ++row_;
     if (row_ < c.count) {
       printUnit(row_, field_, now);
-      if (++field_ == 7) { field_ = 0; ++row_; }
+      if (++field_ == 8) { field_ = 0; ++row_; }
     } else view_ = View::None;
   } else if (view_ == View::Plan) {
     if (row_ == 0) {

@@ -90,11 +90,13 @@ void zeroHoldOutputStart() {
   UiRig startingUi(stopped); UiFrame startingFrame;
   UiView::compose(startingFrame,startingUi.ui,stopped.c,stopped.now);
   CHECK(rowText(startingFrame,1).find("STARTING / VERIFYING PSU") != std::string::npos);
+  CHECK(rowText(startingFrame,12).find("VERIFY") != std::string::npos);
   snapshot("control-output-starting",startingFrame);
   startingUi.click(); startingUi.click(); UiView::compose(startingFrame,startingUi.ui,stopped.c,stopped.now);
-  CHECK(rowText(startingFrame,4).find("WAIT OUTPUT READY") != std::string::npos);
-  CHECK(rowText(startingFrame,5).find("Current sent") != std::string::npos);
-  CHECK(rowText(startingFrame,8).find("a fault.") != std::string::npos);
+  CHECK(rowText(startingFrame,4).find("VERIFYING OUTPUT READY") != std::string::npos);
+  CHECK(rowText(startingFrame,5).find("Current ACK received") != std::string::npos);
+  CHECK(rowText(startingFrame,6).find("Ready 0/2000ms (0/3)") != std::string::npos);
+  CHECK(rowText(startingFrame,8).find("Output may be live") != std::string::npos);
   snapshot("control-output-wait",startingFrame);
   const auto beforeOff = stopped.can.writes().size();
   CHECK(stopped.c.setAutoResume(false) == Result::Ok); stopped.step(30000);

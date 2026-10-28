@@ -144,20 +144,64 @@ bool PsuController::readinessAcceptable(uint8_t i, uint32_t now) const {
     case OutputDemand::Zero:
       return u.zeroConfirmed ? fabsf(amps) <= control::stoppedCurrentAmps : age < staleMs();
     case OutputDemand::Starting:
-      return age < (staleMs() > control::startupReadyMs ? staleMs() : control::startupReadyMs);
+      return age < u.outputWindowMs;
     case OutputDemand::Stopping: return age < limits::ackTimeoutMs;
     default: return false;
   }
+}
+bool PsuController::readinessEvidence(uint8_t i, uint32_t now) const {
+  const auto* d = deviceForSlot(i, now); float volts, amps;
+  return d && routingIssue(i, now) == Issue::None && d->epoch == observedEpoch_[i] &&
+      d->acState(now, staleMs()) != AcState::Absent &&
+      freshMetric(i, protocol::OutputVoltage, volts, now) && isfinite(volts) &&
+      freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps);
+}
+ReadinessStatus PsuController::readinessStatus(uint8_t i, uint32_t now) const {
+  ReadinessStatus s;
+  if (i >= count()) return s;
+  const auto& u = control_[i];
+  s.pending = u.phase == ControlPhase::Online && u.fault == CommandState::Idle && u.outputDemand == OutputDemand::Starting;
+  s.acknowledged = currentSynchronized(i);
+  if (!s.pending) return s;
+  const uint32_t age = now - u.outputSince;
+  s.remainingMs = age < u.outputWindowMs ? u.outputWindowMs - age : 0;
+  if (s.acknowledged && u.readyFrames && uint32_t(now - u.readyLast) <= control::outputReadyMaxGapMs && readinessEvidence(i, now)) {
+    s.frames = u.readyFrames;
+    const uint32_t span = u.readyLast - u.readySince;
+    s.stableMs = span < control::outputReadyStableMs ? span : control::outputReadyStableMs;
+  }
+  return s;
+}
+void PsuController::readinessReceive(uint8_t i, const CanFrame& f, uint32_t now) {
+  auto& u = control_[i];
+  if (u.phase != ControlPhase::Online || u.outputDemand != OutputDemand::Starting || u.fault != CommandState::Idle) return;
+  // Handle each frame in receive order, including ready/not-ready/ready in the
+  // same CAN batch. An old broadcast or one preceding the matching ACK cannot
+  // qualify the new command. Invalid identity/telemetry also breaks the run.
+  if (!currentSynchronized(i) || !readinessEvidence(i, now)) { u.readyFrames = 0; return; }
+  if (!protocol::isCurrentBroadcast(f)) return;
+  if (f.data[3] != 0) { u.readyFrames = 0; return; }
+  if (!u.readyFrames || uint32_t(now - u.readyLast) > control::outputReadyMaxGapMs) {
+    u.readyFrames = 0; u.readySince = now;
+  }
+  u.readyLast = now;
+  if (u.readyFrames < control::outputReadyFrames) ++u.readyFrames;
 }
 void PsuController::currentSent(uint8_t i, uint16_t raw, uint32_t now) {
   auto& u = control_[i];
   if (raw) {
     if (u.outputDemand != OutputDemand::Active && u.outputDemand != OutputDemand::Starting) {
       u.outputDemand = OutputDemand::Starting; u.outputSince = now;
+      // Snapshot the deadline at transmission, including when pollMs is later
+      // edited. Retries, staged edits and brief readiness edges cannot extend it.
+      static_assert(uint32_t(limits::maxPollMs) * 3 <= UINT16_MAX, "Readiness window exceeds storage");
+      u.outputWindowMs = uint32_t(config_.pollMs) * 3 > control::startupReadyMs ? uint32_t(config_.pollMs) * 3 : control::startupReadyMs;
+      u.readyFrames = 0; currentSynced_ &= uint8_t(~(1U << i));
     }
     u.zeroConfirmed = false;
   } else if (u.outputDemand != OutputDemand::Zero) {
     u.outputDemand = OutputDemand::Stopping; u.outputSince = now; u.zeroConfirmed = false;
+    u.readyFrames = 0;
   }
 }
 void PsuController::currentAccepted(uint8_t i, uint16_t raw) {
@@ -291,6 +335,12 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
     held &= u.phase == ControlPhase::Held && u.awakeConfirmed;
     online &= u.phase == ControlPhase::Online;
     starting |= u.phase == ControlPhase::Wake || u.phase == ControlPhase::Starting || u.outputDemand == OutputDemand::Starting;
+    // An accepted profile can be queued before its first current write. Do not
+    // briefly report RUNNING at the previously confirmed zero limit.
+    starting |= u.phase == ControlPhase::Online && (config_.operating.currentMask & (1U << i)) &&
+        config_.operating.current[i] && !(currentSynced_ & (1U << i)) &&
+        ((busy() && report_.operation != Operation::Offline && (report_.recipients & (1U << i))) ||
+         (restorePending_ & uint8_t(~restoreBlocked_) & (1U << i)));
     if (s.blocker == Issue::None && (route != Issue::None || u.fault != CommandState::Idle)) {
       s.blocker = route != Issue::None ? route : Issue::ControlFault; s.slot = i;
     }
@@ -391,22 +441,29 @@ void PsuController::controlTick(uint32_t now) {
     auto& u = control_[i]; const auto* d = deviceForSlot(i, now);
     const uint32_t epoch = d && routingIssue(i, now) == Issue::None ? d->epoch : 0;
     if (observedEpoch_[i] != epoch) {
-      const CommandState latched = startup_.permit == PermitState::Fault ? u.fault : CommandState::Idle;
+      const CommandState latched = startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
       const uint8_t faultReg = u.faultRegister;
       u = {}; voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
-      if (latched != CommandState::Idle) { u.fault = latched; u.faultRegister = faultReg; u.phase = ControlPhase::Fault; }
+      if (latched != CommandState::Idle) {
+        u.fault = latched; u.faultRegister = faultReg;
+        // Stop proof belongs to the old route. On a verified return, try the
+        // bounded fallback again without ever waking/restoring a timed-out PSU.
+        u.phase = epoch && powerAvailable() ? ControlPhase::EmergencyStandby : ControlPhase::Fault;
+        restoreBlocked_ |= 1U << i;
+      } else restoreBlocked_ &= uint8_t(~(1U << i));
       if (running_ & (1U << i)) restorePending_ |= 1U << i;
-      restoreBlocked_ &= uint8_t(~(1U << i)); observedEpoch_[i] = epoch;
+      observedEpoch_[i] = epoch;
       if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
     }
     if (!epoch) { updateFan(i, now); continue; }
     if (u.phase == ControlPhase::AwaitIdentity) controlPhase(i, ControlPhase::Zero, now);
     if (u.phase == ControlPhase::Online && u.outputDemand == OutputDemand::Starting) {
-      if ((currentSynced_ & (1U << i)) && d->telemetry.ready &&
-          uint32_t(now - d->telemetry.lastBroadcast) <= staleMs() &&
-          after(d->telemetry.lastBroadcast, u.outputSince, now)) u.outputDemand = OutputDemand::Active;
-      else if (uint32_t(now - u.outputSince) >= startupObservation)
+      const auto readiness = readinessStatus(i, now);
+      if (!readiness.remainingMs)
         latchControlFault(i, CommandState::ReadinessTimeout, protocol::OnlineCurrent, now);
+      else if (readiness.frames >= control::outputReadyFrames && readiness.stableMs >= control::outputReadyStableMs)
+        u.outputDemand = OutputDemand::Active;
+      else if (!readiness.frames) u.readyFrames = 0;
     }
     if (u.phase == ControlPhase::Online && u.outputDemand == OutputDemand::Zero && !u.zeroConfirmed) {
       float amps;

@@ -57,9 +57,13 @@ The sequence runs cooperatively; CAN, serial, UI and cooling keep being serviced
    participants reconciled. Drafts are not charging authorization. Excluded
    identities remain held at zero even when ready.
 
-On a nonzero current write, require a matching ACK and a fresh output-ready
-broadcast within the same 15-second/three-poll allowance. Only the requested
-current is sent. If output readiness never follows, stop and latch a fault;
+On a nonzero current write, require a matching ACK followed by at least three
+ready broadcasts spanning two seconds, with no inter-frame gap over one second,
+within the same 15-second/three-poll allowance. That deadline is fixed at the
+first current transmission; readiness flapping resets only the qualification
+interval. Only the requested current is sent, and it may already flow while
+verification is pending. If qualification does not finish in time, stop and latch
+a fault which survives link/address recovery until explicit `reconcile`;
 do not restart indefinitely. [CONTROL.md](CONTROL.md) describes the idle-status
 guard and diagnostics. AC changes, missing identities, stale measurements,
 unknown status bits and unexpected held current retain their checks.

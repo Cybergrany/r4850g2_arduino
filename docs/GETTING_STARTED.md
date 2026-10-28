@@ -138,12 +138,25 @@ preview all
 apply all
 ```
 
-Wait for accepted commands and `current-state=active`, then inspect
-`diag control`, `telemetry GROUP1` and optionally `watch on`. A 1 A request is
+After the accepted commands, use `diag control` or `diag psu 1`: the controller
+checks at least three ready broadcasts spanning two seconds, with gaps no longer
+than one second. `ready-stable`, `frames` and `startup-remaining` show progress.
+Current may already flow during this check. A transient not-ready frame resets
+qualification without another zero/wake cycle; it cannot extend the fixed
+startup deadline. Further live voltage/positive-current applies to that unit
+wait until qualification finishes; staged edits and OFF remain available.
+
+Wait for `current-state=active`, then inspect
+`telemetry GROUP1` and optionally `watch on`. A 1 A request is
 a current **limit**; the load may draw less. If a previous authorized profile
 exists, ON can restore it first: inspect it before enabling and let the restore
 finish before applying new drafts. Finish with `watch off`, `autoresume off`,
 and verify stable zero hold; `save` retains the final OFF preference.
+
+If `output readiness timed out` latches, inspect the load, connection and
+diagnostics before using `reconcile`. ON or a brief CAN disconnect cannot clear
+this fault. Check whether the fallback stop is confirmed; an ACK alone does not
+prove zero current or electrical isolation.
 
 ### Test the fans without charging
 

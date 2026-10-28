@@ -222,6 +222,11 @@ ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool 
       p.blocker = Issue::ApprovalRequired; continue;
     }
     if (p.issues[i] == Issue::Missing) p.missing |= 1U << i;
+    // Staging remains available. A new live voltage/positive-current apply
+    // must not replace an outstanding startup observation; a zero group apply
+    // (and the independent OFF path) can still stop it.
+    if (p.issues[i] == Issue::None && control_[i].outputDemand == OutputDemand::Starting &&
+        op != Operation::Offline && (op != Operation::GroupCurrent || p.current[i])) p.issues[i] = Issue::ReadinessPending;
     if (p.issues[i] == Issue::None && op == Operation::GroupCurrent && !(voltageSynced_ & (1U << i))) p.issues[i] = Issue::VoltageUnsynced;
     if (p.issues[i] != Issue::None) {
       if (!(partial && op == Operation::GroupCurrent && p.issues[i] == Issue::Missing)) p.blocker = p.issues[i];
@@ -321,6 +326,7 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
     const auto* d = deviceForSlot(i, now);
     if (d && d->address == protocol::address(f.id)) { slot = i; break; }
   }
+  if (slot >= 0) readinessReceive(slot, f, now);
   if (slot >= 0 && protocol::isCurrentBroadcast(f)) {
     const auto* d = deviceForSlot(slot, now);
     if (d && d->verified(now)) {
@@ -457,7 +463,9 @@ void PsuController::restore(uint32_t now) {
   if (config_.operating.voltageMask != membersMask(count())) return;
   // Global voltage is verified across the complete installation before restore.
   for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & (1U << i)) && issue(i, now) != Issue::None) return;
-  const uint8_t recipients = restorePending_ & participants() & uint8_t(~restoreBlocked_);
+  uint8_t recipients = restorePending_ & participants() & uint8_t(~restoreBlocked_);
+  for (uint8_t i = 0; i < count(); ++i)
+    if (control_[i].outputDemand == OutputDemand::Starting) recipients &= uint8_t(~(1U << i));
   if (!recipients) return;
   // Restore the authorized profile, never staged edits. Voltage is acknowledged
   // by every returning recipient before any authorized current is restored.

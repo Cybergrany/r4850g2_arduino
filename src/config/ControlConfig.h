@@ -33,6 +33,12 @@ namespace psu { namespace control {
 constexpr int8_t chargeAllowPin = PSU_CHG_ALLOW_PIN;
 constexpr uint32_t inhibitMs = 2000, availabilityGraceMs = 15000;
 constexpr uint32_t startupReadyMs = 15000, availabilitySettleMs = 3000;
+// Qualify actual output-ready broadcasts after the nonzero-current ACK. A
+// candidate must span this duration; rereading one frame never advances it.
+constexpr uint16_t outputReadyStableMs = 2000, outputReadyMaxGapMs = 1000;
+constexpr uint8_t outputReadyFrames = 3;
+static_assert(startupReadyMs <= UINT16_MAX && outputReadyStableMs < startupReadyMs &&
+    outputReadyFrames >= 2 && outputReadyMaxGapMs > 0, "Invalid output readiness window");
 constexpr uint32_t unstableMs = 30000, volatileRefreshMs = 10000;
 constexpr int8_t fanPwmPin = PSU_FAN_PWM_PIN;
 constexpr bool fanPwmInverted = PSU_FAN_PWM_INVERTED;

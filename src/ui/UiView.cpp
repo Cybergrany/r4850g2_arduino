@@ -51,6 +51,7 @@ FlashText shortIssue(Issue issue) {
     case Issue::Settling: return UI_TEXT("SETTLING");
     case Issue::Cutoff: return UI_TEXT("AC INHIBITED / FAULT");
     case Issue::NoParticipants: return UI_TEXT("NO ACTIVE UNITS");
+    case Issue::ReadinessPending: return UI_TEXT("VERIFYING OUTPUT READY");
     case Issue::VoltageUnsynced: return UI_TEXT("APPLY BUS VOLTAGE FIRST");
     case Issue::DeploymentMismatch: return UI_TEXT("WRONG DEPLOYMENT");
     case Issue::Busy: return UI_TEXT("BUSY");
@@ -78,7 +79,7 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   else if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
   else if (commandFailed(state)) line(f, row, shortCommand(state), background | Error);
   else if (commandActive(state)) line(f, row, UI_TEXT("APPLYING"), background | Warning);
-  else if (c.unitControl(slot).outputDemand == OutputDemand::Starting) line(f, row, UI_TEXT("WAIT OUTPUT READY"), background | Warning);
+  else if (c.readinessStatus(slot, now).pending) line(f, row, UI_TEXT("VERIFYING OUTPUT READY"), background | Warning);
   else line(f, row, UI_TEXT("OK"), background | Good);
 }
 void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
@@ -118,17 +119,18 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     reading(f, PSU_ENABLE_TOUCH ? 7 : 8, col, 8, sessionTotal(c, group.members), "Ah", bg);
     if (!PSU_ENABLE_TOUCH) f.text(9, col, 8, UI_TEXT("SESSION~"), bg | Muted);
     reading(f, PSU_ENABLE_TOUCH ? 8 : 10, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
-    uint8_t errors = 0, active = 0;
+    uint8_t errors = 0, active = 0, verifying = 0;
     for (uint8_t i = 0; i < c.count(); ++i) if (group.members & (1U << i)) {
       const bool waived = (c.excluded() & c.acceptedAbsences() & (1U << i)) &&
           c.availabilityReason(i, now) != AvailabilityReason::Fault;
       if (!waived && (displayIssue(c, i, now) != Issue::None || commandFailed(c.report().units[i].state))) ++errors;
       if (commandActive(c.report().units[i].state)) ++active;
+      if (c.unitControl(i).outputDemand == OutputDemand::Starting) ++verifying;
     }
     char b[12];
     if (errors) { PSU_SNPRINTF(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Error); }
     else if (group.members & c.excluded()) { PSU_SNPRINTF(b, sizeof(b), "ACT %u/%u", unsigned(population(group.members & c.participants())), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Warning); }
-    else f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, active ? UI_TEXT("APPLYING") : UI_TEXT("OK"), bg | (active ? Warning : Good));
+    else f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, active ? UI_TEXT("APPLYING") : verifying ? UI_TEXT("VERIFY") : UI_TEXT("OK"), bg | (active || verifying ? Warning : Good));
     if (pendingSettings(c, group.members)) f.text(PSU_ENABLE_TOUCH ? 11 : 13, col, 8, UI_TEXT("PENDING"), bg | Warning);
   }
   line(f, 14, UI_TEXT("Click:PSUs  Hold:Config"), Muted);
@@ -181,8 +183,14 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     PSU_SNPRINTF(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
   } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
-  else if (control.outputDemand == OutputDemand::Starting) f.wrap(5, 8,
-      UI_TEXT("Current sent; waiting for output-ready status. Timeout stops and latches a fault."), Warning);
+  else if (c.readinessStatus(slot, now).pending) {
+    const auto ready = c.readinessStatus(slot, now);
+    line(f, 5, ready.acknowledged ? UI_TEXT("Current ACK received") : UI_TEXT("Waiting for current ACK"), Warning);
+    PSU_SNPRINTF(b, sizeof(b), "Ready %u/%ums (%u/%u)", unsigned(ready.stableMs), unsigned(control::outputReadyStableMs),
+        unsigned(ready.frames), unsigned(control::outputReadyFrames)); f.text(6, 0, 26, b, Warning);
+    PSU_SNPRINTF(b, sizeof(b), "Deadline in %ums", unsigned(ready.remainingMs)); f.text(7, 0, 26, b, Warning);
+    line(f, 8, UI_TEXT("Output may be live"), Warning);
+  }
   else if (control.zeroConfirmed) f.wrap(5, 8, control.awakeConfirmed ?
       UI_TEXT("Awake at zero current for cooling. Zero ACK and fresh low current confirmed. Profile retained.") :
       UI_TEXT("Zero current confirmed. Preparing fan/voltage and verifying awake state. Profile retained."));
@@ -286,7 +294,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
     if (m.page() == UiPage::Detail) f.text(1, 0, 26, UI_TEXT("PSU INFO"), Accent);
     const FlashText tag = fault ? UI_TEXT("CONTROL FAULT") : !e.enabled() ?
         (e.source() == EnableSource::Switch ? UI_TEXT("OFF: SWITCH") : e.source() == EnableSource::Serial ? UI_TEXT("OFF: SERIAL") : UI_TEXT("OFF: BOOT")) :
-        s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : UI_TEXT("RECONCILING");
+        s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : s.activity == Activity::Starting ? UI_TEXT("STARTING") : UI_TEXT("RECONCILING");
     f.text(1, 9, 14, tag, color);
   }
 }

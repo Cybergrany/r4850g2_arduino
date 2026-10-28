@@ -49,6 +49,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::Settling: return F("startup/group availability settling; diag startup");
     case Issue::Cutoff: return F("AC permit inhibited/faulted or addresses negotiating; diag startup");
     case Issue::NoParticipants: return F("no active units; accepted absences retained");
+    case Issue::ReadinessPending: return F("verifying output readiness; wait or stop with autoresume off / zero group current; diag control");
   }
   return F("unknown");
 }

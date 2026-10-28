@@ -105,8 +105,12 @@ struct Rig {
   SimulatedCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
   Rig():controller(can),memory(bytes) { can.reset(); CHECK(controller.configure(debugConfiguration(),true)==Result::Ok); CHECK(controller.begin()); }
   void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); memory.stepSave(); }
-  void ready() { for(unsigned i=0;i<4000 && (controller.report().succeeded!=membersMask(controller.count()) || controller.busy());++i) step();
-    for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(controller.issue(i,clockNow)==Issue::None && controller.voltageSynchronized(i)); }
+  void ready() {
+    for(unsigned i=0;i<4000 && (controller.report().succeeded!=membersMask(controller.count()) || controller.busy() ||
+        controller.controlStatus(clockNow).activity!=Activity::Running);++i) step();
+    CHECK(controller.controlStatus(clockNow).activity==Activity::Running);
+    for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(controller.issue(i,clockNow)==Issue::None && controller.voltageSynchronized(i));
+  }
 };
 void simulationTests() {
   Rig r; r.ready();

@@ -6,6 +6,6 @@ enum class Issue : uint8_t {
   None, Missing, Unbound, Unassigned, IdentityPending, Conflict, NoTelemetry,
   NotReady, VoltageUnsynced, DeploymentMismatch, Busy, Invalid, Capacity,
   Disabled, Reconciling, ControlFault, NoProfile, FanTestRequiresHold,
-  NoAc, ApprovalRequired, Settling, Cutoff, NoParticipants
+  NoAc, ApprovalRequired, Settling, Cutoff, NoParticipants, ReadinessPending
 };
 }

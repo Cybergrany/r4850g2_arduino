@@ -14,9 +14,19 @@ struct ExternalFanStatus {
   FanReason reason = FanReason::Startup;
   bool telemetryComplete = false;
 };
+// Separate command acceptance, sustained readiness and measured output. Pending
+// means current may already be flowing, not that the output is inhibited.
+struct ReadinessStatus {
+  uint16_t stableMs = 0, remainingMs = 0;
+  uint8_t frames = 0;
+  bool pending = false, acknowledged = false;
+};
 struct UnitControl {
   uint32_t since = 0, coolSince = 0;
   uint32_t outputSince = 0;
+  uint32_t readySince = 0, readyLast = 0;
+  uint16_t outputWindowMs = 0;
+  uint8_t readyFrames = 0;
   OutputDemand outputDemand = OutputDemand::Unknown;
   ControlPhase phase = ControlPhase::AwaitIdentity;
   FanMode fanAcknowledged = FanMode::Unknown, fanRequested = FanMode::Max;
