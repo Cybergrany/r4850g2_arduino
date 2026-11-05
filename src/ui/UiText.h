@@ -28,6 +28,8 @@ inline const __FlashStringHelper* stateName(CommandState s) {
 }
 inline const __FlashStringHelper* issueName(Issue s) {
   switch (s) {
+    case Issue::TemperatureSensor: return F("both temperatures must be fresh; latched losses require thermal retry <slots>");
+    case Issue::ThermalStopped: return F("thermal stop latched; cool then explicit autoresume on; diag thermal");
     case Issue::None: return F("ready"); case Issue::Missing: return F("missing; output state unknown");
     case Issue::Unbound: return F("unbound; discover and bind identity");
     case Issue::Unassigned: return F("no source group; use group set");
@@ -68,7 +70,7 @@ inline const __FlashStringHelper* permitName(PermitState s) {
       s == PermitState::Inhibited ? F("LOW inhibited") : F("LOW fault latched");
 }
 inline const __FlashStringHelper* enableSourceName(EnableSource s) {
-  return s == EnableSource::Serial ? F("autoresume/serial") : s == EnableSource::Switch ? F("ENABLE_IN") : F("boot preference");
+  return s == EnableSource::Protection ? F("thermal protection") : s == EnableSource::Serial ? F("autoresume/serial") : s == EnableSource::Switch ? F("ENABLE_IN") : F("boot preference");
 }
 inline const __FlashStringHelper* activityName(Activity s) {
   switch (s) {

@@ -3,6 +3,7 @@
 #include "Mcp2515Transport.h"
 #include "Mcp2515Transmit.h"
 #include <CAN.h>
+#include <util/atomic.h>
 
 namespace psu {
 namespace {
@@ -51,6 +52,7 @@ void Mcp2515Transport::onReceive(int length) {
   }
   const uint8_t next = (self.head_ + 1) % board::canReceiveSlots;
   if (next == self.tail_) {
+    self.receiveLoss_ = true;
     if (self.dropped_ != UINT8_MAX) ++self.dropped_;
     while (CAN.available()) CAN.read();
     return;
@@ -75,6 +77,11 @@ bool Mcp2515Transport::send(const CanFrame& frame) {
   Registers registers;
   return transmitter_.start(registers, frame, millis());
 }
+bool Mcp2515Transport::takeReceiveLoss() {
+  bool loss = false;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { loss = receiveLoss_; receiveLoss_ = false; }
+  return loss;
+}
 void Mcp2515Transport::service(uint32_t now) {
   Registers registers;
   transmitter_.poll(registers, now, board::canTransmitTimeoutMs);
@@ -82,6 +89,7 @@ void Mcp2515Transport::service(uint32_t now) {
   // frames. Preserve all unrelated error flags and never clear receive flags.
   const uint8_t overflow = registers.read(0x2d) & 0xc0;
   if (overflow) {
+    receiveLoss_ = true;
     if (hardwareOverflows_ != UINT16_MAX) ++hardwareOverflows_;
     registers.modify(0x2d, overflow, 0);
   }

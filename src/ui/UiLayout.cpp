@@ -10,6 +10,21 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
     if (n < capacity) b[n++] = {r,c,w,h,{a,value},label};
   };
   switch (m.page()) {
+    case UiPage::Alerts:
+      for (uint8_t i=0;i<3;++i) {
+        const uint8_t rank = m.alertSelection()/3*3+i;
+        if (m.alertSourceAt(rank) < AlertManager::Count) add(2+i*3,0,26,3,ActionKind::OpenAlert,UI_TEXT(""),rank);
+      }
+      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
+      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
+      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+    case UiPage::AlertDetail:
+      add(12,0,26,3,ActionKind::Acknowledge,UI_TEXT("Acknowledge"));
+      if (m.displayedAlert().code == AlertCode::ThermalStop)
+        add(10,0,26,2,ActionKind::Resume,UI_TEXT("Resume after cooling"));
+      else if (m.displayedAlert().code == AlertCode::TemperatureSensor)
+        add(10,0,26,2,ActionKind::RetrySensors,UI_TEXT("Retry sensors"));
+      break;
     case UiPage::Groups:
       add(1,0,26,1,ActionKind::Startup,UI_TEXT(""));
       // Group tiles are buttons too; their content is drawn by UiView.
@@ -42,7 +57,8 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       add(12,0,12,3,ActionKind::ConfirmNo,UI_TEXT("No / Cancel"));
       add(12,14,12,3,ActionKind::ConfirmYes,UI_TEXT("Yes, partial")); break;
     case UiPage::Tools:
-      add(2,0,26,2,ActionKind::Startup,UI_TEXT("Startup / availability"));
+      add(2,0,13,2,ActionKind::Startup,UI_TEXT("Startup"));
+      add(2,14,12,2,ActionKind::Alerts,UI_TEXT("Alerts"));
 #if PSU_ENABLE_TOUCH
       add(4,0,26,2,ActionKind::Calibrate,UI_TEXT("Calibrate touch"));
       add(6,0,26,2,ActionKind::TouchDebug,UI_TEXT("Touch diagnostics"));
@@ -111,6 +127,7 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
 #endif
     const bool selected=(m.page()==UiPage::Tools && i==m.toolSelection()) ||
         (m.availabilityPage() && i==m.availabilitySelection()) ||
+        (m.page()==UiPage::AlertDetail && i==m.alertSelection()) ||
         (m.page()==UiPage::Config && m.field()==UiField::Tools && b[i].action.kind==ActionKind::Tools);
     const uint8_t style=selectedStyle | (selected ? Accent : Text);
     for (uint8_t r=b[i].row;r<b[i].row+b[i].height;++r) f.text(r,b[i].col,b[i].width,UI_TEXT(""),style);

@@ -2,10 +2,10 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended with AC-cutoff startup, source availability, remembered exclusions,
-post-ready reconciliation and volatile-setting refresh on 2026-10-28. The
-zero-current readiness fix and subsequent sustained-readiness patch add
-regressions for the G2 bench trace and a reproduced premature-ready transition.
+extended on 2026-11-05 with shared operator alerts, thermal current reductions,
+persistent thermal shutdown and warning/error GPIOs. Existing AC-cutoff startup,
+source availability, remembered exclusions and sustained-readiness regressions
+remain covered.
 No firmware upload or physical validation of the new patch was performed here.
 
 ```sh
@@ -13,13 +13,16 @@ python3 tools/test_host.py
 python3 tools/test_touch.py
 python3 tools/test_fan_output.py
 python3 tools/test_charge_allow.py
+python3 tools/test_alert_outputs.py
+python3 tools/test_wheel_alert_guard.py
 PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560 -e mega2560_serial -e mega2560_display \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
   -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
   -e mega2560_touch_enable -e mega2560_touch_fan -e mega2560_serial_fan \
-  -e mega2560_serial_cutoff -e mega2560_touch_cutoff -j 4
+  -e mega2560_serial_cutoff -e mega2560_touch_cutoff \
+  -e mega2560_serial_alerts -e mega2560_touch_alerts -j 4
 python3 tools/check_debug_build.py
 git diff --check
 ```
@@ -27,47 +30,59 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All sixteen profiles build successfully
+All eighteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
 A clean build retains ClickEncoder's existing constructor member-order warnings.
 
-| Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) |
-| --- | ---: | ---: |
-| `mega2560` | 6663 | 123996 |
-| `mega2560_serial` | 4996 | 83904 |
-| `mega2560_display` | 6638 | 118618 |
-| `mega2560_local` | 5632 | 86716 |
-| `mega2560_minimal` | 3873 | 38508 |
-| `mega2560_touch` | 6871 | 133280 |
-| `mega2560_touch_wheel` | 6896 | 134702 |
-| `mega2560_ui_debug` | 6665 | 125770 |
-| `mega2560_touch_debug` | 6873 | 134650 |
-| `mega2560_touch_local` | 5840 | 93410 |
-| `mega2560_touch_debug_local` | 5842 | 94304 |
-| `mega2560_touch_enable` | 6871 | 133570 |
-| `mega2560_touch_fan` | 6876 | 133880 |
-| `mega2560_serial_fan` | 5001 | 84152 |
-| `mega2560_serial_cutoff` | 4997 | 83992 |
-| `mega2560_touch_cutoff` | 6877 | 133968 |
+| Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
+| --- | ---: | ---: | ---: |
+| `mega2560` | 6723 | 142550 | 1469 |
+| `mega2560_serial` | 4985 | 98132 | 3207 |
+| `mega2560_display` | 6692 | 135704 | 1500 |
+| `mega2560_local` | 5792 | 102106 | 2400 |
+| `mega2560_minimal` | 4054 | 46320 | 4138 |
+| `mega2560_touch` | 6925 | 152046 | 1267 |
+| `mega2560_touch_wheel` | 6956 | 153720 | 1236 |
+| `mega2560_ui_debug` | 6732 | 145498 | 1460 |
+| `mega2560_touch_debug` | 6934 | 154708 | 1258 |
+| `mega2560_touch_local` | 5994 | 108438 | 2198 |
+| `mega2560_touch_debug_local` | 6003 | 109510 | 2189 |
+| `mega2560_touch_enable` | 6925 | 152326 | 1267 |
+| `mega2560_touch_fan` | 6930 | 152720 | 1262 |
+| `mega2560_serial_fan` | 4990 | 98516 | 3202 |
+| `mega2560_serial_cutoff` | 4986 | 98276 | 3206 |
+| `mega2560_touch_cutoff` | 6931 | 152942 | 1261 |
+| `mega2560_serial_alerts` | 4986 | 98252 | 3206 |
+| `mega2560_touch_alerts` | 6932 | 153006 | 1260 |
 
-The full touch/serial/enable/fan/cutoff build uses 83.9% static RAM and 52.7% flash,
-leaving 1315 bytes for stack/runtime use. Touch and wheel leave 1296 bytes;
-omitting serial leaves 2352 bytes in the production touch profile. The serial-only
-cutoff build leaves 3195 bytes. Readiness qualification adds 88 bytes of unit
-state at eight-slot capacity; total static RAM grows by 90 bytes in serial/UI
-profiles. The EEPROM record is unchanged. Fixed UI/parser strings and deployment templates
-now live in flash on AVR. Static RAM excludes worst-case stack/interrupt nesting.
-There is no full colour framebuffer; two text/style scenes use 1170 bytes.
-Worst-case stack and display/CAN timing still require a hardware check. EEPROM reserves only
-512 bytes, with two 256-byte slots and a 216-byte schema-3 record at this capacity.
-Touch calibration adds independent 40-byte records in the unused slot tails;
-schema-2 records remain readable, with no absence exceptions. Older firmware
-does not understand schema 3; review the [downgrade caveat](ARCHITECTURE.md).
+The largest static RAM use is **6956 bytes**, leaving **1236 bytes** in the
+touch/wheel profile. The full touch/serial/enable/fan/cutoff/alert-output example
+leaves **1260 bytes**; the serial alert-output profile leaves **3206 bytes**.
+Compared with commit `35fbaa0`, no existing profile grows by more than **181
+bytes** of total static RAM. Both the 256-byte increase and 1 KiB headroom targets
+are met.
+
+AVR `sizeof` measurements against that baseline give **182 bytes** of new
+controller state (including the alert registry and thermal/config state) and
+**13 bytes** in the UI model. Serial adds 2 bytes, the fresh wheel-gesture guard
+adds 6, fitted alert outputs add 1, and the CAN loss-event latch adds 1. SIM
+temperature overrides add 4 bytes;
+physical alert outputs are excluded there. Even the combined state remains below
+256 bytes. The alert registry is fixed-size and allocation-free. Zero-initialized
+cells avoid a redundant 120-byte SRAM initialization template, and the common
+`-fno-tree-switch-conversion` build flag keeps lookup constants out of AVR RAM.
+
+Static RAM excludes stack/interrupt nesting. No full colour framebuffer is used;
+two text/style scenes occupy 1170 bytes. Worst-case stack and loaded display/CAN
+timing still require a hardware check. EEPROM remains within 512 bytes: two
+256-byte slots with **216-byte schema-4 records**. Calibration still uses the
+40-byte tails at 216 and 472. Schemas 2/3 remain readable; older firmware cannot
+enforce schema-4 thermal stops. Review the [migration/downgrade limits](ALERTS.md#persistence-migration-and-limits).
 
 All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
-present; physical CAN/MCP2515, EEPROM, cutoff and fan PWM symbols are absent. Their
+present; physical CAN/MCP2515, EEPROM, cutoff, fan PWM and alert GPIO symbols are absent. Their
 dependency graphs also omit CAN. This verifies software isolation, not touch
 hardware or production CAN timing.
 
@@ -79,7 +94,7 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **644990 host checks** and **1007 touch/simulator checks** with
+Both suites pass: **1057189 host checks** and **1054 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
@@ -166,10 +181,43 @@ Meaningful scenarios include:
 The [generated preview](ui-preview.html) uses frames exported from those tests
 and the pinned Adafruit GFX font. Zero-hold, pending-wake and failure layouts use
 that font; captured screens exercise enlarged editor digits and
-readable text equivalents. All 42 preview frames execute with bounded display
+readable text equivalents. All 45 preview frames execute with bounded display
 cells and accessible text in a Node canvas/DOM adapter. It is not an LCD test. Touch host tests substitute
 raw coordinates and display/time/serial adapters; they do not emulate the ADC,
 electrical SPI transactions or physical display response.
+
+## Alert and thermal fault injection
+
+- Exact 65/70/75/60 C boundaries, input-only overheating, strongest-level
+  hysteresis, percentages applied once to authorized shares, cooling restoration
+  and maximum cooling overriding manual AUTO.
+- Both-sensor gating, live sensor loss stopping only its PSU, explicit recovery,
+  and sensor retry leaving an unrelated setting failure blocked.
+- Unknown readings pausing hot time, a known hot peer continuing it, cool readings
+  resetting it, the full 15-minute limit and millis rollover.
+- Hot units disappearing, remembered absence permissions not releasing a new
+  incident, new explicit acceptance releasing it, and hot returns contributing
+  again before inclusion.
+- Protection changes during apply/INFO guards/ACK waits and readiness qualification:
+  stale ACKs cannot synchronize newer targets, reductions retain the readiness
+  deadline, OFF wins, and rejected reductions take the bounded fault fallback.
+- Interrupted protection writes at every byte, schema-2/3 migration, retained
+  216-byte records/calibration tails, normal-save/calibration contention, failed
+  persistence, held-ON boot switches, load retention and OFF/reheating overtaking
+  a pending resume save. Automatic persistence preserves unsaved drafts.
+- Deduplication, 30-second popup pacing, 60-second rearming, repeated severity
+  flapping, simultaneous incidents, active identity replacement, serial reconnect,
+  acknowledgement without clearing protection, and no modal queue after dismissal.
+- Independent GPIO levels, LOW-before-OUTPUT, debug isolation, pin collisions,
+  actual wheel-adapter old-gesture draining, touch edits interrupted by alerts,
+  stable displayed incidents, separate Resume/Retry actions, calibration deferral
+  and protected editor/background-save state.
+- Recent CAN-loss/discovery events remain observable after diagnostic counter
+  saturation and clear only after the event-free interval.
+
+Follow the [alert/thermal bench sequence](ALERTS.md#bench-sequence) for GPIO levels,
+reductions, shutdown persistence and acknowledgement checks. Host/simulator
+results are software evidence; physical PSU response still needs the bench.
 
 ## Physical bench checks still required
 
@@ -248,7 +296,7 @@ preemption and rapid ON/OFF edges. Normal runtime OFF/ON sends no standby frame;
 an OFF during initial wake still completes fresh awake/zero observations. Boot
 OR and latest-wins/debounced switch coverage includes millis wrap and a serial
 command during initial debounce. EEPROM interruption and calibration-tail
-coverage are retained through the schema-3 migration.
+coverage are retained through the schema-4 migration.
 
 Fault injection covers missing/readdressed units and identity lease expiry;
 rejected zero/MAX/wake/fallback; bounded missing ACKs and late ACKs; missing fresh

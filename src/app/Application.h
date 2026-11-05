@@ -10,6 +10,7 @@
 #endif
 #include "../psu/PsuController.h"
 #include "../io/FanOutput.h"
+#include "../io/AlertOutputs.h"
 #include "../io/ChargeAllowOutput.h"
 #include "../ui/LocalUi.h"
 #include "../ui/Ili9341Display.h"
@@ -42,6 +43,9 @@ class Application {
 #endif
 #if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
   FanOutput fanOutput_;
+#endif
+#if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
+  AlertOutputs alertOutputs_;
 #endif
   MemoryManager memory_;
 #if PSU_ENABLE_SERIAL

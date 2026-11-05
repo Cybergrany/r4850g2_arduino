@@ -1,7 +1,7 @@
 #pragma once
 #include "../config/ControlConfig.h"
 namespace psu {
-enum class EnableSource : uint8_t { Boot, Serial, Switch };
+enum class EnableSource : uint8_t { Boot, Serial, Switch, Protection };
 // Debounced edges, not a continuous OR: a held switch cannot undo serial input.
 class EnableControl {
  public:

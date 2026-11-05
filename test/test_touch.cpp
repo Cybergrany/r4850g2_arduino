@@ -104,11 +104,12 @@ void gestures() {
 struct Rig {
   SimulatedCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
   Rig():controller(can),memory(bytes) { can.reset(); CHECK(controller.configure(debugConfiguration(),true)==Result::Ok); CHECK(controller.begin()); }
-  void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); memory.stepSave(); }
+  void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); controller.serviceProtection(memory,clockNow); memory.stepSave(); controller.serviceProtection(memory,clockNow); }
   void ready() {
     for(unsigned i=0;i<4000 && (controller.report().succeeded!=membersMask(controller.count()) || controller.busy() ||
         controller.controlStatus(clockNow).activity!=Activity::Running);++i) step();
     CHECK(controller.controlStatus(clockNow).activity==Activity::Running);
+    controller.alerts().acknowledgeAll();
     for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(controller.issue(i,clockNow)==Issue::None && controller.voltageSynchronized(i));
   }
 };
@@ -128,7 +129,7 @@ void simulationTests() {
   r.can.scenario(DebugScenario::Missing); for(unsigned i=0;i<850;++i) r.step();
   p=r.controller.preview(Operation::GroupCurrent,0,clockNow,true); CHECK(p.missing==2 && p.blocker==Issue::None);
   r.can.scenario(DebugScenario::Healthy); for(unsigned i=0;i<200;++i) r.step(); CHECK(r.controller.issue(1,clockNow)==Issue::None);
-  r.can.scenario(DebugScenario::Stale); for(unsigned i=0;i<350;++i) r.step(); CHECK(r.controller.issue(1,clockNow)==Issue::NoTelemetry);
+  r.can.scenario(DebugScenario::Stale); for(unsigned i=0;i<350;++i) r.step(); CHECK(r.controller.issue(1,clockNow)==Issue::TemperatureSensor);
   r.can.scenario(DebugScenario::Conflict); for(unsigned i=0;i<200;++i) r.step(); CHECK(r.controller.issue(0,clockNow)==Issue::Conflict);
 }
 void snapshot(const char* name,const UiFrame& frame) {
@@ -190,6 +191,7 @@ void layoutAndLocalUi() {
   snapshot("touch-saved",display.shown);
   // Actual touch hit boxes: whole-source acceptance, verified save and rejoin.
   r.can.sourcePower(0x18,false); for(int i=0;i<1200;++i) tick();
+  r.controller.alerts().acknowledgeAll(); for(int i=0;i<12;++i) tick();
   tap(100,216); tap(160,216); tap(100,48); tap(270,216); // Back, Tools, Startup, GROUP2.
   snapshot("touch-availability-group",display.shown);
   tap(150,112); // Review group.
@@ -200,6 +202,7 @@ void layoutAndLocalUi() {
   snapshot("touch-availability-saved",display.shown);
   r.can.sourcePower(0x18,true); for(int i=0;i<1200;++i) tick();
   CHECK(r.controller.unitControl(3).phase==ControlPhase::Held && r.controller.excluded()==0x18);
+  r.controller.alerts().acknowledgeAll(); for(int i=0;i<12;++i) tick();
   tap(100,216); // Back to overview; live overview updates to Include group.
   for(int i=0;i<20;++i) tick();
   snapshot("touch-availability-return",display.shown);
@@ -248,6 +251,46 @@ bool hasText(const UiFrame& f,const char* text) {
   for(uint16_t i=0;i<UiFrame::cells;++i) all+=f.cell(i).character;
   return all.find(text)!=std::string::npos;
 }
+void thermalTouchWorkflow() {
+  Rig r; r.ready(); CHECK(r.memory.save(r.controller.configuration())==StorageResult::Ok);
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; ui.begin();
+  auto tick=[&](unsigned n) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
+  auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
+  tick(20); tap(40,80); tap(112,216); tap(80,128); CHECK(ui.editing());
+  input={230*8,216*8,1000,true}; tick(1); // Captured Apply must not become Acknowledge.
+  r.can.temperatures(30,70); tick(130); input={}; tick(15);
+  CHECK(ui.editing() && r.controller.thermalStatus().percent==30);
+  CHECK(!r.controller.alerts().at(AlertManager::Thermal).acknowledged && hasText(display.shown,"Acknowledge"));
+  snapshot("touch-alert-temperature",display.shown);
+  tap(150,216); CHECK(ui.editing() && r.controller.alerts().at(AlertManager::Thermal).acknowledged);
+  CHECK(r.controller.alerts().error());
+  r.can.temperatures(76,30); tick(350);
+  CHECK(ui.editing() && !r.controller.enableControl().enabled());
+  Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok && saved.thermalStop==ThermalStop::Temperature);
+  snapshot("touch-alert-shutdown",display.shown);
+  tap(150,180); CHECK(!r.controller.enableControl().enabled()); // Resume is separate and still hot.
+  tap(150,216); CHECK(ui.editing());
+  r.can.temperatures(30,30); tick(200);
+  CHECK(r.controller.setAutoResume(true)==Result::Ok && !r.controller.enableControl().enabled());
+  tick(500); CHECK(r.controller.enableControl().enabled() && r.controller.configuration().thermalStop==ThermalStop::None);
+  // Explicit list remains open for acknowledged active incidents.
+  UiModel model(r.controller,r.memory); model.tick(clockNow);
+  r.controller.alerts().set(AlertManager::Receive,AlertCode::ReceiveLoss,clockNow);
+  r.controller.alerts().acknowledgeAll(); model.action({ActionKind::Alerts},clockNow++);
+  model.action({ActionKind::OpenAlert,0},clockNow++); model.notifications(clockNow++);
+  CHECK(model.page()==UiPage::AlertDetail);
+  model.dismissAlert(); model.action({ActionKind::Alerts},clockNow++);
+  UiFrame frame; UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-alert-list",frame);
+  // Real calibration writer excludes protection until its own commit completes.
+  CHECK(cal.start(knownCalibration())==StorageResult::Ok);
+  r.can.temperatures(76,30); for(unsigned i=0;i<100;++i) r.step();
+  CHECK(r.controller.configuration().thermalStop!=ThermalStop::None && !r.controller.thermalStatus().persisted);
+  while(cal.saving()) cal.step();
+  tick(400);
+  CHECK(r.memory.load(saved)==StorageResult::Ok && saved.thermalStop!=ThermalStop::None);
+}
+
 void applicationScenarios() {
   clockNow=100; input={}; wheel={}; Serial.input.clear(); Serial.output.clear();
   Application app; app.begin();
@@ -267,9 +310,10 @@ void applicationScenarios() {
   tick(100); CHECK(hasText(appFrame,"Calibration saved"));
   command("touch status"); CHECK(Serial.output.find("calibrated=1")!=std::string::npos);
   command("touch calibration export"); CHECK(Serial.output.find("affine Q16.16=")!=std::string::npos);
-  command("touch debug off");
+  command("alerts ack all"); command("touch debug off");
   for(uint8_t s=0;s<uint8_t(DebugScenario::Count);++s) {
     command(std::string("ui-debug scenario ")+scenarioName(DebugScenario(s)).data); tick(1900);
+    command("alerts ack all");
     command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
 
     CHECK(Serial.output.find("ERR")==std::string::npos);
@@ -297,7 +341,7 @@ void applicationScenarios() {
         editCurrent(); tap(230,216); tick(100); CHECK(hasText(appFrame,"APPLY BLOCKED")); break;
       case DebugScenario::SaveChanged: case DebugScenario::SaveFailed:
       case DebugScenario::Reject: case DebugScenario::Timeout: case DebugScenario::Transport: case DebugScenario::Partial:
-        editCurrent(); tap(280,100); tap(230,216); tick(600);
+        editCurrent(); tap(280,100); tap(230,216); tick(600); command("alerts ack all");
         if (DebugScenario(s)==DebugScenario::SaveChanged) {
           CHECK(hasText(appFrame,"EARLIER SNAPSHOT SAVED")); snapshot("touch-saved-older",appFrame);
         } else if (DebugScenario(s)==DebugScenario::SaveFailed) {
@@ -358,6 +402,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

@@ -124,6 +124,8 @@ AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, u
 }
 void PsuController::applyAvailability(const AvailabilityPlan& p) {
   if (p.action == AvailabilityAction::Accept) {
+    thermalIgnored_ |= p.selected; hotContributors_ &= uint8_t(~p.selected);
+    energized_ &= uint8_t(~p.selected); activeLost_ &= uint8_t(~p.selected); identityLost_ &= uint8_t(~p.selected);
     sessionAccepted_ |= p.selected; sessionRequired_ &= uint8_t(~p.selected); excluded_ |= p.selected;
     if (p.remember) config_.acceptedAbsent |= p.selected;
   } else if (p.action == AvailabilityAction::Include) {
@@ -157,6 +159,7 @@ Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManag
   else snapshot.acceptedAbsent &= uint8_t(~p.selected);
   availabilityReport_.storage = memory.startSave(snapshot);
   if (availabilityReport_.storage != StorageResult::Ok) {
+    storageStatus(availabilityReport_.storage);
     availabilityReport_.result = Result::Blocked; return Result::Blocked;
   }
   availabilityMemory_ = &memory; availabilitySaveToken_ = memory.saveToken();
@@ -167,14 +170,14 @@ void PsuController::finishAvailability(uint32_t now) {
   if (!availabilitySaving() || !availabilityMemory_ || availabilityMemory_->completedToken() != availabilitySaveToken_) return;
   availabilityReport_.saving = false;
   availabilityReport_.storage = availabilityMemory_->completedResult();
-  if (availabilityReport_.storage != StorageResult::Ok) { availabilityReport_.result = Result::Blocked; return; }
+  if (availabilityReport_.storage != StorageResult::Ok) { storageStatus(availabilityReport_.storage); availabilityReport_.result = Result::Blocked; return; }
   availabilityReport_.remembered = true;
   const auto& p = savedAvailability_;
   const auto fresh = previewAvailability(p.action, p.requested, p.remember, now);
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       p.availabilityRevision != availabilityRevision_ || uint32_t(now - p.created) > limits::confirmationMs ||
       fresh.blocker != Issue::None || fresh.selected != p.selected || fresh.participants != p.participants) {
-    availabilityReport_.result = Result::Changed; return;
+    storageStatus(StorageResult::Ok, true); availabilityReport_.result = Result::Changed; return;
   }
   applyAvailability(p);
 }

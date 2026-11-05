@@ -11,6 +11,7 @@ class Discovery {
   const Psu* identity(const Identity& id, uint32_t now) const;
   uint32_t revision() const { return revision_; }
   uint16_t overflow() const { return overflow_; }
+  bool takeOverflow() { const bool event = overflowEvent_; overflowEvent_ = false; return event; }
   uint32_t ignored() const { return ignored_; }
   bool negotiating() const { return negotiating_; }
   void invalidate();
@@ -20,5 +21,6 @@ class Discovery {
   uint16_t overflow_ = 0;
   uint32_t lastNegotiation_ = 0;
   bool negotiating_ = false;
+  bool overflowEvent_ = false;
 };
 }

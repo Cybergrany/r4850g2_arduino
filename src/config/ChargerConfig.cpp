@@ -58,6 +58,7 @@ Configuration defaultConfiguration() {
   return c;
 }
 bool validConfig(const Configuration& c) {
+  if (c.thermalStop > ThermalStop::Duration || (c.thermalStop != ThermalStop::None && c.autoResume)) return false;
   if (!c.deploymentId || !c.count || c.count > PSU_MAX_UNITS ||
       c.pollMs < limits::minPollMs || c.pollMs > limits::maxPollMs ||
       c.voltage < limits::minVoltage || c.voltage > limits::maxVoltage ||

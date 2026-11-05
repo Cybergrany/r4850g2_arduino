@@ -2,6 +2,8 @@
 #include "Discovery.h"
 #include "PsuControl.h"
 #include "Availability.h"
+#include "Alerts.h"
+#include "Thermal.h"
 namespace psu {
 enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
@@ -105,6 +107,17 @@ class PsuController {
   const Discovery& discovery() const { return discovery_; }
   bool busy() const { return report_.active; }
   bool ready() const { return ready_; }
+  AlertManager& alerts() { return alerts_; }
+  const AlertManager& alerts() const { return alerts_; }
+  ThermalStatus thermalStatus() const;
+  uint32_t protectionRevision() const { return thermalRevision_; }
+  uint16_t effectiveCurrent(uint8_t slot) const;
+  bool acknowledgedCurrent(uint8_t slot, uint16_t& raw) const;
+  bool temperatures(uint8_t slot, float& highest, uint32_t now) const;
+  Result retryTemperature(uint8_t mask, uint32_t now);
+  void serviceProtection(MemoryManager& memory, uint32_t now);
+  void storageStatus(StorageResult result, bool older = false);
+  void localStatus(bool display, bool calibration, bool saveFailed = false);
   uint8_t count() const { return config_.count; }
   uint16_t pollInterval() const { return config_.pollMs; }
   uint32_t staleMs() const { return uint32_t(config_.pollMs) * 3 < limits::minimumStaleMs ? limits::minimumStaleMs : uint32_t(config_.pollMs) * 3; }
@@ -126,6 +139,25 @@ class PsuController {
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
+  void thermalTick(uint32_t now);
+  void alertTick(uint32_t now);
+  void thermalStop(ThermalStop reason);
+  Result requestEnable(bool on, EnableSource source);
+  uint16_t limitedCurrent(uint8_t slot, uint16_t authorized) const;
+  uint16_t effectiveRaw(uint8_t slot) const;
+  bool correctCurrent(uint32_t now);
+  AlertManager alerts_;
+  uint32_t thermalLast_ = 0, hotMs_ = 0, thermalRevision_ = 0;
+  float highestTemperature_ = 0;
+  uint16_t acknowledgedCurrent_[PSU_MAX_UNITS] = {};
+  uint16_t protectionToken_ = 0, storageSeenToken_ = 0;
+  uint8_t acknowledgedMask_ = 0, validTemperatures_ = 0, hotContributors_ = 0;
+  uint8_t sensorFaults_ = 0, thermalIgnored_ = 0, energized_ = 0, activeLost_ = 0, identityLost_ = 0;
+  ThermalLevel thermalLevel_ = ThermalLevel::Normal;
+  ThermalStop savingStop_ = ThermalStop::None;
+  EnableSource resumeSource_ = EnableSource::Serial;
+  bool hotPrevious_ = false, cool_ = false, protectionDirty_ = false, protectionFailed_ = false, resumePending_ = false;
+  bool controlCorrection_ = false;
   Result change(const Configuration& candidate, uint8_t invalidate = 0);
   enum class TxPurpose : uint8_t { Background, Job, ManualRead, Control };
   bool send(const CanFrame& frame, TxPurpose purpose = TxPurpose::Background);

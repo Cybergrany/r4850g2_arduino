@@ -84,7 +84,7 @@ not an import command.
 Production calibration is independent of PSU/group/deployment configuration.
 Two 40-byte records occupy EEPROM addresses **216–255** and **472–511**, the
 unused tails of the existing slots. Version, CRC, sequence, panel profile and
-rotation validate the records. The charger record is schema 3 and at most
+rotation validate the records. The charger record is schema 4 and at most
 216 bytes; old charger records remain readable. Compile-time bounds prevent
 future overlap. Both writers share one readiness-aware byte-write scheduler.
 This still uses only the first **512 EEPROM bytes**.
@@ -246,3 +246,14 @@ when its build flag is enabled. The optional `PSU_FAN_PWM_PIN` also remains
 physically disconnected in debug builds; `diag control` still shows simulated
 demand. See [CONTROL.md](CONTROL.md) for fan thresholds,
 startup policy and control diagnostics.
+
+## Operator alerts and temperature protection
+
+See [ALERTS.md](ALERTS.md) for the shared warning/error catalogue, GPIO definitions,
+thermal percentages, temperature-sensor retry, persistent thermal OFF and the
+bench sequence. Serial adds `alerts`, `alerts ack ID|all`, `diag thermal` and
+`thermal retry GROUP|slots|all`. Tools → Alerts exposes the same incidents.
+Acknowledgement preserves protection and returns to the previous screen; it
+does not accept unavailable members or resume charging. Thermal details have
+separate Resume/Retry actions. The overview retains a thermal-stop banner after
+acknowledgement and a Tools incident-count badge.

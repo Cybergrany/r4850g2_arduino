@@ -30,6 +30,10 @@ struct FakeCan : CanTransport {
   bool initOk = true;
   bool sendOk = true;
   bool asynchronous = false;
+  bool receiveLoss = false;
+  uint8_t losses = 0;
+  uint8_t droppedFrames() const override { return losses; }
+  bool takeReceiveLoss() override { const bool event=receiveLoss; receiveLoss=false; return event; }
   TransmitState txState = TransmitState::Sent;
   std::vector<CanFrame> sent;
   std::deque<CanFrame> incoming;
@@ -206,6 +210,9 @@ struct Rig {
   bool answerIdentityQueries = true;
   uint8_t standby = 0, woken = 0;
   uint16_t current[PSU_MAX_UNITS] = {};
+  uint16_t reportedCurrent[PSU_MAX_UNITS];
+  int16_t inputTemperature = INT16_MIN, unitTemperature[PSU_MAX_UNITS];
+  uint8_t noInputTemperature = 0, noOutputTemperature = 0;
   int16_t temperature = 40;
   bool reportAc = false;
   bool notReadyAtZero = false;
@@ -217,7 +224,7 @@ struct Rig {
   bool leaking = false, leakOnWake = false;
   size_t acknowledged = 0;
   explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true, uint32_t start = 100) : c(can), now(start), live(membersMask(config.count)) {
-    for (uint8_t i = 0; i < config.count; ++i) addresses[i] = i + 1;
+    for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { addresses[i] = i + 1; reportedCurrent[i] = UINT16_MAX; unitTemperature[i] = INT16_MIN; }
     CHECK(c.configure(config, bootResume) == Result::Ok); CHECK(c.begin());
     heartbeat(); c.tick(now);
     now += 200; heartbeat(); c.tick(now);
@@ -246,8 +253,9 @@ struct Rig {
       can.incoming.push_back(info(addresses[i], identity(i + 1)));
       if (!(noVoltage & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x75, uint32_t(voltage) * 1024 / 100));
       if (!(noCurrent & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x81, (standby & (1U<<i)) ? 0 :
-          leaking || (leakOnWake && (woken & (1U<<i))) ? 2048 : uint32_t(current[i])*1024/100));
-      if (!(noTemperature & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x7f, int32_t(temperature)*1024));
+          leaking || (leakOnWake && (woken & (1U<<i))) ? 2048 : uint32_t(reportedCurrent[i] != UINT16_MAX ? reportedCurrent[i] : current[i])*1024/100));
+      if (!((noTemperature|noInputTemperature) & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x80, int32_t(inputTemperature == INT16_MIN ? temperature : inputTemperature)*1024));
+      if (!((noTemperature|noOutputTemperature) & (1U<<i))) can.incoming.push_back(data(addresses[i], 0x7f, int32_t(unitTemperature[i] == INT16_MIN ? temperature : unitTemperature[i])*1024));
       if (!(noBroadcast & (1U<<i))) can.incoming.push_back(broadcast(addresses[i], !(standby & (1U<<i)) && !(noAc & (1U<<i)) &&
           !(notReady & (1U<<i)) && (!notReadyUntil || int32_t(now - notReadyUntil) >= 0) &&
           !(notReadyAtZero && current[i] == 0) && (!outputReadyDelay || int32_t(now - outputReadyAt[i]) >= 0)));
@@ -456,7 +464,7 @@ void externalFanControl() {
   r.step(4000); CHECK(r.c.externalFanStatus(r.now).duty==0);
   r.noTemperature=2; r.step(6500); s=r.c.externalFanStatus(r.now);
   CHECK(s.duty==255 && !s.telemetryComplete && s.slot==1);
-  r.noTemperature=0; r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
+  r.noTemperature=0; r.step(2000); CHECK(r.c.retryTemperature(2,r.now)==Result::Ok); r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
   r.c.setCurrent(0,6000); r.apply(); r.current[0]=r.current[1]=0; r.step();
   s=r.c.externalFanStatus(r.now); CHECK(s.duty==255 && s.reason==FanReason::RequestedCurrent);
   r.c.setAutoResume(false); r.finish(); r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
@@ -558,12 +566,12 @@ void fanControl() {
   r.temperature=40; r.step(1500); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.temperature=36; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.temperature=35; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
-  r.current[0]=3500; r.step(1500); CHECK(r.c.unitControl(0).fanReason==FanReason::MeasuredCurrent && r.c.unitControl(0).fanAcknowledged==FanMode::Max);
-  r.current[0]=1000; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  r.reportedCurrent[0]=3500; r.step(2000); CHECK(r.c.unitControl(0).fanReason==FanReason::MeasuredCurrent && r.c.unitControl(0).fanAcknowledged==FanMode::Max);
+  r.reportedCurrent[0]=UINT16_MAX; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   r.noTemperature=1; r.step(6500);
-  CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max && r.c.unitControl(0).fanReason==FanReason::InvalidTelemetry);
-  r.noTemperature=0; r.temperature=1000; r.step(); CHECK(r.c.unitControl(0).fanReason==FanReason::InvalidTelemetry);
-  r.temperature=30; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
+  CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max && (r.c.thermalStatus().sensorFaults & 1));
+  r.noTemperature=0; r.temperature=1000; r.step(); CHECK(r.c.thermalStatus().sensorFaults & 1);
+  r.temperature=30; r.step(2000); CHECK(r.c.retryTemperature(3,r.now)==Result::Ok); r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   r.rejectRegister=protocol::FanMode; before=r.can.writes().size();
   r.c.setCurrent(0,6000); CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent,0,r.now),false,r.now)==Result::Ok);
   r.finish(); CHECK(r.c.unitControl(0).fault==CommandState::Rejected && r.c.report().failed);
@@ -963,6 +971,11 @@ void schedulerAndBounds() {
   Discovery d;
   for (uint8_t a = 1; a <= Discovery::capacity + 1; ++a) d.receive(info(a, identity(a)), 200);
   CHECK(d.overflow() == 1);
+  CHECK(d.takeOverflow() && !d.takeOverflow());
+  for (uint32_t i=0;i<=UINT16_MAX;++i) d.receive(info(127,identity(127)),200);
+  CHECK(d.overflow()==UINT16_MAX && d.takeOverflow());
+  d.receive(info(127,identity(127)),200);
+  CHECK(d.overflow()==UINT16_MAX && d.takeOverflow() && !d.takeOverflow());
   d.receive(info(127, identity(127)), 40000); CHECK(d.address(127)); // Stale capacity can be reused.
   // Unsigned freshness and command timing survive the millis() rollover.
   Psu unit = {}; unit.occupied = true; unit.lastSeen = 0xfffffff0U;
@@ -1705,9 +1718,11 @@ void uiLayouts() {
 #include "test_availability.inc"
 #include "test_zero_hold.inc"
 #include "test_output_readiness.inc"
+#include "test_alerts.inc"
 }
 int main() {
   try {
+    alertEpisodes(); thermalLimitsAndSensors(); thermalTimingAndAbsence(); thermalPersistence(); thermalQueuedChanges(); thermalAckRacesAndMigration(); alertUiAndSerial(); alertSerialCommands(); activeIdentityAlert();
     zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();
     readinessQualification(); readinessFrameOrdering(); readinessAckOrdering(); readinessDeadlineAndLatch(); readinessTelemetryAndBoundary(); readinessSafetyEdges(); readinessMultiUnitAndWrap();
     availabilityProtocol(); startupPowerPolicy(); acceptedAbsences(); availabilityDecisionsAndStorage(); availabilityRefreshAndSoak(); availabilityInterfaces();

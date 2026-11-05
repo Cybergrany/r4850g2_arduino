@@ -23,6 +23,9 @@ class MemoryManager {
   // byte when storage.ready(). UI/serial observe their completion token.
   // Synchronous save is for offline callers/tests, not the runtime UI/console.
   StorageResult startSave(const Configuration& config);
+  // Modify only protection state in the last saved profile, never RAM drafts.
+  StorageResult startProtectionSave(ThermalStop stop);
+  bool reviseProtection(uint16_t token, ThermalStop stop);
   void stepSave();
   bool saving() const { return saving_ || auxiliaryBusy_; }
   // Calibration uses the same byte device and acquires this single-writer gate.

@@ -6,7 +6,7 @@
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
 enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios,
-  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult };
+  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail };
 enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
   None, Changed, Busy, Blocked, Applying, Saving, Saved, PartialSaved,
@@ -16,6 +16,7 @@ class UiModel {
  public:
   UiModel(PsuController& controller, MemoryManager& memory) : c_(controller), memory_(memory) {}
   void tick(uint32_t now);
+  void notifications(uint32_t now);
   void input(UiInput event, uint32_t now);
   void action(UiAction action, uint32_t now);
   void resetNavigation();
@@ -28,13 +29,21 @@ class UiModel {
   const AvailabilityPlan& availabilityPlan() const { return availabilityPlan_; }
   Result availabilityResult() const { return availabilityResult_; }
   bool availabilityRemembered() const { return availabilityRemembered_; }
-  bool availabilityPage() const { return page_ >= UiPage::Availability; }
+  bool availabilityPage() const { return !alertOverlay_ && (page_ == UiPage::Availability || page_ == UiPage::AvailabilityUnits ||
+      page_ == UiPage::AvailabilityConfirm || page_ == UiPage::AvailabilityResult); }
+  bool alertPage() const { return alertOverlay_ != 0; }
+  uint8_t alertSelection() const { return alertSelection_; }
+  Result alertResult() const { return alertResult_; }
+  AlertState displayedAlert() const { return displayedAlert_; }
+  uint16_t alertDisplayId() const { return alertOverlay_ == 2 ? displayedAlert_.id : 0; }
+  uint8_t alertSourceAt(uint8_t rank) const;
+  void dismissAlert() { c_.alerts().deferPendingNotifications(); alertOverlay_ = 0; }
   bool startupProbe() const { return c_.startupStatus().permit == PermitState::Inhibited && !c_.startupStatus().configurationReady; }
   bool startupFault() const { return c_.startupStatus().permit == PermitState::Fault; }
   bool startupRetry() const { return startupFault() || !c_.ready(); }
   bool cutoffFitted() const { return c_.startupStatus().permit != PermitState::NotFitted; }
   void nextGroupPage(); // Screen-only builds cycle the overview without issuing commands.
-  UiPage page() const { return page_; }
+  UiPage page() const { return alertOverlay_ == 1 ? UiPage::Alerts : alertOverlay_ == 2 ? UiPage::AlertDetail : page_; }
   UiField field() const { return field_; }
   UiNotice notice() const { return notice_; }
   Issue blocker() const { return blocker_; }
@@ -57,6 +66,11 @@ class UiModel {
   uint8_t succeeded() const { return succeeded_; }
   uint8_t failed() const { return failed_; }
  private:
+  bool alertAction(UiAction action, uint32_t now);
+  uint32_t alertSince_ = 0;
+  AlertState displayedAlert_;
+  Result alertResult_ = Result::Ok;
+  uint8_t alertOverlay_ = 0, alertSelection_ = 0;
   void refresh(uint32_t now);
   void commit(uint32_t now);
   void queue(uint32_t now, bool confirmed);

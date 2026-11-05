@@ -11,9 +11,14 @@ void LocalUi::begin() {
 #if PSU_ENABLE_ENCODER
   wheel_.begin();
 #endif
+#if !PSU_ENABLE_TOUCH
+  controller_.localStatus(available_, true);
+#endif
 #if PSU_ENABLE_TOUCH
   touchInput_.begin();
-  if (!calibrationStore_.load(calibration_) && available_) {
+  const bool calibrated = calibrationStore_.load(calibration_);
+  controller_.localStatus(available_, calibrated);
+  if (!calibrated && available_) {
     model_.action({ActionKind::Calibrate},millis()); request(millis());
   }
 #endif
@@ -33,6 +38,7 @@ void LocalUi::storageTick() {
   calibrationStore_.step();
   if (saving && !calibrationStore_.saving()) {
     if (calibrationStore_.result()==StorageResult::Ok) calibration_=wizard_.result();
+    controller_.localStatus(available_, calibration_.valid, calibrationStore_.result()!=StorageResult::Ok);
     dirty_=true; pageReady_=false; gesture_.cancel();
   }
 #endif
@@ -40,7 +46,18 @@ void LocalUi::storageTick() {
 void LocalUi::tick(uint32_t now) {
   if (!available_) return;
   const auto oldPage=model_.page(); const auto oldNotice=model_.notice();
-  model_.tick(now);
+  const auto oldAlert=model_.alertDisplayId();
+  model_.notifications(now); model_.tick(now);
+  if (oldAlert!=model_.alertDisplayId()) {
+    dirty_=true; pageReady_=false; lastInput_=now;
+    if (dimmed_) { dimmed_=false; display_.dim(false); }
+#if PSU_ENABLE_ENCODER
+    wheel_.cancelGesture();
+#endif
+#if PSU_ENABLE_TOUCH
+    gesture_.cancel();
+#endif
+  }
   bool wheelAction=false;
 #if PSU_ENABLE_ENCODER
   const auto event=wheel_.read();
@@ -68,7 +85,7 @@ void LocalUi::tick(uint32_t now) {
 #else
   if (uint32_t(now-lastPage_)>=ui::monitorPageMs) { model_.nextGroupPage(); lastPage_=now; dirty_=true; }
 #endif
-  if (oldPage!=model_.page()) {
+  if (oldPage!=model_.page() || oldAlert!=model_.alertDisplayId()) {
     dirty_=true; pageReady_=false;
 #if PSU_ENABLE_TOUCH
     gesture_.cancel();

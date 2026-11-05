@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 namespace psu {
+void drawAlerts(UiFrame&, const UiModel&, const PsuController&, uint32_t);
 void drawAvailability(UiFrame&, const UiModel&, const PsuController&, uint32_t);
 namespace {
 void line(UiFrame& f, uint8_t row, FlashText s, uint8_t style = Text) { f.text(row, 0, ui::columns, s, style); }
@@ -201,11 +202,17 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   f.text(3, 5, 8, {reinterpret_cast<const char*>(fanName(control.fanRequested))}, Warning);
   f.text(3, 13, 4, UI_TEXT("ACK:"), Muted);
   f.text(3, 17, 9, {reinterpret_cast<const char*>(fanName(control.fanAcknowledged))}, Muted);
-  if (issue != Issue::None && commandFailed(command)) line(f, 9, shortCommand(command), Error);
+  line(f,9,UI_TEXT("A: authorized / limit / ACK"),Muted);
+  char base[7], effective[7], accepted[7]; uint16_t raw;
+  formatValue(base,sizeof(base),c.configuration().operating.current[slot]/100.0f,"",1);
+  formatValue(effective,sizeof(effective),c.effectiveCurrent(slot)/100.0f,"",1);
+  if (c.acknowledgedCurrent(slot,raw)) formatValue(accepted,sizeof(accepted),raw*(c.configuration().units[slot].ratedCurrent/100.0f)/1024.0f,"",1);
+  else strcpy(accepted,"?");
+  PSU_SNPRINTF(b,sizeof(b),"%.6s / %.6s / %.6s",base,effective,accepted); f.text(10,0,26,b);
+
   if (d) {
-    PSU_SNPRINTF(b, sizeof(b), "Last response %lus ago", (unsigned long)(uint32_t(now - d->lastSeen) / 1000)); f.text(10, 0, 26, b, Muted);
     if (d->telemetry.alarmSeen) { PSU_SNPRINTF(b, sizeof(b), "Raw alarm 0x%08lX", (unsigned long)d->telemetry.alarmBits); f.text(11, 0, 26, b, Muted); }
-  } else line(f, 10, UI_TEXT("No verified live address"), Warning);
+  } else line(f, 11, UI_TEXT("No verified live address"), Warning);
   line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
 void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
@@ -272,6 +279,9 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   const bool fault = s.activity == Activity::StopUnconfirmed || (s.activity == Activity::StartBlocked && s.blocker != Issue::NoProfile);
   const uint8_t color = fault ? Error : Warning;
   const bool full = m.page() == UiPage::Groups || m.page() == UiPage::Editor || m.page() == UiPage::Confirm || m.page() == UiPage::Result;
+  if (c.configuration().thermalStop != ThermalStop::None) {
+    f.text(1,full ? 0 : 9,full ? 22 : 14,full ? UI_TEXT("THERMAL STOP: COOL + ON") : UI_TEXT("THERMAL STOP"),Error); return;
+  }
   FlashText text = UI_TEXT("RECONCILING...");
   if (s.activity == Activity::Holding) text = e.source() == EnableSource::Switch ? UI_TEXT("ZERO A: ENABLE_IN OFF") :
       e.source() == EnableSource::Serial ? UI_TEXT("ZERO A: SERIAL OFF") : UI_TEXT("ZERO A: BOOT OFF");
@@ -301,6 +311,13 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
 }
 void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   f.clear(); header(f, m, c, now);
+  if (m.alertPage()) {
+    drawAlerts(f,m,c,now); UiLayout::controls(f,m);
+#if PSU_UI_DEBUG
+    f.text(0,23,3,UI_TEXT("SIM"),Warning);
+#endif
+    return;
+  }
   switch (m.page()) {
     case UiPage::Groups: groups(f, m, c, now); break;
     case UiPage::Units: units(f, m, c, now); break;
@@ -318,6 +335,17 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
   if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage()) UiLayout::controls(f,m);
 #endif
   controlBanner(f, m, c, now);
+  // Keep status and V/A/W intact. Alerts replace the Tools label with a badge.
+  if (c.alerts().count() && m.page()==UiPage::Groups) {
+    char badge[10]; PSU_SNPRINTF(badge,sizeof(badge),"Tools!%u",unsigned(c.alerts().count()));
+    #if PSU_ENABLE_TOUCH
+    f.text(13,9,8,badge,c.alerts().error() ? Error : Warning);
+#else
+    PSU_SNPRINTF(badge,sizeof(badge),"!%u",unsigned(c.alerts().count()));
+    f.text(14,23,3,badge,c.alerts().error() ? Error : Warning);
+#endif
+  }
+
 #if PSU_UI_DEBUG
   f.text(0,23,3,UI_TEXT("SIM"),Warning);
   // Preserve pagination alongside the permanent SIM mark.

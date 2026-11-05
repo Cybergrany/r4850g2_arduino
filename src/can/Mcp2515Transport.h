@@ -17,6 +17,7 @@ class Mcp2515Transport : public CanTransport {
   uint8_t droppedFrames() const override { return dropped_; }
   uint8_t receiveHighWater() const override { return highWater_; }
   uint16_t hardwareOverflows() const override { return hardwareOverflows_; }
+  bool takeReceiveLoss() override;
  private:
   static void onReceive(int length);
   static Mcp2515Transport* instance_;
@@ -25,6 +26,7 @@ class Mcp2515Transport : public CanTransport {
   volatile uint8_t tail_ = 0;
   volatile uint8_t dropped_ = 0;
   volatile uint8_t highWater_ = 0;
+  volatile bool receiveLoss_ = false;
   uint16_t hardwareOverflows_ = 0;
   mcp2515::Transmitter transmitter_;
 };

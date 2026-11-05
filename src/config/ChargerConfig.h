@@ -32,11 +32,13 @@ struct OperatingProfile {
   uint8_t currentMask, voltageMask;
   bool voltageAuthorized;
 };
+enum class ThermalStop : uint8_t { None, Temperature, Duration };
 struct Configuration {
   uint32_t deploymentId;
   uint16_t voltage, offlineVoltage, pollMs;
   uint8_t count;
   bool autoResume;
+  ThermalStop thermalStop = ThermalStop::None; // Schema 4: packed with autoResume, no record growth.
   uint8_t acceptedAbsent = 0; // Schema 3: bound identities permitted to be absent.
   UnitConfig units[PSU_MAX_UNITS];
   GroupConfig groups[limits::maxGroups];

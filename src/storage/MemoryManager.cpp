@@ -20,9 +20,11 @@ bool newer(uint32_t a, uint32_t b) { return int32_t(a - b) > 0; }
 bool decode(const uint8_t* b, Configuration& c) {
   c = {}; c.deploymentId = get32(b + 16); c.voltage = get16(b + 20);
   c.offlineVoltage = get16(b + 22); c.pollMs = get16(b + 24); c.count = b[26];
-  if (b[27] > 1 || (b[1] == 2 && b[28])) return false;
+  if ((b[1] < 4 ? b[27] > 1 : (b[27] & ~7)) || (b[1] == 2 && b[28])) return false;
   c.acceptedAbsent = b[1] >= 3 ? b[28] : 0;
-  c.autoResume = b[27]; uint16_t at = 29;
+  c.autoResume = b[27] & 1;
+  c.thermalStop = b[1] >= 4 ? ThermalStop(b[27] >> 1) : ThermalStop::None;
+  uint16_t at = 29;
   for (auto& g : c.groups) {
     memcpy(g.name, b + at, 8); g.name[8] = 0; g.members = b[at + 8];
     g.current = get16(b + at + 9); g.offlineCurrent = get16(b + at + 11); at += 13;
@@ -38,10 +40,10 @@ bool decode(const uint8_t* b, Configuration& c) {
   return validConfig(c);
 }
 void encode(const Configuration& c, uint8_t* b, uint32_t sequence) {
-  b[0] = 0xa5; b[1] = 3; put16(b + 2, MemoryManager::recordSize); put32(b + 4, sequence);
+  b[0] = 0xa5; b[1] = 4; put16(b + 2, MemoryManager::recordSize); put32(b + 4, sequence);
   memcpy(b + 10, "R48C", 4); b[14] = c.operating.voltageAuthorized; b[15] = c.operating.voltageMask;
   put32(b + 16, c.deploymentId); put16(b + 20, c.voltage); put16(b + 22, c.offlineVoltage);
-  put16(b + 24, c.pollMs); b[26] = c.count; b[27] = c.autoResume; b[28] = c.acceptedAbsent; uint16_t at = 29;
+  put16(b + 24, c.pollMs); b[26] = c.count; b[27] = uint8_t(c.autoResume) | uint8_t(c.thermalStop) << 1; b[28] = c.acceptedAbsent; uint16_t at = 29;
   for (const auto& g : c.groups) {
     memcpy(b + at, g.name, 8); b[at + 8] = g.members;
     put16(b + at + 9, g.current); put16(b + at + 11, g.offlineCurrent); at += 13;
@@ -72,7 +74,7 @@ bool MemoryManager::readRecord(uint8_t slot, uint8_t* bytes, uint16_t& size, uin
   const uint16_t base = slot * slotSize;
   for (uint8_t i = 0; i < 16; ++i) bytes[i] = storage_.read(base + i);
   size = get16(bytes + 2); sequence = get32(bytes + 4);
-  if (bytes[0] != 0xa5 || (bytes[1] != 1 && bytes[1] != 2 && bytes[1] != 3) || memcmp(bytes + 10, "R48C", 4) ||
+  if (bytes[0] != 0xa5 || bytes[1] < 1 || bytes[1] > 4 || memcmp(bytes + 10, "R48C", 4) ||
       size > slotSize || size < 20 || (bytes[1] >= 2 && size != recordSize)) return false;
   for (uint16_t i = 16; i < size; ++i) bytes[i] = storage_.read(base + i);
   if (crc(bytes, size) != get16(bytes + 8)) return false;
@@ -118,6 +120,13 @@ StorageResult MemoryManager::save(const Configuration& c) {
   while (saving_) stepSave();
   return saveResult_;
 }
+StorageResult MemoryManager::startProtectionSave(ThermalStop stop) {
+  Configuration saved = defaultConfiguration();
+  const auto r = load(saved);
+  if (r != StorageResult::Ok && r != StorageResult::NoValidRecord) return r;
+  saved.autoResume = false; saved.thermalStop = stop;
+  return startSave(saved);
+}
 StorageResult MemoryManager::startSave(const Configuration& c) {
   if (saving() || !storage_.ready()) return StorageResult::Busy;
   if (storage_.length() < budget) return StorageResult::TooSmall;
@@ -131,6 +140,12 @@ StorageResult MemoryManager::startSave(const Configuration& c) {
   saveAt_ = 0; saving_ = true; saveResult_ = StorageResult::Busy;
   if (++saveToken_ == 0) ++saveToken_;
   return StorageResult::Ok;
+}
+bool MemoryManager::reviseProtection(uint16_t token, ThermalStop stop) {
+  if (!saving_ || token != saveToken_ || stop == ThermalStop::None) return false;
+  pending_[27] = uint8_t(stop) << 1; put16(pending_ + 8, crc(pending_, recordSize));
+  saveAt_ = 0; // Invalidate/rewrite this destination; the previous journal survives.
+  return true;
 }
 void MemoryManager::stepSave() {
   if (!saving_ || !storage_.ready()) return;

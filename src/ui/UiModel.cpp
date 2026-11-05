@@ -43,6 +43,8 @@ void UiModel::refresh(uint32_t now) {
     if (cancelled) result(UiNotice::Changed);
   }
   if (group_ >= 0 && !(c_.configuration().groups[group_].members & (1U << unit_))) unit_ = unitAt(0);
+  if (editing_ && c_.configurationRevision() == c_.protectionRevision() && c_.configurationRevision() == editRevision_ + 1)
+    editRevision_ = c_.configurationRevision(); // Automatic protection did not change this draft.
   if ((editing_ || page_ == UiPage::Confirm) && c_.configurationRevision() != editRevision_)
     result(UiNotice::Changed);
   if (page_ == UiPage::Confirm && (uint32_t(now - plan_.created) > limits::confirmationMs ||
@@ -82,6 +84,7 @@ void UiModel::tick(uint32_t now) {
     if (r.active) return;
     if (r.failed || r.succeeded != plan_.recipients) { result(UiNotice::ApplyFailed); return; }
     storageResult_ = memory_.startSave(c_.configuration());
+    if (storageResult_ != StorageResult::Ok) c_.storageStatus(storageResult_);
     if (storageResult_ != StorageResult::Ok) { result(UiNotice::SaveFailed); return; }
     saveToken_ = memory_.saveToken();
     notice_ = UiNotice::Saving;
@@ -90,6 +93,7 @@ void UiModel::tick(uint32_t now) {
   if (notice_ == UiNotice::Saving) {
     if (memory_.completedToken() == saveToken_) {
       storageResult_ = memory_.completedResult();
+      c_.storageStatus(storageResult_, c_.configurationRevision() != operationRevision_);
       result(storageResult_ != StorageResult::Ok ? UiNotice::SaveFailed :
           c_.configurationRevision() != operationRevision_ ? UiNotice::SavedOlder :
           (plan_.missing || plan_.excluded) ? UiNotice::PartialSaved : UiNotice::Saved);
@@ -129,6 +133,19 @@ void UiModel::commit(uint32_t now) {
   queue(now, false);
 }
 void UiModel::input(UiInput event, uint32_t now) {
+  if (alertOverlay_) {
+    if (now == alertSince_) return;
+    if (event.held) { dismissAlert(); return; }
+    if (alertOverlay_ == 1) {
+      if (event.delta) alertSelection_ = move(alertSelection_, event.delta, c_.alerts().count());
+      if (event.clicked) action({ActionKind::OpenAlert, alertSelection_}, now);
+    } else {
+      UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
+      if (event.delta) alertSelection_ = move(alertSelection_, event.delta, count);
+      if (event.clicked && count) action(buttons[alertSelection_ % count].action, now);
+    }
+    return;
+  }
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
   if (availabilityPage() || page_ == UiPage::Tools) {
     if (event.held) { action({ActionKind::Back}, now); return; }
@@ -204,6 +221,7 @@ void UiModel::input(UiInput event, uint32_t now) {
 
 namespace psu {
 void UiModel::resetNavigation() {
+  alertOverlay_ = alertSelection_ = 0;
   page_ = UiPage::Groups; field_ = UiField::Current; notice_ = UiNotice::None;
   group_ = -1; unit_ = toolSelection_ = 0; editing_ = confirmYes_ = false; request_ = {};
   availabilityWorking_ = false; availabilitySelection_ = availabilitySelected_ = 0;
@@ -235,6 +253,7 @@ void UiModel::confirmAvailability(uint32_t now) {
   availabilitySelection_ = 0; page_ = UiPage::AvailabilityResult;
 }
 void UiModel::action(UiAction a, uint32_t now) {
+  if (alertAction(a, now)) return;
   refresh(now);
   if (availabilityWorking_ && a.kind != ActionKind::HardStop) return;
   switch (a.kind) {

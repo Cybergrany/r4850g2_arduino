@@ -471,14 +471,15 @@ explicit online/offline operations. After serial commissioning, the
 current through the same backend. A successful local apply also saves controller
 EEPROM; serial `apply` and `save` remain separate operations.
 
-EEPROM schema 3 uses two 256-byte journal slots, with a 216-byte record at eight
+EEPROM schema 4 uses two 256-byte journal slots, with a 216-byte record at eight
 PSUs. The remainder of Mega EEPROM is untouched. A save commits last with CRC
 verification; interrupted saves preserve the previous complete record.
 
 Schema 2 loads with no accepted-absence exceptions. Schema 3 uses reserved byte
 28 for remembered identity-bound exceptions; touch calibration retains its two
-40-byte journal tails. Older firmware does not understand schema 3 and may load
-an older record or none, so export and recommission before downgrading.
+40-byte journal tails. Schema 4 additionally packs a thermal-stop marker in byte 27. Schema 2/3 load
+without a thermal stop. Older firmware may load an older record with auto-resume
+ON; export and recommission deliberately before downgrading.
 
 Schema 1 records are never rewritten just by boot/load:
 
@@ -552,3 +553,17 @@ on a healthy installation. A high queue watermark or loop maximum helps locate
 timing pressure; use a logic analyser for actual SPI/interrupt timing. Runtime
 metrics supplement the [bench checks](VALIDATION.md); they are not a hardware
 timing guarantee. `poll`/`describe` saying queued is not proof of a PSU response.
+
+## Alerts and thermal recovery
+
+During commissioning run `alerts`, `diag thermal` and `diag control` alongside
+`diag bus`. Two fresh valid temperature fields per PSU are now required before
+positive current. `diag psu 1` separates authorized, thermally limited and last
+acknowledged current. `alerts ack ID` or `alerts ack all` dismisses notifications
+only; use the existing confirmed startup acceptance/inclusion commands separately.
+
+A sensor-loss stop needs fresh readings and `thermal retry 1` (or GROUP/all). A
+latched thermal shutdown needs cooling and a new `autoresume on`; it remains OFF
+until its clear-save verifies. A held-ON boot switch, load and reconcile cannot
+bypass it. Read [operator alerts, GPIO setup and bench validation](ALERTS.md) before
+testing the new protection or relying on shutdown persistence.

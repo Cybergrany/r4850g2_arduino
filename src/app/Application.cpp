@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <new>
+#include <stdlib.h>
 
 namespace psu {
 Application::Application() : controller_(can_), memory_(eeprom_)
@@ -17,6 +18,9 @@ void Application::begin() {
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.begin(); // First application action; reset-time LOW is hardware-owned.
 #endif
+#if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
+  alertOutputs_.begin();
+#endif
   static_assert(board::eepromBudget == MemoryManager::budget, "EEPROM budgets must agree");
 #if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
   fanOutput_.begin();
@@ -29,6 +33,7 @@ void Application::begin() {
 #endif
   const StorageResult loaded = memory_.load(config);
   controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok);
+  controller_.storageStatus(loaded);
   controller_.configureStartup(PSU_CHG_ALLOW_PIN >= 0 || PSU_UI_DEBUG, PSU_UI_DEBUG || loaded == StorageResult::Ok, millis());
 #if PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG
   pinMode(control::enablePin, control::enablePullup ? INPUT_PULLUP : INPUT);
@@ -75,10 +80,12 @@ void Application::tick() {
   const uint32_t fanNow = millis();
   if (fanOutput_.due(fanNow)) fanOutput_.write(controller_.externalFanStatus(fanNow).duty);
 #endif
+  controller_.serviceProtection(memory_, millis());
   memory_.stepSave();
 #if PSU_ENABLE_DISPLAY
   localUi_.storageTick();
 #endif
+  controller_.serviceProtection(memory_, millis());
 #if PSU_ENABLE_SERIAL
   console_.tick(millis());
 #endif
@@ -91,6 +98,9 @@ void Application::tick() {
 #endif
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.write(controller_.chargeAllowed()); // Includes serial and local UI hard stops.
+#endif
+#if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
+  alertOutputs_.write(controller_.alerts());
 #endif
   controller_.recordLoopTime(uint32_t(micros() - started));
 }
@@ -170,7 +180,17 @@ bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t n
 #endif
   if (PSU_STRCMP(a[0], "ui-debug")) return false;
 #if PSU_UI_DEBUG
-  if (n==4 && (!PSU_STRCMP(a[1], "source") || !PSU_STRCMP(a[1], "battery")) && (!PSU_STRCMP(a[3], "on") || !PSU_STRCMP(a[3], "off"))) {
+  if (n==4 && !PSU_STRCMP(a[1], "temperature")) {
+    int16_t values[2];
+    for (uint8_t i=0;i<2;++i) {
+      char* end; const long value = strtol(a[i+2], &end, 10);
+      if (!PSU_STRCMP(a[i+2], "unknown")) values[i]=1000;
+      else if (!*a[i+2] || *end || value < -40 || value > 150) { out.println(F("ERR temperature -40..150 C or unknown")); return true; }
+      else values[i]=value;
+    }
+    app.can_.temperatures(values[0], values[1]);
+    out.println(F("SIM temperature changed; real thermal policy and stop persistence apply."));
+  } else if (n==4 && (!PSU_STRCMP(a[1], "source") || !PSU_STRCMP(a[1], "battery")) && (!PSU_STRCMP(a[3], "on") || !PSU_STRCMP(a[3], "off"))) {
     const int8_t group = app.controller_.groupIndex(a[2]);
     const uint8_t mask = !PSU_STRCMP(a[2], "all") ? membersMask(app.controller_.count()) : group >= 0 ? app.controller_.configuration().groups[group].members : 0;
     if (!mask) out.println(F("ERR SIM target: all or group"));
@@ -200,7 +220,7 @@ bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t n
       if (match) { app.debugRequest_={ActionKind::ScenarioStart,i}; out.println(F("SIM scenario queued; priming healthy devices first")); return true; }
     }
     out.println(F("ERR unknown scenario; use Tools > SIM scenarios or docs/TOUCH.md"));
-  } else out.println(F("ui-debug status | scenario NAME | restart | reset | source/battery GROUP|all on/off"));
+  } else out.println(F("ui-debug status | scenario NAME | restart | reset | source/battery GROUP|all on/off | temperature OUT IN"));
 #else
   (void)n; out.println(F("ERR PSU_UI_DEBUG disabled; real CAN build"));
 #endif

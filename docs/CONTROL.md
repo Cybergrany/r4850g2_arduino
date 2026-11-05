@@ -342,3 +342,14 @@ Scenarios include `zero-hold`, `fan-hot`, `fan-cool`, `fan-sensor-fault`,
 `fan-reject`, `zero-reject`, `stop-unconfirmed`, and `wake-current`. Use
 `ui-debug enable-input on/off` to exercise normal debounce/latest-wins handling virtually. Scenario priming now
 includes the entire multi-unit reconciliation and may take tens of seconds.
+
+## Operator alerts and temperature protection
+
+See [ALERTS.md](ALERTS.md) for the shared warning/error catalogue, GPIO definitions,
+thermal percentages, temperature-sensor retry, persistent thermal OFF and the
+bench sequence. Serial adds `alerts`, `alerts ack ID|all`, `diag thermal` and
+`thermal retry GROUP|slots|all`. Tools → Alerts exposes the same incidents.
+Acknowledgement preserves protection and returns to the previous screen; it
+does not accept unavailable members or resume charging. Thermal details have
+separate Resume/Retry actions. The overview retains a thermal-stop banner after
+acknowledgement and a Tools incident-count badge.

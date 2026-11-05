@@ -7,7 +7,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 sources = [
-    "src/psu/PsuAvailability.cpp",
+    "src/ui/UiAlerts.cpp", "src/ui/UiAlertView.cpp",
+    "src/psu/PsuAvailability.cpp", "src/psu/Alerts.cpp", "src/psu/PsuThermal.cpp", "src/psu/PsuAlerts.cpp",
     "src/ui/UiAvailability.cpp",
     "src/config/ChargerConfig.cpp", "src/protocol/HuaweiProtocol.cpp",
     "src/psu/PsuControl.cpp", "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp",

@@ -34,7 +34,7 @@ void Discovery::receive(const CanFrame& f, uint32_t now) {
     for (auto& entry : devices_) if (!entry.occupied || !entry.fresh(now, limits::identityLeaseMs * 2)) {
       d = &entry; *d = {}; d->occupied = true; d->address = a; d->epoch = ++revision_; break;
     }
-    if (!d) { if (overflow_ != UINT16_MAX) ++overflow_; return; }
+    if (!d) { overflowEvent_ = true; if (overflow_ != UINT16_MAX) ++overflow_; return; }
   }
   if (!d->fresh(now, limits::identityLeaseMs)) {
     d->identitySamples = 0; d->telemetry = {}; d->epoch = ++revision_;

@@ -6,7 +6,7 @@ enum class ActionKind : uint8_t {
   Adjust, Apply, Cancel, ConfirmNo, ConfirmYes, Tools, Calibrate, TouchDebug,
   Scenarios, ScenarioPrevious, ScenarioNext, ScenarioStart, DebugRestart, DebugReset,
   Startup, AvailabilityPrimary, AvailabilityIndividuals, AvailabilityToggle, AvailabilityMode,
-  AvailabilityReview, AvailabilityRemember, AvailabilityConfirm, HardStop
+  AvailabilityReview, AvailabilityRemember, AvailabilityConfirm, HardStop, Alerts, OpenAlert, Acknowledge, Resume, RetrySensors
 };
 struct UiAction { ActionKind kind = ActionKind::None; int16_t value = 0;
   UiAction() = default;

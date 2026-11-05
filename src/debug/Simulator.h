@@ -10,7 +10,7 @@ enum class DebugScenario : uint8_t {
   VoltageUnsynced, Reject, Timeout, IdentityTimeout, Transport, Partial, SaveFailed, Changed,
   Extremes, WrongDeployment, Unassigned, IdentityPending, SaveChanged, BusOffline,
   ZeroHold, Hot, Cool, SensorFault, FanReject, ZeroReject, StopUnconfirmed, WakeCurrent,
-  BatteryCan, ColdStart, SlowStartup, SourceAbsent, SourceReturn, PartialReturn, UnstableSource, Count
+  BatteryCan, ColdStart, SlowStartup, SourceAbsent, SourceReturn, PartialReturn, UnstableSource, ThermalWarning, ThermalError, ThermalStop, InputHot, Count
 };
 FlashText scenarioName(DebugScenario scenario);
 Configuration debugConfiguration();
@@ -38,6 +38,7 @@ class SimulatedCan : public CanTransport {
   void permit(bool allowed);
   void sourcePower(uint8_t mask, bool on);
   void batteryPower(uint8_t mask, bool on);
+  void temperatures(int16_t output, int16_t input) { outputTemperature_ = output; inputTemperature_ = input; }
   DebugScenario scenario() const { return scenario_; }
  private:
   bool present(uint8_t slot) const;
@@ -58,6 +59,7 @@ class SimulatedCan : public CanTransport {
   bool permit_ = true;
   uint32_t now_ = 0, scenarioSince_ = 0, changedSource_ = 0;
   uint32_t readyAt_[PSU_MAX_UNITS] = {};
+  int16_t outputTemperature_ = INT16_MIN, inputTemperature_ = INT16_MIN;
 };
 }
 #endif

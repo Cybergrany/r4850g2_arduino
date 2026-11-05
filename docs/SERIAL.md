@@ -140,3 +140,14 @@ not. `diag control` reports the winning serial/switch/boot source, physical
 switch state, reconciliation, per-unit zero/awake/fan outcomes and external PWM
 demand/temperature/reason. `reconcile`
 explicitly retries after faults are reviewed. See [CONTROL.md](CONTROL.md).
+
+## Operator alerts and temperature protection
+
+See [ALERTS.md](ALERTS.md) for the shared warning/error catalogue, GPIO definitions,
+thermal percentages, temperature-sensor retry, persistent thermal OFF and the
+bench sequence. Serial adds `alerts`, `alerts ack ID|all`, `diag thermal` and
+`thermal retry GROUP|slots|all`. Tools → Alerts exposes the same incidents.
+Acknowledgement preserves protection and returns to the previous screen; it
+does not accept unavailable members or resume charging. Thermal details have
+separate Resume/Retry actions. The overview retains a thermal-stop banner after
+acknowledgement and a Tools incident-count badge.

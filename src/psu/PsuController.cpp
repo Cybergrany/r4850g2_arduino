@@ -7,17 +7,26 @@ bool PsuController::begin() { ready_ = transport_.begin(); return ready_; }
 Result PsuController::configure(const Configuration& c, bool resume) {
   if (busy() || availabilitySaving()) return Result::Busy;
   if (!validConfig(c)) return Result::Invalid;
+  const auto retainedStop = config_.thermalStop;
   reconcileSessions(c);
-  config_ = c; ++revision_; voltageSynced_ = restoreBlocked_ = 0;
+  config_ = c;
+  if (retainedStop != ThermalStop::None) {
+    config_.thermalStop = retainedStop; config_.autoResume = false; resumePending_ = false;
+    if (c.thermalStop != retainedStop || c.autoResume) protectionDirty_ = true;
+  }
+  if (config_.thermalStop != ThermalStop::None) for (uint8_t i=0; i<c.count; ++i)
+    if (identified(c.units[i].identity)) hotContributors_ |= 1U << i;
+  ++revision_; voltageSynced_ = restoreBlocked_ = 0;
   excluded_ = c.acceptedAbsent; sessionAccepted_ = sessionRequired_ = 0;
   ++availabilityRevision_;
   memset(groupChanged_, 0, sizeof(groupChanged_)); memset(groupEpisode_, 0, sizeof(groupEpisode_));
   memset(refreshed_, 0, sizeof(refreshed_)); controlRefresh_ = refreshCurrent_ = false;
   controlActive_ = controlWaiting_ = controlVerified_ = false;
   for (auto& u : control_) u = {};
-  enable_.boot(resume && c.autoResume);
+  enable_.boot(resume && config_.autoResume && config_.thermalStop == ThermalStop::None);
+  if (config_.thermalStop != ThermalStop::None) enable_.request(false, EnableSource::Protection);
   config_.autoResume = enable_.enabled();
-  currentSynced_ = 0;
+  currentSynced_ = acknowledgedMask_ = validTemperatures_ = 0;
   voltageCommissioned_ = verifying_ = identityChecked_ = false;
   report_ = {};
   running_ = resume && c.autoResume && c.operating.voltageAuthorized && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
@@ -134,7 +143,9 @@ void PsuController::reconcileSessions(const Configuration& next) {
     if (next.deploymentId != config_.deploymentId || i >= next.count ||
         !sameIdentity(next.units[i].identity, config_.units[i].identity)) {
       sessionAh_[i] = 0; sessionSeen_ &= uint8_t(~(1U << i));
-      clearFanOverride(i);
+      clearFanOverride(i); alerts_.reset(i);
+      const uint8_t keep = uint8_t(~(1U << i));
+      hotContributors_ &= keep; sensorFaults_ &= keep; thermalIgnored_ &= keep; energized_ &= keep; activeLost_ &= keep; identityLost_ &= keep;
     }
 }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
@@ -145,6 +156,9 @@ Issue PsuController::issue(uint8_t i, uint32_t now) const {
   if (discovery_.negotiating()) return Issue::IdentityPending;
   const auto route = routingIssue(i, now);
   if (route != Issue::None) return route;
+  if (sensorFaults_ & (1U << i)) return Issue::TemperatureSensor;
+  float temperature;
+  if (!temperatures(i, temperature, now)) return Issue::TemperatureSensor;
   if (groupFor(config_, i) < 0) return Issue::Unassigned;
   if (control_[i].fault != CommandState::Idle) return Issue::ControlFault;
   const Psu* d = deviceForSlot(i, now);
@@ -191,8 +205,11 @@ bool PsuController::metric(uint8_t slot, protocol::Metric m, float& value, uint3
 bool PsuController::freshMetric(uint8_t slot, protocol::Metric m, float& value, uint32_t now) const {
   if (m >= protocol::MetricCount) return false;
   const auto* d = deviceForSlot(slot, now);
-  return d && d->verified(now) && d->fresh(now, staleMs()) &&
-      (d->telemetry.freshMask & (1U << m)) && uint32_t(now - d->telemetry.updated[m]) <= staleMs() && metric(slot, m, value, now);
+  if (!d || !d->verified(now) || !d->fresh(now, staleMs()) ||
+      !(d->telemetry.freshMask & d->telemetry.validMask & (1U << m)) || uint32_t(now - d->telemetry.updated[m]) > staleMs()) return false;
+  value = d->telemetry.values[m];
+  if (m == protocol::CurrentCapacity) value *= config_.units[slot].ratedCurrent / 100.0f;
+  return true;
 }
 ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool partial) const {
   ApplyPlan p = {}; p.operation = op; p.group = group; p.created = now;
@@ -313,12 +330,23 @@ void PsuController::serviceTransmit(uint32_t now) {
 }
 void PsuController::advance(bool success) {
   const uint8_t bit = uint8_t(1U << jobSlot_);
-  if (!success) { report_.failed |= bit; restoreBlocked_ |= bit; }
+  if (!success) {
+    report_.failed |= bit; restoreBlocked_ |= bit;
+    if (thermalLevel_ != ThermalLevel::Normal && report_.units[jobSlot_].reg == protocol::OnlineCurrent)
+      latchControlFault(jobSlot_, report_.units[jobSlot_].state, protocol::OnlineCurrent, now_);
+  }
   else if (secondPhase_ || job_.operation == Operation::GroupCurrent || job_.operation == Operation::Voltage ||
       (job_.operation == Operation::Restore && !(config_.operating.currentMask & bit))) report_.succeeded |= bit;
   pending_ &= uint8_t(~bit); waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::receive(const CanFrame& f, uint32_t now) {
+  if (protocol::isReply(f) && protocol::command(f.id)==protocol::infoCommand && f.data[0]==0 && f.data[1]==2)
+    for (uint8_t i=0;i<count();++i) if (energized_ & (1U << i)) {
+      const auto* previous=deviceForSlot(i,now);
+      if (previous && previous->address==protocol::address(f.id) && memcmp(config_.units[i].identity.bytes,f.data+2,6)) {
+        activeLost_ |= 1U << i; identityLost_ |= 1U << i;
+      }
+    }
   discovery_.receive(f, now);
   controlReceive(f, now);
   int8_t slot = -1;
@@ -353,7 +381,6 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
         if ((voltageSynced_ & participants()) == participants()) voltageCommissioned_ = true;
       }
       if (ok && f.data[1] == protocol::OnlineCurrent) {
-        currentSynced_ |= 1U << jobSlot_;
         currentAccepted(jobSlot_, expected_);
       }
       advance(ok);
@@ -434,7 +461,7 @@ void PsuController::runJob(uint32_t now) {
       control_[jobSlot_].fanAcknowledged != FanMode::Max) return;
   const uint8_t reg = current ? (offline ? protocol::OfflineCurrent : protocol::OnlineCurrent) :
       (offline ? protocol::OfflineVoltage : protocol::OnlineVoltage);
-  expected_ = current ? protocol::encodeCurrent(job_.current[jobSlot_], config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage);
+  expected_ = current ? protocol::encodeCurrent(offline ? job_.current[jobSlot_] : limitedCurrent(jobSlot_, job_.current[jobSlot_]), config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage);
   if (!verifying_) {
     jobStarted_ = true;
     report_.units[jobSlot_] = {CommandState::VerifyingIdentity, reg, expected_};
@@ -457,13 +484,13 @@ void PsuController::runJob(uint32_t now) {
 }
 void PsuController::restore(uint32_t now) {
   if (!enable_.enabled() || !powerAvailable() || busy() || availabilitySaving() || !restorePending_ ||
-      !participants() || !controlsOnline(requiredMembers())) return;
+      !participants() || !controlsOnline(requiredMembers() & uint8_t(~sensorFaults_))) return;
   // Binding/adopting or adding slots never authorizes voltage by itself. Keep
   // the pending installation observable until an explicit complete voltage apply.
   if (config_.operating.voltageMask != membersMask(count())) return;
   // Global voltage is verified across the complete installation before restore.
-  for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & (1U << i)) && issue(i, now) != Issue::None) return;
-  uint8_t recipients = restorePending_ & participants() & uint8_t(~restoreBlocked_);
+  for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & uint8_t(~sensorFaults_) & (1U << i)) && issue(i, now) != Issue::None) return;
+  uint8_t recipients = restorePending_ & participants() & uint8_t(~(restoreBlocked_ | sensorFaults_));
   for (uint8_t i = 0; i < count(); ++i)
     if (control_[i].outputDemand == OutputDemand::Starting) recipients &= uint8_t(~(1U << i));
   if (!recipients) return;
@@ -484,12 +511,13 @@ void PsuController::restore(uint32_t now) {
 void PsuController::tick(uint32_t now) {
   now_ = now;
   startupTick(now);
-  if (!ready_) { finishAvailability(now); return; }
+  if (!ready_) { thermalTick(now); alertTick(now); finishAvailability(now); return; }
   sentThisTick_ = false;
   serviceTransmit(now);
   CanFrame f;
   for (uint8_t n = 0; n < 32 && transport_.receive(f); ++n) receive(f, now);
   discovery_.tick(now, staleMs());
+  thermalTick(now);
   controlTick(now);
   availabilityTick(now);
   // Revalidate saved decisions against this tick's received identities and
@@ -498,6 +526,7 @@ void PsuController::tick(uint32_t now) {
   restore(now);
   if (busy()) runJob(now);
   if (!busy() && !availabilitySaving()) refreshSettings(now);
+  alertTick(now);
   // Identity and telemetry refresh continue even during a long multi-unit job.
   if (sentThisTick_ || txPending_ || uint32_t(now - lastProbe_) < limits::readRequestGapMs) return;
   // Round-robin due requests, without consuming a timeslot on an idle entry.

@@ -10,6 +10,10 @@ void bigEndian(uint8_t* p, uint32_t n) { for (uint8_t i = 0; i < 4; ++i) p[i] = 
 }
 FlashText scenarioName(DebugScenario s) {
   switch (s) {
+    case DebugScenario::ThermalWarning: return UI_TEXT("thermal-warning");
+    case DebugScenario::ThermalError: return UI_TEXT("thermal-error");
+    case DebugScenario::ThermalStop: return UI_TEXT("thermal-stop");
+    case DebugScenario::InputHot: return UI_TEXT("input-hot");
     case DebugScenario::Healthy: return UI_TEXT("healthy");
     case DebugScenario::Empty: return UI_TEXT("empty");
     case DebugScenario::Missing: return UI_TEXT("missing");
@@ -69,7 +73,7 @@ void SimulatedCan::reset() {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { voltage_[i] = 5400; current_[i] = 1000; }
   pending_ = cycling_ = false; slot_ = field_ = budget_ = 0; lastCycle_ = 0;
   standby_ = fanMax_ = wakeSeen_ = 0;
-  scenario_ = DebugScenario::Healthy;
+  scenario_ = DebugScenario::Healthy; outputTemperature_ = inputTemperature_ = INT16_MIN;
   sources_ = batteries_ = 0xff; permit_ = true; now_ = scenarioSince_ = changedSource_ = 0;
   memset(readyAt_, 0, sizeof(readyAt_));
 }
@@ -134,10 +138,13 @@ CanFrame SimulatedCan::metricFrame(uint8_t i, uint8_t m) const {
     case protocol::CurrentCapacity: raw = 60UL * 1024; break;
     case protocol::InputVoltage: raw = ac(i) ? 227UL * 1024 : 0; break;
     case protocol::OutputTemperature: raw = (scenario_ == DebugScenario::SensorFault ? 1000UL :
-        scenario_ == DebugScenario::Hot ? 60UL : scenario_ == DebugScenario::Cool ? 25UL : 40UL + i * 3) * 1024; break;
-    case protocol::InputTemperature: raw = scenario_ == DebugScenario::Extremes ? uint32_t(-12L * 1024) : 30UL * 1024; break;
+        scenario_ == DebugScenario::ThermalWarning ? 65UL : scenario_ == DebugScenario::ThermalError ? 70UL :
+        scenario_ == DebugScenario::ThermalStop ? 76UL : scenario_ == DebugScenario::Hot ? 60UL : scenario_ == DebugScenario::Cool ? 25UL : 40UL + i * 3) * 1024; break;
+    case protocol::InputTemperature: raw = scenario_ == DebugScenario::InputHot ? 71UL * 1024 : scenario_ == DebugScenario::Extremes ? uint32_t(-12L * 1024) : 30UL * 1024; break;
     default: raw = amps * 1024 / 100; break;
   }
+  if (m == protocol::OutputTemperature && outputTemperature_ != INT16_MIN) raw = int32_t(outputTemperature_) * 1024;
+  if (m == protocol::InputTemperature && inputTemperature_ != INT16_MIN) raw = int32_t(inputTemperature_) * 1024;
   bigEndian(f.data + 4, raw); return f;
 }
 CanFrame SimulatedCan::broadcastFrame(uint8_t i) const {

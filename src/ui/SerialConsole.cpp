@@ -2,6 +2,7 @@
 #include "SerialConsole.h"
 #if PSU_ENABLE_SERIAL
 #include "UiText.h"
+#include "AlertText.h"
 #include "../config/ConsoleConfig.h"
 #include "../config/BoardConfig.h"
 #include "../config/Deployment.h"
@@ -111,6 +112,7 @@ void SerialConsole::displayStatus(bool available) {
 }
 void SerialConsole::reply(Result r) { io_.println(resultName(r)); }
 void SerialConsole::storageReply(StorageResult r) {
+  controller_.storageStatus(r);
 #if PSU_UI_DEBUG
   io_.print(F("SIM RAM: "));
 #endif
@@ -161,7 +163,26 @@ void SerialConsole::execute() {
   if ((!PSU_STRCMP(args[0], "config") || !PSU_STRCMP(args[0], "groups")) && argc == 1) { startView(View::Config); return; }
   if (!PSU_STRCMP(args[0], "legacy") && argc == 1) { startView(View::Legacy); return; }
   if (!PSU_STRCMP(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
+  if (!PSU_STRCMP(args[0], "alerts")) {
+    if (argc == 1) { startView(View::Alerts); return; }
+    if (argc == 3 && !PSU_STRCMP(args[1], "ack")) {
+      if (!PSU_STRCMP(args[2], "all")) { controller_.alerts().acknowledgeAll(); reply(Result::Ok); }
+      else if (integer(args[2], 65535, n)) reply(controller_.alerts().acknowledge(n) ? Result::Ok : Result::Changed);
+      else reply(Result::Invalid);
+      io_.println(F("Acknowledgement only; protection/availability decisions unchanged.")); return;
+    }
+    reply(Result::Invalid); return;
+  }
+  if (!PSU_STRCMP(args[0], "thermal") && argc == 3 && !PSU_STRCMP(args[1], "retry")) {
+    uint8_t mask = 0;
+    const int8_t group = controller_.groupIndex(args[2]);
+    if (group >= 0) mask = controller_.configuration().groups[group].members;
+    else if (!selection(args[2], controller_.count(), mask)) { reply(Result::Invalid); return; }
+    reply(controller_.retryTemperature(mask, now_));
+    return;
+  }
   if (!PSU_STRCMP(args[0], "diag") && argc >= 2) {
+    if (!PSU_STRCMP(args[1], "thermal") && argc == 2) { startView(View::Thermal); return; }
     if (!PSU_STRCMP(args[1], "startup") && argc == 2) { startView(View::Startup); return; }
     if (!PSU_STRCMP(args[1], "control") && argc == 2) { startView(View::Control); return; }
     if (!PSU_STRCMP(args[1], "bus") && argc == 2) { startView(View::Bus); return; }
@@ -245,7 +266,7 @@ void SerialConsole::execute() {
   }
   if (!PSU_STRCMP(args[0], "autoresume") && argc == 2 && (!PSU_STRCMP(args[1], "on") || !PSU_STRCMP(args[1], "off"))) {
     reply(controller_.setAutoResume(!PSU_STRCMP(args[1], "on")));
-    io_.println(F("Live enable request changed; save persists it. Latest switch edge or serial command wins. diag control")); return;
+    io_.println(F("Thermal latch requires cooling + verified save before ON. diag thermal / diag control; save persists normal preference.")); return;
   }
   if (!PSU_STRCMP(args[0], "reconcile") && argc == 1) {
     controller_.reconcile(); io_.println(F("Reconciliation restarted; active apply cancelled; authorized profile retained. diag control")); return;
@@ -436,7 +457,7 @@ void SerialConsole::tick(uint32_t now) {
   if (waitingSave_ && memory_.completedToken() == saveToken_) {
     waitingSave_ = false; beginOutput(); storageReply(memory_.completedResult());
     if (memory_.completedResult() == StorageResult::Ok && saveRevision_ != controller_.configurationRevision())
-      io_.println(F("Saved earlier snapshot; newer RAM changes remain unsaved"));
+      { controller_.storageStatus(StorageResult::Ok, true); io_.println(F("Saved earlier snapshot; newer RAM changes remain unsaved")); }
     if (!submitted_) prompt();
     return;
   }
@@ -510,6 +531,12 @@ void SerialConsole::tick(uint32_t now) {
     io_.print(F("WARN trace/description frames dropped=")); io_.print(traceDrops_);
     io_.println(F("; CAN processing continues; retry description with raw off")); prompt(); return;
   }
+  if (alertNotice_ != controller_.alerts().revision() && !length_ && view_ == View::None) {
+    alertNotice_ = controller_.alerts().revision(); beginOutput();
+    io_.print(F("ALERTS changed; warning=")); io_.print(controller_.alerts().warning());
+    io_.print(F(" error=")); io_.print(controller_.alerts().error());
+    io_.println(F("; alerts for cause/action/recovery; acknowledgement does not clear protection.")); prompt(); return;
+  }
   if (watch_ && !length_ && !discard_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Telemetry, membersMask(controller_.count()));
   }
@@ -577,6 +604,13 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
       io_.print(F("ms frames=")); io_.print(ready.frames); io_.print('/'); io_.print(control::outputReadyFrames);
       io_.print(F(" startup-remaining=")); io_.print(ready.remainingMs); io_.println(F("ms; output may be live"));
     }
+  } else if (field == 8) {
+    io_.print(F("  authorized/effective/acknowledged A="));
+    io_.print(c.operating.current[i] / 100.0f); io_.print('/');
+    io_.print(controller_.effectiveCurrent(i) / 100.0f); io_.print('/'); uint16_t raw;
+    if (controller_.acknowledgedCurrent(i, raw)) io_.print(raw * (c.units[i].ratedCurrent / 100.0f) / 1024.0f);
+    else io_.print(F("unknown"));
+    io_.println(F(" (ACK=limit acceptance, not measured current)"));
   } else if (d && field == 3) {
     io_.print(F("  last measured V="));
     if (d->telemetry.validMask & (1U << protocol::OutputVoltage)) io_.print(d->telemetry.values[protocol::OutputVoltage]); else io_.print('-');
@@ -595,7 +629,40 @@ void SerialConsole::printControl(uint32_t now) {
 }
 void SerialConsole::outputRow(uint32_t now) {
   const auto& c = controller_.configuration();
-  if (view_ == View::Startup) {
+  if (view_ == View::Alerts) {
+    while (row_ < AlertManager::Count && !controller_.alerts().visible(row_)) ++row_;
+    if (row_ == AlertManager::Count) { io_.println(F("alerts ack ID|all dismisses only; diag thermal; diag startup; diag control")); view_ = View::None; return; }
+    const auto a = controller_.alerts().at(row_);
+    if (field_ == 0) {
+      io_.print(F("ALERT ")); io_.print(a.id); io_.print(alertLevel(a.code) == AlertLevel::Error ? F(" ERROR ") : F(" WARNING "));
+      if (a.source < controller_.count()) { io_.print(F("PSU ")); io_.print(a.source + 1); const int8_t g=groupFor(c,a.source); if (g>=0) { io_.print(' '); io_.print(c.groups[g].name); } }
+      else io_.print(F("SYSTEM"));
+      io_.print(a.active ? F(" active ") : F(" cleared ")); io_.print(a.acknowledged ? F("acknowledged: ") : F("unacknowledged: ")); io_.println(alertCause(a.code));
+    } else if (field_ == 1) io_.println(alertAction(a.code));
+    else io_.println(alertRecovery(a.code));
+    if (++field_ == 3) { field_ = 0; ++row_; } return;
+  } else if (view_ == View::Thermal) {
+    const auto t = controller_.thermalStatus();
+    if (row_ == 0) {
+      io_.print(F("Thermal level=")); io_.print(uint8_t(t.level)); io_.print(F(" highest C="));
+      if (t.valid || t.maximum>=alerts::warningC) io_.print(t.maximum); else io_.print(F("unknown"));
+      io_.print(F(" factor=")); io_.print(t.percent); io_.print(F("% cool=")); io_.println(t.cool);
+    } else if (row_ == 1) {
+      io_.print(F("valid temperatures=")); printMembers(t.valid); io_.print(F(" hot/unknown contributors=")); printMembers(t.contributors);
+      io_.print(F(" sensor-latched=")); printMembers(t.sensorFaults); io_.print(F(" explicit absence waiver=")); printMembers(t.ignored); io_.println();
+    } else if (row_ == 2) {
+      io_.print(F("hot elapsed ms=")); io_.print(t.hotMs); io_.print(F(" shutdown remaining ms=")); io_.print(alerts::errorMs - t.hotMs);
+      io_.print(F(" stop=")); io_.print(uint8_t(t.stop)); io_.print(F(" saved=")); io_.print(t.persisted);
+      io_.print(F(" saving=")); io_.print(t.saving); io_.print(F(" failed=")); io_.print(t.saveFailed); io_.print(F(" resume-pending=")); io_.println(t.resuming);
+    } else if (row_ == 3) {
+      io_.print(F("GPIO WARNING=")); io_.print(controller_.alerts().warning()); io_.print(F(" pin=")); io_.print(alerts::warningPin);
+      io_.print(F(" ERROR=")); io_.print(controller_.alerts().error()); io_.print(F(" pin=")); io_.print(alerts::errorPin); io_.println(PSU_UI_DEBUG ? F(" SIM logical only") : F(" active HIGH"));
+    } else if (row_ == 4) {
+      io_.print(F("Thresholds warning/error/stop/clear C=")); io_.print(alerts::warningC); io_.print('/'); io_.print(alerts::errorC); io_.print('/'); io_.print(alerts::stopC); io_.print('/'); io_.println(alerts::clearC);
+      io_.println(F("Cool then new autoresume on; thermal retry TARGET for sensor latch. ACK never resumes."));
+    } else { startView(View::Units); return; }
+    ++row_; return;
+  } else if (view_ == View::Startup) {
     if (row_ == 0) {
       io_.print(F("CHG_ALLOW ")); io_.print(permitName(controller_.startupStatus().permit));
       io_.print(F(" pin=")); io_.println(control::chargeAllowPin);
@@ -687,6 +754,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
       case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
+      case 10: io_.println(F("alerts: causes/actions/recovery; diag thermal: thresholds, reductions, sensor coverage, shutdown timer/persistence and GPIO levels.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -709,6 +777,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
       case 18: io_.println(F("diag startup; startup accept/include/require GROUP|slots [remember]; confirm yes/no")); break;
+      case 20: io_.println(F("alerts; alerts ack ID|all; diag thermal; thermal retry GROUP|slots|all")); break;
       case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
@@ -716,7 +785,7 @@ void SerialConsole::outputRow(uint32_t now) {
   } else if (view_ == View::Config) {
     if (row_ == 0) {
       io_.print(F("deployment=")); io_.print(c.deploymentId); io_.print(F(" compiled=")); io_.print(deployment::id);
-      io_.print(F(" slots=")); io_.print(c.count); io_.print(F(" autoresume=")); io_.println(c.autoResume);
+      io_.print(F(" slots=")); io_.print(c.count); io_.print(F(" autoresume=")); io_.print(c.autoResume); io_.print(F(" thermal-stop=")); io_.println(uint8_t(c.thermalStop));
       io_.print(F("draft global V=")); io_.print(c.voltage / 100.0f); io_.print(F(" offline V=")); io_.print(c.offlineVoltage / 100.0f);
       io_.print(F(" authorized V=")); if (c.operating.voltageAuthorized) io_.println(c.operating.voltage / 100.0f); else io_.println(F("none"));
       io_.print(F("voltage authorized slots=")); printMembers(c.operating.voltageMask); io_.println();
@@ -786,7 +855,7 @@ void SerialConsole::outputRow(uint32_t now) {
     while (row_ < c.count && !(viewMask_ & (1U << row_))) ++row_;
     if (row_ < c.count) {
       printUnit(row_, field_, now);
-      if (++field_ == 8) { field_ = 0; ++row_; }
+      if (++field_ == 9) { field_ = 0; ++row_; }
     } else view_ = View::None;
   } else if (view_ == View::Plan) {
     if (row_ == 0) {

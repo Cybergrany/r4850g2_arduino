@@ -210,3 +210,14 @@ turn-on delay. [Huawei R4850G2 manual, page 1](https://www.beyondlogic.org/pdf/H
 DC-powered CAN, automatic address negotiation and volatile-setting fallback are
 documented observations with firmware/model caveats.
 [R48xx protocol documentation](https://github.com/patagonaa/huawei-r48xx#can-protocol).
+
+## Operator alerts and temperature protection
+
+See [ALERTS.md](ALERTS.md) for the shared warning/error catalogue, GPIO definitions,
+thermal percentages, temperature-sensor retry, persistent thermal OFF and the
+bench sequence. Serial adds `alerts`, `alerts ack ID|all`, `diag thermal` and
+`thermal retry GROUP|slots|all`. Tools → Alerts exposes the same incidents.
+Acknowledgement preserves protection and returns to the previous screen; it
+does not accept unavailable members or resume charging. Thermal details have
+separate Resume/Retry actions. The overview retains a thermal-stop banner after
+acknowledgement and a Tools incident-count badge.

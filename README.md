@@ -173,3 +173,7 @@ Derived protocol software is GPL-3.0-or-later; see [LICENSE](LICENSE) and
   @Roturbo has provided a nice pinout for a nano:
 
   ![316427349-3ad49603-3def-4ec2-9e40-f8289db90cfa](https://github.com/haklein/r4850g2_arduino/assets/4569994/0a200d5f-f5de-4887-b59d-5bd5942bd7a0)
+
+Operator protection: [alerts, thermal limits, GPIOs and bench procedure](docs/ALERTS.md).
+The new serial/touch alert example profiles use D28 WARNING and D29 ERROR; pins
+are otherwise disabled by default. Schema 4 preserves the 512-byte EEPROM budget.

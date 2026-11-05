@@ -24,6 +24,8 @@ class CanTransport {
   virtual uint8_t droppedFrames() const { return 0; }
   virtual uint8_t receiveHighWater() const { return 0; }
   virtual uint16_t hardwareOverflows() const { return 0; }
+  // Consume recent loss independently of saturating diagnostic counters.
+  virtual bool takeReceiveLoss() { return false; }
   virtual ~CanTransport() = default;
 };
 }

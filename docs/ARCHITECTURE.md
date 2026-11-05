@@ -14,7 +14,7 @@ controller, and storage code are ordinary C++11 without Arduino dependencies.
 | `src/ui/` | Serial commands, diagnostic rendering, ILI9341 layout/renderer, wheel/touch navigation and calibration |
 | `src/debug/` | Optional simulated PSU transport and volatile byte storage |
 | `src/app/` | Startup composition and cooperative scheduling |
-| `src/io/` | Optional CHG_ALLOW cutoff and four-wire fan PWM adapters |
+| `src/io/` | Optional CHG_ALLOW cutoff, four-wire fan PWM and alert-output adapters |
 | `src/util/` | Literal/constant storage helpers for AVR flash and host builds |
 | `test/` | Production code exercised with simulated hardware/time |
 
@@ -300,10 +300,9 @@ the paced identity/ACK worker. Refreshes do not overwrite user operation reports
 or repeat persistent defaults/fan writes. AC-loss transitions and negotiation
 invalidate stale routing/setting proofs. [Operator sequence and limits](STARTUP.md).
 
-## EEPROM schema 3 and migration
+## EEPROM schema 4 and migration
 
-`ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Only
-serial `save`, a successful local apply/save, or an explicit remembered availability decision writes charger records; touch
+`ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Serial `save`, a successful local apply/save, an explicit remembered availability decision, and automatic thermal protection write charger records; touch
 calibration has separate records in the reserved tails. Two 256-byte journal slots reserve bytes 0–511;
 integer encoding is explicit little-endian and independent of struct padding.
 At eight-slot capacity the record is **216 bytes**, whether one or eight slots
@@ -313,7 +312,7 @@ not persisted.
 | Relative offset (8-slot build) | Contents |
 | --- | --- |
 | 0 | Commit marker `A5`, written last |
-| 1 | Schema `3` (schema 2 remains readable) |
+| 1 | Schema `4` (schemas 2 and 3 remain readable) |
 | 2–3 | Record length |
 | 4–7 | Generation, wrap-aware comparison |
 | 8–9 | CRC-16/CCITT-FALSE excluding bytes 0, 8, 9 |
@@ -322,7 +321,8 @@ not persisted.
 | 15 | Per-slot voltage authorization mask |
 | 16–19 | Deployment ID |
 | 20–23 | Draft online/offline voltage |
-| 24–27 | Poll interval, count, auto-resume |
+| 24–26 | Poll interval and count |
+| 27 | Bit 0 auto-resume; bits 1–2 thermal-stop reason (0 none, 1 temperature, 2 duration) |
 | 28 | Accepted-absence mask, bound to the stored slot identities/membership |
 | 29–132 | Eight groups: 8 name bytes, membership mask, online/offline totals |
 | 133–196 | Eight slots: 6 identity bytes, rated current |
@@ -336,17 +336,17 @@ except that WrongDeployment deliberately returns an inspectable, gated profile.
 No fallback case silently erases EEPROM. Runtime saves are incremental and
 disallowed by the serial UI during an apply.
 
-Schema 2 loads with no accepted-absence exceptions. Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
+Schemas 2/3 load with no thermal stop. Schema 2 loads with no accepted-absence exceptions. Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
 unauthorized GROUP1 in RAM, with auto-resume off. Incompatible per-unit drafts
 return LegacyNeedsReview unchanged and remain available through `legacy()`.
-The first schema-3 save writes the other journal slot; interrupted migration
+The first schema-4 save writes the other journal slot; interrupted migration
 saves still recover the old record. A later save may overwrite that legacy
 backup, so export it if it is needed. All supplied builds use the same capacity;
 changing `PSU_MAX_UNITS` changes the record length and requires manual export/
 recommissioning. This firmware does not reinterpret a different-size layout.
 
-Downgrading to firmware that only reads schema 2 can select an older journal
-record or find no valid record; it will not understand the new absence policy.
+Downgrading to firmware that only reads schema 2/3 can select an older journal
+record or find no valid record; it cannot enforce the thermal stop and the old record may enable auto-resume.
 Export configuration and recommission deliberately before downgrading.
 
 
@@ -366,7 +366,7 @@ samples a fixed SPI burst in the main loop. `TouchConfig.h` owns wiring/timings.
 `MemoryManager::auxiliaryBusy` gates the one shared byte writer; application
 services both storage jobs, but at most one is active. Charger records occupy
 at most the first 216 bytes of each 256-byte slot; calibration owns the last 40.
-The charger schema is version 3 with the same 216-byte footprint. Calibration has its own version/CRC,
+The charger schema is version 4 with the same 216-byte footprint. Calibration has its own version/CRC,
 sequence, hardware profile and rotation, independent of deployment identity.
 
 With `PSU_UI_DEBUG`, Application instantiates `SimulatedCan` and `RamStorage`.
@@ -434,3 +434,26 @@ cleared before enable can release a high-current profile. Removing an override
 returns conservatively to MAX and normal cooldown. Configuration/identity resets
 cannot transfer an override to a replacement. Serial exposes the override and
 ACK separately; future UI controls can use the same backend API.
+
+## Shared alerts and thermal limits
+
+`PsuThermal.cpp` derives effective online current from the authorized per-unit
+allocation and the strongest thermal level. `PsuAlerts.cpp` maps controller,
+availability and storage state to fixed incidents in `AlertManager`. Serial,
+`UiAlerts`/`UiAlertView` and `AlertOutputs` consume that same state.
+Acknowledgement never changes the protective condition. See [ALERTS.md](ALERTS.md)
+for policy, incident lifetimes, persistence, exclusions and the bench procedure.
+
+Protection updates run before actuation scheduling. They yield to bounded in-flight
+ACK waits, supersede unsent values, and use the same INFO/identity/epoch checks as
+other writes. `currentAccepted` records raw ACKs separately from synchronization
+against the current effective target. Sensor-loss latches and prior hot
+contributions survive ordinary route/reconciliation resets. Explicit binding
+changes reset slot incident state.
+
+`serviceProtection` shares the MemoryManager writer with reviewed saves and
+calibration; it edits saved protection state without snapshotting RAM drafts.
+The application services it before/after the cooperative EEPROM step and checks
+completion tokens. A stale clear-save cannot enable after a newer OFF/hot event.
+The AVR build disables SRAM switch-table conversion to preserve static headroom;
+explanatory text remains in flash.
