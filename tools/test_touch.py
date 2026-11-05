@@ -15,7 +15,7 @@ sources = [
     'src/psu/Presentation.cpp', 'src/storage/MemoryManager.cpp',
     'src/ui/UiModel.cpp', 'src/ui/UiFrame.cpp', 'src/ui/UiView.cpp',
     'src/ui/UiLayout.cpp', 'src/ui/Touch.cpp', 'src/ui/LocalUi.cpp',
-    'src/debug/Simulator.cpp', 'src/ui/SerialConsole.cpp', 'src/io/FanOutput.cpp', 'src/app/Application.cpp', 'test/test_touch.cpp',
+    'src/debug/Simulator.cpp', 'src/ui/SerialConsole.cpp', 'src/ui/SerialAlerts.cpp', 'src/io/FanOutput.cpp', 'src/app/Application.cpp', 'test/test_touch.cpp',
 ]
 with tempfile.TemporaryDirectory(prefix='r4850-touch-') as folder:
     binary = str(Path(folder) / 'test')

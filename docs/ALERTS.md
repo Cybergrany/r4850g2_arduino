@@ -17,6 +17,22 @@ diag psu 1
 `alerts` prints each incident's ID, severity, slot/group (or system scope), active
 or cleared state, acknowledgement, cause, protective action and recovery.
 IDs are session-local; serial reconnect, `hello` and Ctrl-X do not reset them.
+Serial also broadcasts a compact summary every **five seconds** while alerts
+are active, including acknowledged alerts. Each row includes severity, PSU/group,
+cause and protective action. `alerts every 10` changes the period to ten seconds;
+`alerts every 0` disables automatic broadcasts and `alerts every` reports the
+current period. This preference lasts until reboot and survives `hello`/Ctrl-X;
+it does not affect UI notifications, GPIOs or protection. The build default is
+`PSU_SERIAL_ALERT_INTERVAL_MS` in `src/config/ConsoleConfig.h`.
+
+Errors are printed before warnings. Previously active conditions get a cleared
+row once, followed by silence when everything is clear. Newly retained,
+unacknowledged incidents that arise and clear between summaries are included too.
+Reports coalesce the latest retained state; they are not a lossless event log.
+Command entry and requested reports defer automatic summaries. Backpressure
+delays them without queuing missed periods or producing catch-up bursts. See
+[serial broadcast behaviour](SERIAL.md#periodic-warningerror-broadcasts).
+
 `diag thermal` shows temperature coverage, highest reading, percentage, hot-time
 countdown, retained hot contributors, sensor latches, explicit absence waivers,
 shutdown/persistence state and logical WARNING/ERROR outputs. Thermal levels are

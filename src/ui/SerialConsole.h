@@ -18,12 +18,17 @@ class SerialConsole {
   void tick(uint32_t now);
   using Extension = bool (*)(void*, uint8_t, char**, Print&, uint32_t);
   void extension(Extension callback, void* context) { extension_ = callback; extensionContext_ = context; }
-  void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; controller_.observeFrames(onFrame,this); }
+  void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; alertNotice_ = previousAlertSources_ = 0; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast };
   void printControl(uint32_t now);
+  void printAlert(const AlertState& alert, bool action);
+  bool broadcastAlerts(uint32_t now);
+  void cancelAlertBroadcast();
   uint16_t alertNotice_ = 0;
+  uint16_t previousAlertSources_ = 0, pendingAlertSources_ = 0;
+  uint32_t lastAlertBroadcast_ = 0, alertInterval_ = console::alertIntervalMs;
   uint16_t controlNotice_ = 0xffff;
   void execute();
   void resetSession();

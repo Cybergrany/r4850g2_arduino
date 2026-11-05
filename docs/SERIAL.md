@@ -151,3 +151,53 @@ Acknowledgement preserves protection and returns to the previous screen; it
 does not accept unavailable members or resume charging. Thermal details have
 separate Resume/Retry actions. The overview retains a thermal-stop banner after
 acknowledgement and a Tools incident-count badge.
+
+## Periodic warning/error broadcasts
+
+With serial enabled, active warnings/errors are automatically summarized every
+**five seconds**, independently of `watch` and `raw`. For example:
+
+```text
+ALERTS uptime-ms=123456 active WARNING=1 ERROR=1; details: alerts / diag thermal
+ALERT 12 ERROR PSU 2 GROUP1 active unacknowledged: Setting/fan command failed; Restore blocked. Bounded stop/fault fallback.
+ALERT 11 WARNING SYSTEM active acknowledged: Temperature warning; All active limits reduced; maximum cooling.
+>
+```
+
+The header counts active warning/error conditions, not individual CAN frames.
+Rows include incident IDs, affected slots/groups, acknowledgement, causes and
+protective actions. Active errors print before active warnings. Acknowledgement
+does not silence active conditions; it still only dismisses the notification.
+
+| Command | Effect |
+| --- | --- |
+| `alerts every` | Show the current broadcast period |
+| `alerts every 5` | Broadcast every five seconds; accept whole seconds from 1 to 3600 |
+| `alerts every 0` | Disable automatic serial summaries |
+| `alerts` | Immediately request the full incident list, including recovery instructions |
+| `diag thermal` | Inspect temperatures, reductions, shutdown timer and persistence |
+
+The runtime period is RAM-only and survives console reconnect, `hello` and
+Ctrl-X. A reboot returns to **`PSU_SERIAL_ALERT_INTERVAL_MS=5000`**, configurable
+in `src/config/ConsoleConfig.h` or PlatformIO build flags. The build definition
+accepts 0 or whole seconds expressed as 1000–3600000 ms. Changing the period starts
+a new interval; use `alerts` if details are needed immediately. Disabling serial
+summaries changes no protection, GPIO or display behaviour.
+
+Repeated incidents are coalesced into current-state rows, not appended to an
+unbounded queue. Previously reported active conditions print as cleared once;
+new retained, unacknowledged incidents that clear before the next summary can
+also appear as cleared. An `(all clear)` header ends an active episode, after
+which automatic output stays quiet until another incident. The shared backend
+retains one primary condition per source, so this is not a lossless chronology
+of every transition. Use `alerts` to inspect retained unacknowledged history.
+
+Each summary yields between rows and uses the existing bounded UART buffer and
+48-byte transmit budget. Commands and save completions have priority. Typing,
+requested diagnostic reports and a slow/unwritable UART delay summaries; missed
+intervals are not replayed. The next interval starts after the previous summary
+finishes. Rows re-read current state, including acknowledgements and recoveries,
+as they print. Ctrl-X or a new command can interrupt a summary without affecting
+controller work. Existing ACK/status messages and explicitly enabled `raw`/`watch`
+output retain their behaviour; `raw off` and `watch off` make summaries easier to
+follow during an issue storm.

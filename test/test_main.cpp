@@ -1719,9 +1719,11 @@ void uiLayouts() {
 #include "test_zero_hold.inc"
 #include "test_output_readiness.inc"
 #include "test_alerts.inc"
+#include "test_serial_alerts.inc"
 }
 int main() {
   try {
+    serialAlertCadence(); serialAlertStorm();
     alertEpisodes(); thermalLimitsAndSensors(); thermalTimingAndAbsence(); thermalPersistence(); thermalQueuedChanges(); thermalAckRacesAndMigration(); alertUiAndSerial(); alertSerialCommands(); activeIdentityAlert();
     zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();
     readinessQualification(); readinessFrameOrdering(); readinessAckOrdering(); readinessDeadlineAndLatch(); readinessTelemetryAndBoundary(); readinessSafetyEdges(); readinessMultiUnitAndWrap();

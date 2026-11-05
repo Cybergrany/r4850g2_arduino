@@ -79,6 +79,7 @@ const __FlashStringHelper* metricName(uint8_t metric) {
 }
 }
 void SerialConsole::resetSession() {
+  cancelAlertBroadcast();
   length_ = 0; discard_ = afterCr_ = false; echo_ = true;
   view_ = View::None; watch_ = raw_ = confirmation_ = false; descriptionAddress_ = 0;
   availabilityConfirmation_ = false;
@@ -139,13 +140,16 @@ void SerialConsole::printMembers(uint8_t m) {
     first = false; io_.print(i + 1);
   }
 }
-void SerialConsole::startView(View view, uint8_t mask) { view_ = view; row_ = field_ = 0; viewMask_ = mask; }
+void SerialConsole::startView(View view, uint8_t mask) {
+  cancelAlertBroadcast(); view_ = view; row_ = field_ = 0; viewMask_ = mask;
+}
 void SerialConsole::execute() {
   char* args[6] = {}; char* context = nullptr; uint8_t argc = 0;
   for (char* word = strtok_r(line_, " \t", &context); word; word = strtok_r(nullptr, " \t", &context)) {
     if (argc == 6) { reply(Result::Invalid); return; } args[argc++] = word;
   }
   if (!argc) return;
+  cancelAlertBroadcast();
   view_ = View::None;
   if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
   uint16_t n = 0, value = 0; uint8_t mask = 0;
@@ -165,6 +169,14 @@ void SerialConsole::execute() {
   if (!PSU_STRCMP(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
   if (!PSU_STRCMP(args[0], "alerts")) {
     if (argc == 1) { startView(View::Alerts); return; }
+    if ((argc == 2 || argc == 3) && !PSU_STRCMP(args[1], "every")) {
+      if (argc == 3) {
+        if (!integer(args[2], 3600, n)) { reply(Result::Invalid); return; }
+        alertInterval_ = uint32_t(n) * 1000; lastAlertBroadcast_ = now_;
+      }
+      io_.print(F("Serial alert broadcasts every ")); io_.print(alertInterval_ / 1000);
+      io_.println(F(" s (0=off); active alerts repeat even when acknowledged.")); return;
+    }
     if (argc == 3 && !PSU_STRCMP(args[1], "ack")) {
       if (!PSU_STRCMP(args[2], "all")) { controller_.alerts().acknowledgeAll(); reply(Result::Ok); }
       else if (integer(args[2], 65535, n)) reply(controller_.alerts().acknowledge(n) ? Result::Ok : Result::Changed);
@@ -512,6 +524,9 @@ void SerialConsole::tick(uint32_t now) {
     wasBusy_ = false; return;
   }
   wasBusy_ = controller_.busy();
+  // Command/operation/save results come first. Summaries precede background
+  // status and trace traffic, so flapping control states cannot starve them.
+  if (broadcastAlerts(now)) return;
   const uint8_t attention = controller_.availabilityAttention(now);
   availabilityAttentionNotice_ &= attention;
   if ((attention & ~availabilityAttentionNotice_) && !length_ && view_ == View::None) {
@@ -530,12 +545,6 @@ void SerialConsole::tick(uint32_t now) {
     reportedTraceDrops_ = traceDrops_; lastTraceNotice_ = now; beginOutput();
     io_.print(F("WARN trace/description frames dropped=")); io_.print(traceDrops_);
     io_.println(F("; CAN processing continues; retry description with raw off")); prompt(); return;
-  }
-  if (alertNotice_ != controller_.alerts().revision() && !length_ && view_ == View::None) {
-    alertNotice_ = controller_.alerts().revision(); beginOutput();
-    io_.print(F("ALERTS changed; warning=")); io_.print(controller_.alerts().warning());
-    io_.print(F(" error=")); io_.print(controller_.alerts().error());
-    io_.println(F("; alerts for cause/action/recovery; acknowledgement does not clear protection.")); prompt(); return;
   }
   if (watch_ && !length_ && !discard_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Telemetry, membersMask(controller_.count()));
@@ -633,12 +642,8 @@ void SerialConsole::outputRow(uint32_t now) {
     while (row_ < AlertManager::Count && !controller_.alerts().visible(row_)) ++row_;
     if (row_ == AlertManager::Count) { io_.println(F("alerts ack ID|all dismisses only; diag thermal; diag startup; diag control")); view_ = View::None; return; }
     const auto a = controller_.alerts().at(row_);
-    if (field_ == 0) {
-      io_.print(F("ALERT ")); io_.print(a.id); io_.print(alertLevel(a.code) == AlertLevel::Error ? F(" ERROR ") : F(" WARNING "));
-      if (a.source < controller_.count()) { io_.print(F("PSU ")); io_.print(a.source + 1); const int8_t g=groupFor(c,a.source); if (g>=0) { io_.print(' '); io_.print(c.groups[g].name); } }
-      else io_.print(F("SYSTEM"));
-      io_.print(a.active ? F(" active ") : F(" cleared ")); io_.print(a.acknowledged ? F("acknowledged: ") : F("unacknowledged: ")); io_.println(alertCause(a.code));
-    } else if (field_ == 1) io_.println(alertAction(a.code));
+    if (field_ == 0) printAlert(a, false);
+    else if (field_ == 1) io_.println(alertAction(a.code));
     else io_.println(alertRecovery(a.code));
     if (++field_ == 3) { field_ = 0; ++row_; } return;
   } else if (view_ == View::Thermal) {
@@ -754,7 +759,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
       case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
-      case 10: io_.println(F("alerts: causes/actions/recovery; diag thermal: thresholds, reductions, sensor coverage, shutdown timer/persistence and GPIO levels.")); break;
+      case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {
@@ -777,7 +782,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
       case 18: io_.println(F("diag startup; startup accept/include/require GROUP|slots [remember]; confirm yes/no")); break;
-      case 20: io_.println(F("alerts; alerts ack ID|all; diag thermal; thermal retry GROUP|slots|all")); break;
+      case 20: io_.println(F("alerts; alerts ack ID|all; alerts every [0..3600 seconds]; diag thermal; thermal retry GROUP|slots|all")); break;
       case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
       default: view_ = View::None; break;
