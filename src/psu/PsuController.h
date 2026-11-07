@@ -66,6 +66,9 @@ class PsuController {
   // Logical duty (0..255), independent of the optional physical pin and enable.
   ExternalFanStatus externalFanStatus(uint32_t now) const;
   ControlStatus controlStatus(uint32_t now) const;
+  // Live permission, not measured current or an acknowledgement. Includes a
+  // positive-current start while its output readiness is still being qualified.
+  bool psuActive(uint32_t now) const;
   // Explicit retry after an operator has reviewed a latched control failure.
   void reconcile();
   void configureStartup(bool installed, bool configurationReady, uint32_t now);

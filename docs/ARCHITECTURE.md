@@ -401,6 +401,13 @@ the configuration revision, invalidating pending UI edits/confirmations.
 
 `controlStatus(now)` exposes global activity and the blocking slot/issue;
 `enableControl()` exposes effective request/source and raw/debounced input.
+`psuActive(now)` exposes whether any participant has an authorized positive
+effective CAN limit and has crossed the release barrier without a local control,
+identity, freshness or restore block. It includes readiness qualification and
+does not depend on measured current or every peer being healthy. The stateless
+`io/PsuActiveOutput` adapter is sampled after controller work and again after
+serial/UI actions, so an OFF in either path lowers the output in that loop.
+Debug builds expose the logical query without physical GPIO writes.
 `reconcile()` explicitly retries from zero current. Normal OFF preserves awake
 state; hardware standby is reserved for an unconfirmed-stop fault fallback. No new persistent fields or
 EEPROM schema are added: save snapshots the existing autoResume preference, and

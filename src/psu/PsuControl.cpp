@@ -339,6 +339,20 @@ bool PsuController::releaseAllowed(uint32_t now) const {
   }
   return true;
 }
+bool PsuController::psuActive(uint32_t now) const {
+  if (!ready_ || !enable_.enabled() || !powerAvailable() || !config_.operating.voltageAuthorized) return false;
+  for (uint8_t i = 0; i < count(); ++i) {
+    const uint8_t bit = uint8_t(1U << i);
+    // Online means this unit has crossed the installation-wide release barrier.
+    // Do not reapply that barrier here: healthy units may continue when a peer
+    // drops out. A pending ACK or thermal reduction does not revoke permission.
+    if (!(participants() & config_.operating.voltageMask & voltageSynced_ & uint8_t(~restoreBlocked_) & bit) ||
+        control_[i].phase != ControlPhase::Online || !control_[i].awakeConfirmed ||
+        !effectiveRaw(i) || issue(i, now) != Issue::None) continue;
+    return true;
+  }
+  return false;
+}
 ControlStatus PsuController::controlStatus(uint32_t now) const {
   if (!powerAvailable()) return {Activity::StartBlocked, Issue::Cutoff, 0};
   if (!ready_) return {enable_.enabled() ? Activity::StartBlocked : Activity::StopUnconfirmed, Issue::Invalid, 0};

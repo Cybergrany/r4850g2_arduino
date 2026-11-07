@@ -58,6 +58,12 @@ wheel or switch. `mega2560_touch_cutoff` combines touch, serial, ENABLE_IN D26,
 fan PWM D6 and CHG_ALLOW D27. Hardware must hold the permit LOW during reset;
 the pin is disabled in other production builds by default.
 
+`mega2560_serial_alerts` adds WARNING D28, ERROR D29 and **PSU_ACTIVE D30** to the
+serial-only build. `mega2560_touch_alerts` combines these with the touch/cutoff
+example. `PSU_ACTIVE_PIN` defaults to `-1` elsewhere; HIGH means enable is ON and
+at least one PSU is permitted a positive current limit. Inspect it using
+`diag control`. See [status output behavior and wiring](docs/CONTROL.md#optional-psu_active-output).
+
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
@@ -81,6 +87,7 @@ is empty; `src/main.cpp` supplies `setup`/`loop`. Validation uses PlatformIO.
 | --- | --- |
 | [`Deployment.h`](src/config/Deployment.h) | Installation ID, starting voltage, slot count, optional group/identity/rating template |
 | [`BoardConfig.h`](src/config/BoardConfig.h) | CAN crystal, bitrate, wiring, serial, peripheral timeouts |
+| [`ControlConfig.h`](src/config/ControlConfig.h) | Enable input, AC cutoff, PSU_ACTIVE pin, fan policy and reconciliation timing |
 | [`ChargerConfig.h`](src/config/ChargerConfig.h) | Configuration types, limits, discovery/apply timing |
 | [`TouchConfig.h`](src/config/TouchConfig.h) | XPT2046 wiring, calibration profile, sampling and gesture timings |
 | [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–8) |

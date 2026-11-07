@@ -10,6 +10,12 @@
 #define PSU_CHG_ALLOW_PIN -1
 #endif
 
+// Active HIGH while at least one PSU is permitted a positive current limit.
+// Status only: this is not the AC permissive or proof of measured output.
+#ifndef PSU_ACTIVE_PIN
+#define PSU_ACTIVE_PIN -1
+#endif
+
 // Optional latching switch. LOW = enabled with the default pull-up wiring.
 #ifndef PSU_ENABLE_IN_PIN
 #define PSU_ENABLE_IN_PIN 26
@@ -31,6 +37,7 @@
 #endif
 namespace psu { namespace control {
 constexpr int8_t chargeAllowPin = PSU_CHG_ALLOW_PIN;
+constexpr int8_t activePin = PSU_ACTIVE_PIN;
 constexpr uint32_t inhibitMs = 2000, availabilityGraceMs = 15000;
 constexpr uint32_t startupReadyMs = 15000, availabilitySettleMs = 3000;
 // Qualify actual output-ready broadcasts after the nonzero-current ACK. A
@@ -59,6 +66,17 @@ constexpr float minimumTemperature = -40.0f, maximumTemperature = 150.0f;
 constexpr float stoppedCurrentAmps = 0.5f;
 constexpr uint32_t observationMs = 5000;
 constexpr uint8_t commandAttempts = 2; // Rejections latch immediately; no write loop.
+// Shared validation for status outputs (PSU_ACTIVE, WARNING and ERROR).
+constexpr bool validStatusPin(int pin) {
+  return pin == -1 || (pin >= 2 && pin < 70 && (pin < 50 || pin > 53) &&
+      pin != board::canChipSelect && pin != board::canInterrupt && pin != chargeAllowPin && pin != fanPwmPin &&
+      (!PSU_ENABLE_ENABLE_IN || pin != enablePin) &&
+      (!PSU_ENABLE_ENCODER || (pin != board::encoderClock && pin != board::encoderData && pin != board::encoderButton)) &&
+      (!PSU_ENABLE_DISPLAY || (pin != board::displayChipSelect && pin != board::displayDataCommand &&
+          pin != board::displayReset && pin != board::displayBacklight)) &&
+      (!PSU_ENABLE_TOUCH || (pin != touch::chipSelect && pin != touch::interruptPin)));
+}
+static_assert(validStatusPin(PSU_ACTIVE_PIN), "PSU_ACTIVE conflicts with configured hardware");
 #if PSU_CHG_ALLOW_PIN >= 0
 static_assert(chargeAllowPin >= 2 && chargeAllowPin < 70 &&
     (chargeAllowPin < 50 || chargeAllowPin > 53) && chargeAllowPin != board::canChipSelect &&

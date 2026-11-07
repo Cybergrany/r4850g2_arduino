@@ -1720,9 +1720,11 @@ void uiLayouts() {
 #include "test_output_readiness.inc"
 #include "test_alerts.inc"
 #include "test_serial_alerts.inc"
+#include "test_psu_active.inc"
 }
 int main() {
   try {
+    psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();
     serialAlertCadence(); serialAlertStorm();
     alertEpisodes(); thermalLimitsAndSensors(); thermalTimingAndAbsence(); thermalPersistence(); thermalQueuedChanges(); thermalAckRacesAndMigration(); alertUiAndSerial(); alertSerialCommands(); activeIdentityAlert();
     zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();

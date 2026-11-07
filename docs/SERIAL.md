@@ -138,7 +138,10 @@ startup and storage replies identify simulation explicitly.
 boot preference. OFF interrupts active apply work; console reset/reconnect does
 not. `diag control` reports the winning serial/switch/boot source, physical
 switch state, reconciliation, per-unit zero/awake/fan outcomes and external PWM
-demand/temperature/reason. `reconcile`
+demand/temperature/reason. It also reports `PSU_ACTIVE pin=... physical=... logical=HIGH|LOW`:
+HIGH means enable is ON and at least one PSU is permitted a positive current
+limit; it does not prove measured output. See [the optional status output](CONTROL.md#optional-psu_active-output).
+`reconcile`
 explicitly retries after faults are reviewed. See [CONTROL.md](CONTROL.md).
 
 ## Operator alerts and temperature protection

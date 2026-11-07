@@ -2,8 +2,9 @@
 
 Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended on 2026-11-05 with shared operator alerts, thermal current reductions,
-persistent thermal shutdown, warning/error GPIOs and periodic serial summaries. Existing AC-cutoff startup,
+extended through 2026-11-07 with shared operator alerts, thermal current reductions,
+persistent thermal shutdown, warning/error GPIOs, periodic serial summaries and
+the PSU_ACTIVE permission output. Existing AC-cutoff startup,
 source availability, remembered exclusions and sustained-readiness regressions
 remain covered.
 No firmware upload or physical validation of the new patch was performed here.
@@ -38,28 +39,28 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6735 | 143850 | 1457 |
-| `mega2560_serial` | 4997 | 99498 | 3195 |
-| `mega2560_display` | 6704 | 136998 | 1488 |
+| `mega2560` | 6735 | 144350 | 1457 |
+| `mega2560_serial` | 4997 | 99998 | 3195 |
+| `mega2560_display` | 6704 | 137498 | 1488 |
 | `mega2560_local` | 5792 | 102106 | 2400 |
 | `mega2560_minimal` | 4054 | 46320 | 4138 |
-| `mega2560_touch` | 6937 | 153308 | 1255 |
-| `mega2560_touch_wheel` | 6968 | 154982 | 1224 |
-| `mega2560_ui_debug` | 6744 | 146826 | 1448 |
-| `mega2560_touch_debug` | 6946 | 156036 | 1246 |
+| `mega2560_touch` | 6937 | 153814 | 1255 |
+| `mega2560_touch_wheel` | 6968 | 155488 | 1224 |
+| `mega2560_ui_debug` | 6744 | 147334 | 1448 |
+| `mega2560_touch_debug` | 6946 | 156544 | 1246 |
 | `mega2560_touch_local` | 5994 | 108438 | 2198 |
 | `mega2560_touch_debug_local` | 6003 | 109510 | 2189 |
-| `mega2560_touch_enable` | 6937 | 153616 | 1255 |
-| `mega2560_touch_fan` | 6942 | 154052 | 1250 |
-| `mega2560_serial_fan` | 5002 | 99916 | 3190 |
-| `mega2560_serial_cutoff` | 4998 | 99570 | 3194 |
-| `mega2560_touch_cutoff` | 6943 | 154236 | 1249 |
-| `mega2560_serial_alerts` | 4998 | 99572 | 3194 |
-| `mega2560_touch_alerts` | 6944 | 154316 | 1248 |
+| `mega2560_touch_enable` | 6937 | 154122 | 1255 |
+| `mega2560_touch_fan` | 6942 | 154562 | 1250 |
+| `mega2560_serial_fan` | 5002 | 100418 | 3190 |
+| `mega2560_serial_cutoff` | 4998 | 100070 | 3194 |
+| `mega2560_touch_cutoff` | 6943 | 154746 | 1249 |
+| `mega2560_serial_alerts` | 4999 | 100232 | 3193 |
+| `mega2560_touch_alerts` | 6945 | 154972 | 1247 |
 
 The largest static RAM use is **6968 bytes**, leaving **1224 bytes** in the
 touch/wheel profile. The full touch/serial/enable/fan/cutoff/alert-output example
-leaves **1248 bytes**; the serial alert-output profile leaves **3194 bytes**.
+leaves **1247 bytes**; the serial alert-output profile leaves **3193 bytes**.
 Compared with commit `35fbaa0`, no existing profile grows by more than **181
 bytes** of total static RAM. Both the 256-byte increase and 1 KiB headroom targets
 are met.
@@ -67,7 +68,7 @@ are met.
 AVR `sizeof` measurements against that baseline give **182 bytes** of new
 controller state (including the alert registry and thermal/config state) and
 **13 bytes** in the UI model. Serial adds 14 bytes (12 for periodic broadcasts), the fresh wheel-gesture guard
-adds 6, fitted alert outputs add 1, and the CAN loss-event latch adds 1. SIM
+adds 6, fitted alert outputs add 1, fitted PSU_ACTIVE adds 1, and the CAN loss-event latch adds 1. SIM
 temperature overrides add 4 bytes;
 physical alert outputs are excluded there. Even the combined state remains below
 256 bytes. The alert registry is fixed-size and allocation-free. Zero-initialized
@@ -82,7 +83,7 @@ timing still require a hardware check. EEPROM remains within 512 bytes: two
 enforce schema-4 thermal stops. Review the [migration/downgrade limits](ALERTS.md#persistence-migration-and-limits).
 
 All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
-present; physical CAN/MCP2515, EEPROM, cutoff, fan PWM and alert GPIO symbols are absent. Their
+present; physical CAN/MCP2515, EEPROM, cutoff, fan PWM, alert and PSU_ACTIVE GPIO symbols are absent. Their
 dependency graphs also omit CAN. This verifies software isolation, not touch
 hardware or production CAN timing.
 
@@ -94,13 +95,22 @@ Compiler flags include `-Wall -Wextra -Werror` and AddressSanitizer/
 UndefinedBehaviorSanitizer. LeakSanitizer is disabled for the ptrace sandbox;
 address and undefined-behaviour checks remain enabled.
 
-Both suites pass: **1094903 host checks** and **1054 touch/simulator checks** with
+Both suites pass: **1102539 host checks** and **1054 touch/simulator checks** with
 UI snapshots exported (counts include export assertions). UI navigation, formatting and persistence use the production
 model/layout code; the host suite does not simulate the actual ILI9341, SPI
 interrupt masking or ClickEncoder hardware. Its assertion total is dominated by checking every EEPROM
 access and interruption boundary, not hundreds of thousands of independent cases.
 Meaningful scenarios include:
 
+- PSU_ACTIVE follows effective enable and any released positive allocation:
+  boot/no profile/zero drafts, staged versus applied zero, OFF before stop ACK,
+  switch/serial precedence, no-load operation, readiness ACK pending/timeout,
+  stale telemetry, sensor latch/retry, thermal reduction/shutdown, identity/AC/CAN
+  loss, rejected current commands, latched AC cutoff, accepted absence and return
+  before/after inclusion. Healthy peers retain HIGH. GPIO tests cover LOW-before-
+  OUTPUT, all eight independent warning/error/active combinations, disabled pins,
+  pin collisions and no physical output in debug. `diag control` uses the same
+  backend query. This output adds no controller state or persistence fields.
 - Exact telemetry/INFO/setting IDs and payloads; malformed frames; rated-current
   conversion, signed temperatures, efficiency, available current, and Ah.
 - Identity corroboration, invalid identity, collisions, stale addresses,

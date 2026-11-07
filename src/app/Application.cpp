@@ -18,6 +18,9 @@ void Application::begin() {
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.begin(); // First application action; reset-time LOW is hardware-owned.
 #endif
+#if PSU_ACTIVE_PIN >= 0 && !PSU_UI_DEBUG
+  psuActive_.begin();
+#endif
 #if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
   alertOutputs_.begin();
 #endif
@@ -70,6 +73,9 @@ void Application::tick() {
   controller_.sampleEnableInput((digitalRead(control::enablePin) == LOW) == control::enableActiveLow, millis());
 #endif
   controller_.tick(millis());
+#if PSU_ACTIVE_PIN >= 0 && !PSU_UI_DEBUG
+  psuActive_.write(controller_.psuActive(millis()));
+#endif
 #if PSU_UI_DEBUG
   can_.permit(controller_.chargeAllowed());
 #endif
@@ -98,6 +104,9 @@ void Application::tick() {
 #endif
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.write(controller_.chargeAllowed()); // Includes serial and local UI hard stops.
+#endif
+#if PSU_ACTIVE_PIN >= 0 && !PSU_UI_DEBUG
+  psuActive_.write(controller_.psuActive(millis())); // Includes serial/UI OFF in this loop.
 #endif
 #if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
   alertOutputs_.write(controller_.alerts());

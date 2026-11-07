@@ -745,6 +745,11 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" reason=")); io_.println(fanReasonName(f.reason));
       io_.print(F("  S-curve off-C=")); io_.print(control::externalFanOffTemp);
       io_.print(F(" full-C=")); io_.println(control::fanOutputTempThreshold);
+    } else if (row_ == 4) {
+      io_.print(F("PSU_ACTIVE pin=")); io_.print(control::activePin);
+      io_.print(F(" physical=")); io_.print(control::activePin >= 0 && !PSU_UI_DEBUG);
+      io_.print(F(" logical=")); io_.println(controller_.psuActive(now) ? F("HIGH") : F("LOW"));
+      io_.println(F("HIGH = enable ON and any PSU permitted positive current; not measured output."));
     } else { startView(View::Units); return; }
     ++row_;
   } else if (view_ == View::DiagnosticHelp) {

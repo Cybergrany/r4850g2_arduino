@@ -36,6 +36,55 @@ release checks; it never applies uncommitted drafts. Online apply while OFF is
 blocked; offline defaults are an explicit, separate operation. Enable events
 invalidate pending UI edits and serial confirmations.
 
+## Optional PSU_ACTIVE output
+
+Set `PSU_ACTIVE_PIN` in `src/config/ControlConfig.h`, or add
+`-DPSU_ACTIVE_PIN=30` to the build flags for an active-HIGH status output on D30.
+The default is `-1` (no physical output). The `mega2560_serial_alerts` and
+`mega2560_touch_alerts` examples include D30 alongside WARNING D28 and ERROR D29.
+Pin collisions with enabled peripherals and the other status outputs are rejected
+at compile time. Use an appropriate logic input/driver for the connected device.
+
+`PSU_ACTIVE` is HIGH when the **effective enable request is ON** and **at least
+one participating PSU has been released to an authorized positive current limit**.
+The effective request follows `autoresume` and the existing latest-switch-edge
+policy. Permission includes fresh identity/telemetry/temperatures, reconciled
+awake state, synchronized voltage and no control/restore block for that PSU.
+The current limit is evaluated after thermal reductions and CAN encoding.
+
+| Controller state | PSU_ACTIVE |
+| --- | --- |
+| Boot, reconciliation, no authorized profile, or all units blocked/excluded | LOW |
+| `autoresume off`, thermal shutdown or latched AC cutoff | LOW |
+| Only zero-current allocations (including a positive value that encodes as zero) | LOW |
+| At least one released PSU has a positive permitted limit | HIGH |
+| Current ACK/readiness qualification pending after release | HIGH |
+| Thermal reduction leaves at least one positive permitted limit | HIGH |
+| A peer fails or is excluded, but another PSU remains permitted | HIGH |
+
+Staging a current edit alone does not change the output. Acknowledging an alert
+also leaves it unchanged. WARNING/ERROR and PSU_ACTIVE can be HIGH together.
+Serial reconnects do not reset it. OFF drops the output in the same application
+loop; it does not wait for a zero-current ACK or measured stop.
+
+This is a **permission indicator**, not proof of current flow or electrical
+isolation. It can be HIGH with an unloaded output or a full battery. LOW does
+not prove that an unreachable PSU stopped. Keep the separate `CHG_ALLOW` output
+for the AC cutoff; driving the PSU AC supply from PSU_ACTIVE would prevent startup
+reconciliation. Firmware initializes LOW before OUTPUT mode; use an external
+pull-down if LOW is required during reset or before firmware starts.
+
+`diag control` reports, for example, `PSU_ACTIVE pin=30 physical=1 logical=HIGH`.
+Logical status is also available when no pin is fitted. `PSU_UI_DEBUG` reports
+logical status with `physical=0` and never drives the pin.
+
+For a bench check, build `mega2560_serial_alerts`, start with `autoresume off`,
+and compare D30 with `diag control` (LOW). After commissioning and applying a
+positive profile with enable ON, both should be HIGH, even with zero measured
+load. Apply zero current to every participating group, or issue `autoresume off`,
+and check LOW. With multiple units, confirm the output stays HIGH while one
+healthy permitted unit remains. GPIO checks do not establish physical PSU response.
+
 ## Startup and returning units
 
 The optional common AC permit, readiness timing, source-group settling and

@@ -86,13 +86,17 @@ All thermal thresholds and reductions live in `src/config/AlertConfig.h`:
 | `PSU_WARNING_PIN` | -1 | Optional independent active-HIGH warning output |
 | `PSU_ERROR_PIN` | -1 | Optional independent active-HIGH error output |
 
-`mega2560_serial_alerts` uses D28 WARNING and D29 ERROR with no display, wheel or
+`mega2560_serial_alerts` uses D28 WARNING, D29 ERROR and D30 PSU_ACTIVE with no display, wheel or
 switch. `mega2560_touch_alerts` adds these pins to the touch/cutoff/fan/switch
 example. Configured peripheral collisions are compile-time errors. Outputs are
 Mega logic signals; use suitable input/driver circuitry for the connected device.
 They initialize LOW before OUTPUT mode. Both can be HIGH for different active
 conditions, and acknowledgement changes neither. In `PSU_UI_DEBUG` they are
 logical states only: no physical GPIO, CAN or EEPROM access.
+
+`PSU_ACTIVE_PIN` is defined separately in `ControlConfig.h` (default `-1`). It
+indicates enable ON with at least one PSU permitted positive current, independently
+of alert severity or acknowledgement. See [PSU_ACTIVE behavior and bench checks](CONTROL.md#optional-psu_active-output).
 
 Every valid bound PSU's input and output temperature is monitored. Either hot
 reading acts immediately even if its partner is unavailable. Both must be fresh,
