@@ -38,6 +38,7 @@ See [serial connection behaviour](docs/SERIAL.md).
 | Environment | Screen | Wheel | Serial |
 | --- | --- | --- | --- |
 | `mega2560` (default) | ILI9341 dashboard/config | Navigate/edit | Yes |
+| `mega2560_wheel_alerts` | 500 kHz display, touch disabled; D27–D30 outputs | Navigate/edit | Yes |
 | `mega2560_serial` | No | No | Yes |
 | `mega2560_display` | Group overview, automatic paging | No | Yes |
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
@@ -63,6 +64,20 @@ serial-only build. `mega2560_touch_alerts` combines these with the touch/cutoff
 example. `PSU_ACTIVE_PIN` defaults to `-1` elsewhere; HIGH means enable is ON and
 at least one PSU is permitted a positive current limit. Inspect it using
 `diag control`. See [status output behavior and wiring](docs/CONTROL.md#optional-psu_active-output).
+
+For the current display/wheel wiring, use `mega2560_wheel_alerts`: screen at
+**500 kHz SPI**, touch disabled, serial and wheel enabled, plus CHG_ALLOW D27,
+WARNING D28, ERROR D29 and PSU_ACTIVE D30:
+
+```sh
+pio run -e mega2560_wheel_alerts
+pio run -e mega2560_wheel_alerts -t upload --upload-port COM15
+```
+
+The ordinary `mega2560` profile also disables touch and uses 500 kHz, with optional
+outputs disabled. Touch remains an explicit choice in the `*_touch*` profiles.
+When leaving the panel's touch controller unused, hold T_CS HIGH on its 3.3 V
+side so it cannot interfere with shared SPI. See [display wiring](docs/LOCAL_UI.md).
 
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies

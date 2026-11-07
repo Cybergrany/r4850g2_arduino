@@ -13,6 +13,12 @@ the encoder only controls settings when an enabled display initializes.
 
 ## Wiring and first boot
 
+The display now runs at **500 kHz SPI** (`board::displaySpiHz` in
+`src/config/BoardConfig.h`). Use `mega2560_wheel_alerts` for the current screen,
+wheel and serial setup with touch disabled, CHG_ALLOW D27, WARNING D28, ERROR D29
+and PSU_ACTIVE D30. `mega2560` is also touch-disabled, without those optional
+outputs. Explicit touch profiles remain available.
+
 Use a module with **5 V compatible logic inputs**, or appropriate level shifting.
 A board accepting 5 V power is not necessarily compatible with 5 V SPI logic.
 The [Adafruit breakout documentation](https://learn.adafruit.com/adafruit-2-8-and-3-2-color-tft-touchscreen-breakout-v2/pinouts)
@@ -36,6 +42,8 @@ circuit. This firmware uses SPI; an 8/16-bit-only parallel shield is not support
 SPI is also available on the Mega ICSP header. Deselect any unused SD-card or
 touch controller sharing the bus, using that module's documented CS pin/pullup.
 Touch is used only in touch-enabled builds; SD-card functionality is not used.
+With touch disabled, firmware does not drive T_CS. Hold it HIGH at the touch
+controller's 3.3 V logic level if the panel's touch SPI pins remain connected.
 A bare backlight LED needs a suitable
 driver; do not connect its load directly to a Mega GPIO. Many shields hardwire
 TFT CS to pin 10, which conflicts with the existing CAN wiring.
@@ -176,9 +184,13 @@ and is consumed. Dimming is suppressed during local apply/save operations.
 
 `UiModel` owns input/navigation/operation state, `UiView` owns layout, and
 `Display` is the replaceable hardware interface. `Ili9341Display` draws changed
-cells through short SPI transactions (24 pixels at most; four transactions per
-tick). It uses character/style caches and one glyph raster, not a full pixel
+cells through short SPI transactions (12 pixels at most; two transactions per
+tick). At 500 kHz, each burst takes up to 560 microseconds of wire time including
+address/command bytes, plus software overhead. It uses character/style caches and one glyph raster, not a full pixel
 framebuffer. Initialization and its full clear happen before CAN reception starts.
+The boot clear needs at least 2.46 seconds for pixel transfer at this clock;
+page changes are also slower than at the former 8 MHz setting. Exercise page
+changes while checking `diag bus` for receive drops/hardware overflows on the bench.
 Each new scene schedules a bounded comparison pass (32 cells per tick); an
 unchanged, completed scene causes no further scans. A new renderer must implement
 `Display::invalidate()`, `service()` and `pending()`. New-page touch targets

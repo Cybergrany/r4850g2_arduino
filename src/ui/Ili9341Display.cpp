@@ -61,7 +61,7 @@ void Ili9341Display::service(const UiFrame& frame) {
       for (uint8_t x = 0; x < ui::cellWidth; ++x)
         pixels[y * ui::cellWidth + x] = glyph_.rows[scanRow_ + y] & (1U << x) ? foreground : background;
     // arduino-CAN's SPI.usingInterrupt masks its RX IRQ during transactions.
-    // Release it every 24 pixels, never hold it for a whole glyph/line/screen.
+    // Release it every 12 pixels, never hold it for a whole glyph/line/screen.
     tft_.startWrite();
     tft_.setAddrWindow(4 + activeIndex_ % ui::columns * ui::cellWidth,
                       activeIndex_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, ui::sliceRows);

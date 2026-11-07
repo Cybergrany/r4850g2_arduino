@@ -4,7 +4,8 @@ Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
 extended through 2026-11-07 with shared operator alerts, thermal current reductions,
 persistent thermal shutdown, warning/error GPIOs, periodic serial summaries and
-the PSU_ACTIVE permission output. Existing AC-cutoff startup,
+the PSU_ACTIVE permission output. The current wheel-only wiring profile uses a
+500 kHz display clock and shorter rendering bursts. Existing AC-cutoff startup,
 source availability, remembered exclusions and sustained-readiness regressions
 remain covered.
 No firmware upload or physical validation of the new patch was performed here.
@@ -17,7 +18,7 @@ python3 tools/test_charge_allow.py
 python3 tools/test_alert_outputs.py
 python3 tools/test_wheel_alert_guard.py
 PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
-  -e mega2560 -e mega2560_serial -e mega2560_display \
+  -e mega2560 -e mega2560_wheel_alerts -e mega2560_serial -e mega2560_display \
   -e mega2560_local -e mega2560_minimal \
   -e mega2560_touch -e mega2560_touch_wheel -e mega2560_touch_local \
   -e mega2560_ui_debug -e mega2560_touch_debug -e mega2560_touch_debug_local \
@@ -31,7 +32,7 @@ git diff --check
 The absolute cache path isolates this workspace's PlatformIO packages; elsewhere
 omit it or choose another writable cache. Pass the same cache to
 `check_debug_build.py --core-dir PATH` when using a different location.
-All eighteen profiles build successfully
+All nineteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
 Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
@@ -39,28 +40,30 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6735 | 144350 | 1457 |
+| `mega2560` | 6735 | 144288 | 1457 |
+| `mega2560_wheel_alerts` | 6738 | 144596 | 1454 |
 | `mega2560_serial` | 4997 | 99998 | 3195 |
-| `mega2560_display` | 6704 | 137498 | 1488 |
-| `mega2560_local` | 5792 | 102106 | 2400 |
+| `mega2560_display` | 6704 | 137436 | 1488 |
+| `mega2560_local` | 5792 | 102044 | 2400 |
 | `mega2560_minimal` | 4054 | 46320 | 4138 |
-| `mega2560_touch` | 6937 | 153814 | 1255 |
-| `mega2560_touch_wheel` | 6968 | 155488 | 1224 |
-| `mega2560_ui_debug` | 6744 | 147334 | 1448 |
-| `mega2560_touch_debug` | 6946 | 156544 | 1246 |
-| `mega2560_touch_local` | 5994 | 108438 | 2198 |
-| `mega2560_touch_debug_local` | 6003 | 109510 | 2189 |
-| `mega2560_touch_enable` | 6937 | 154122 | 1255 |
-| `mega2560_touch_fan` | 6942 | 154562 | 1250 |
+| `mega2560_touch` | 6937 | 153752 | 1255 |
+| `mega2560_touch_wheel` | 6968 | 155426 | 1224 |
+| `mega2560_ui_debug` | 6744 | 147272 | 1448 |
+| `mega2560_touch_debug` | 6946 | 156482 | 1246 |
+| `mega2560_touch_local` | 5994 | 108376 | 2198 |
+| `mega2560_touch_debug_local` | 6003 | 109448 | 2189 |
+| `mega2560_touch_enable` | 6937 | 154060 | 1255 |
+| `mega2560_touch_fan` | 6942 | 154500 | 1250 |
 | `mega2560_serial_fan` | 5002 | 100418 | 3190 |
 | `mega2560_serial_cutoff` | 4998 | 100070 | 3194 |
-| `mega2560_touch_cutoff` | 6943 | 154746 | 1249 |
+| `mega2560_touch_cutoff` | 6943 | 154684 | 1249 |
 | `mega2560_serial_alerts` | 4999 | 100232 | 3193 |
-| `mega2560_touch_alerts` | 6945 | 154972 | 1247 |
+| `mega2560_touch_alerts` | 6945 | 154910 | 1247 |
 
 The largest static RAM use is **6968 bytes**, leaving **1224 bytes** in the
 touch/wheel profile. The full touch/serial/enable/fan/cutoff/alert-output example
 leaves **1247 bytes**; the serial alert-output profile leaves **3193 bytes**.
+The touch-disabled wheel/serial/CHG_ALLOW/alert-output profile leaves **1454 bytes**.
 Compared with commit `35fbaa0`, no existing profile grows by more than **181
 bytes** of total static RAM. Both the 256-byte increase and 1 KiB headroom targets
 are met.
@@ -86,6 +89,15 @@ All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
 present; physical CAN/MCP2515, EEPROM, cutoff, fan PWM, alert and PSU_ACTIVE GPIO symbols are absent. Their
 dependency graphs also omit CAN. This verifies software isolation, not touch
 hardware or production CAN timing.
+
+The `mega2560_wheel_alerts` ELF includes the wheel service and physical MCP2515
+driver, with no physical XPT2046 driver. Display bursts are now one 12-pixel row,
+at most two bursts per loop. At 500 kHz, the calculated wire time per burst is
+at most 560 microseconds including address/command bytes; actual SPI/interrupt
+timing and compatibility with the bench level shifter still require measurement.
+During page changes and alert popups, check `diag bus` for receive drops and
+hardware overflows. Keep the unused panel T_CS pulled HIGH at 3.3 V when its SPI
+lines remain connected. These settings do not change the CAN bus bitrate.
 
 ## Host coverage
 

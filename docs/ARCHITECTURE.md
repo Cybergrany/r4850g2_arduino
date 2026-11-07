@@ -253,8 +253,10 @@ observation recycling and address changes. It resets for reboot/reset-ah or a
 changed identity, removed slot or deployment, and is never stored in EEPROM.
 
 Display initialization and the only full-screen clear run before CAN starts.
-Runtime drawing uses at most four transactions per service call, each carrying
-24 RGB565 pixels (two rows of a glyph); the CAN interrupt can run between SPI
+Runtime drawing uses at most two transactions per service call, each carrying
+12 RGB565 pixels (one row of a glyph). At the 500 kHz display clock, the pixel
+and address/command wire time is at most 560 microseconds per burst, excluding
+software overhead; the CAN interrupt can run between SPI
 transactions. Cached cells are committed only after their entire glyph has been
 sent, even if the scene changes mid-glyph. Missing display ID disables local
 controls while serial/CAN remain available. Optional PWM dimming consumes the

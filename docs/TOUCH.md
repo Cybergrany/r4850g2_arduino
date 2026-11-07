@@ -17,6 +17,9 @@ pins alone do not provide touch input.
 | `mega2560_touch_debug_local` | Touch, no serial | Simulated PSUs / volatile RAM |
 
 `PSU_ENABLE_TOUCH` and `PSU_UI_DEBUG` default to zero in `BuildOptions.h`.
+The current `mega2560_wheel_alerts` wiring profile explicitly keeps touch off and
+uses a 500 kHz display clock. The touch profiles remain opt-in; their
+independent touch SPI clock remains defined in `TouchConfig.h`.
 Touch requires `PSU_ENABLE_DISPLAY=1`. The encoder remains independently
 optional. The `_local` profiles disable serial for local-only operation.
 Simulation profiles omit the CAN dependency and compile
