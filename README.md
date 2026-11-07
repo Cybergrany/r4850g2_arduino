@@ -79,6 +79,10 @@ outputs disabled. Touch remains an explicit choice in the `*_touch*` profiles.
 When leaving the panel's touch controller unused, hold T_CS HIGH on its 3.3 V
 side so it cannot interfere with shared SPI. See [display wiring](docs/LOCAL_UI.md).
 
+For a blank screen, the [standalone ILI9341 bench sketch](examples/ili9341_bench/README.md)
+uses the same pins and 500 kHz clock, cycles test patterns and reports display ID
+over serial without loading the charger application or changing EEPROM.
+
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
