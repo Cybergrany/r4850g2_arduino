@@ -23,6 +23,8 @@ uint8_t pattern = 0;
 uint32_t drawnAt = 0;
 uint32_t heartbeatAt = 0;
 bool heartbeat = false;
+bool pinTest = false;
+uint8_t pinTestStep = 0;
 
 void setOutput(uint8_t pin, uint8_t level) {
   digitalWrite(pin, level);
@@ -41,6 +43,52 @@ void reportId() {
   printHexByte(high);
   printHexByte(low);
   Serial.println(F("; expected 0x9341. Diagnostic only; drawing is never blocked."));
+}
+
+void pinTestIdle() {
+  setOutput(CAN_CS, HIGH);
+  setOutput(TOUCH_CS, HIGH);
+  // Deselect the display before changing its clock/data/reset lines.
+  setOutput(TFT_CS, HIGH);
+  setOutput(TFT_DC, LOW);
+  setOutput(MOSI, LOW);
+  setOutput(SCK, LOW);
+  setOutput(TFT_RST, HIGH);
+}
+
+void showPinTestStep() {
+  pinTestIdle();
+  if (pinTestStep >= 10) {
+    Serial.println(F("PIN TEST complete. p repeats; reset the Mega to resume graphics."));
+    return;
+  }
+  const uint8_t pins[] = {TFT_CS, TFT_DC, TFT_RST, MOSI, SCK};
+  const uint8_t index = pinTestStep / 2;
+  const uint8_t level = pinTestStep % 2 ? HIGH : LOW;
+  digitalWrite(pins[index], level);
+  Serial.print(F("PIN TEST "));
+  switch (index) {
+    case 0: Serial.print(F("CS")); break;
+    case 1: Serial.print(F("DC")); break;
+    case 2: Serial.print(F("RESET")); break;
+    case 3: Serial.print(F("SDI/MOSI")); break;
+    case 4: Serial.print(F("SCK")); break;
+  }
+  Serial.print(F(" on Mega D")); Serial.print(pins[index]);
+  if (level == HIGH)
+    Serial.println(F(" = HIGH: expect ~5 V at Mega, ~3.3 V at TFT after level shifting."));
+  else
+    Serial.println(F(" = LOW: expect ~0 V at both Mega and TFT."));
+  Serial.println(F("Held until n. Measure at TFT header relative to TFT GND. p restarts."));
+}
+
+void beginPinTest() {
+  // No display SPI calls are allowed again until a board reset. In particular,
+  // CS stays HIGH while SCK/MOSI are tested; CAN CS stays HIGH throughout.
+  SPI.end();
+  pinTest = true; pinTestStep = 0;
+  Serial.println(F("PIN TEST: graphics paused; CAN/touch deselected; MISO remains an input."));
+  showPinTestStep();
 }
 
 void drawPattern() {
@@ -67,7 +115,7 @@ void drawPattern() {
     tft.setCursor(12, 12);
     tft.println(F("ILI9341 STANDALONE TEST"));
     tft.setCursor(12, 44);
-    tft.println(F("MEGA / 500 kHz SPI"));
+    tft.print(F("MEGA / ")); tft.print(TFT_SPI_HZ / 1000UL); tft.println(F(" kHz SPI"));
     tft.setCursor(12, 76);
     tft.println(F("CS22 DC23 RESET24"));
     tft.setCursor(12, 108);
@@ -85,7 +133,8 @@ void drawPattern() {
 }
 
 void initialiseDisplay() {
-  Serial.println(F("Initializing ILI9341 at 500000 Hz, landscape rotation 1..."));
+  Serial.print(F("Initializing ILI9341 at ")); Serial.print(TFT_SPI_HZ);
+  Serial.println(F(" Hz, landscape rotation 1..."));
   Serial.flush();
   tft.begin(TFT_SPI_HZ);
   tft.setRotation(1);
@@ -109,18 +158,25 @@ void setup() {
   Serial.begin(115200); // Never wait for the serial monitor.
   Serial.println(F("Standalone ILI9341 bench test; CHG_ALLOW LOW; EEPROM untouched."));
   Serial.println(F("Commands: r = restart patterns, i = read ID, n = next pattern."));
+  Serial.println(F("p = multimeter pin test; n advances held levels; board reset exits."));
   initialiseDisplay();
 }
 
 void loop() {
   if (Serial.available()) {
     const char command = Serial.read();
-    if (command == 'r' || command == 'R') {
+    if (command == 'p' || command == 'P') beginPinTest();
+    else if (pinTest) {
+      if ((command == 'n' || command == 'N') && pinTestStep < 10) {
+        ++pinTestStep; showPinTestStep();
+      } else if (command == 'i' || command == 'I' || command == 'r' || command == 'R') {
+        Serial.println(F("PIN TEST active: n advances, p restarts; reset the Mega to resume graphics."));
+      }
+    } else if (command == 'r' || command == 'R') {
       reportId();
       pattern = 0;
       drawPattern();
-    }
-    else if (command == 'i' || command == 'I') reportId();
+    } else if (command == 'i' || command == 'I') reportId();
     else if (command == 'n' || command == 'N') {
       pattern = (pattern + 1) % 6;
       drawPattern();
@@ -133,7 +189,7 @@ void loop() {
     heartbeat = !heartbeat;
     digitalWrite(LED_BUILTIN, heartbeat ? HIGH : LOW);
   }
-  if (uint32_t(now - drawnAt) >= PATTERN_HOLD_MS) {
+  if (!pinTest && uint32_t(now - drawnAt) >= PATTERN_HOLD_MS) {
     pattern = (pattern + 1) % 6;
     drawPattern();
   }

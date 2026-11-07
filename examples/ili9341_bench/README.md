@@ -75,6 +75,7 @@ Single-character serial commands work without Enter; CR/LF are ignored:
 - `r`: restart the pattern sequence, including the ID report.
 - `i`: read and print the display ID again.
 - `n`: advance to the next pattern immediately.
+- `p`: enter the multimeter signal test described below.
 
 If the monitor opens after boot, send `r` to repeat the ID and patterns. No serial
 connection is needed for automatic patterns.
@@ -89,6 +90,53 @@ connection is needed for automatic patterns.
 Serial completion means that the MCU issued SPI writes, not that the panel
 acknowledged or displayed them. This test does not exercise simultaneous CAN
 traffic, the production renderer or touch.
+
+## Multimeter signal test
+
+If supply, backlight and idle CS/reset voltages are correct but there are still
+no patterns, send **`p`**. Wait for any current full-screen draw to finish.
+The sketch disables hardware SPI, pauses graphics and holds one signal at a
+time LOW then HIGH, allowing you to measure the entire path through the level
+shifter and wiring. Each state stays fixed until you send **`n`**; there is no
+measurement timeout.
+
+Keep the meter's black probe on **display GND** and measure the named signal
+at the **display header**, rather than only at the Mega or shifter:
+
+| Order | Signal | Mega pin | LOW at TFT | HIGH at TFT |
+| --- | --- | --- | --- | --- |
+| 1 | CS | D22 | About 0 V | About 3.3 V |
+| 2 | DC | D23 | About 0 V | About 3.3 V |
+| 3 | RESET | D24 | About 0 V | About 3.3 V |
+| 4 | SDI/MOSI | D51 | About 0 V | About 3.3 V |
+| 5 | SCK | D52 | About 0 V | About 3.3 V |
+
+`p` starts at CS LOW; the first `n` selects CS HIGH, the next selects DC LOW,
+and so on. After SCK HIGH, one more `n` finishes with devices deselected and
+clock/data LOW. `p` can restart the sequence at any time. **Press the Mega's
+RESET button to return to the graphics test**; `r`/`i` deliberately perform no
+SPI operations while measuring.
+
+CAN CS D10 and touch CS D25 stay HIGH. The MCP2515 can remain powered and
+connected. TFT CS stays HIGH while DC, RESET, MOSI or SCK are being tested;
+SCK stays LOW while TFT CS is tested. MISO D50 remains an input and is not
+driven by this test. CHG_ALLOW and the status outputs remain LOW.
+
+If a LOW/HIGH pair is wrong at the TFT, measure the same signal at the Mega
+(expected LOW about 0 V, HIGH near its 5 V rail), then the shifter's input and
+output. A correct Mega level but incorrect TFT level narrows the problem to
+the shifter/wiring/loading. Check that only the intended line changes when
+advancing each pair; swapped signals can otherwise appear healthy individually.
+Do not bypass the level shifter with a direct 5 V display-input connection.
+
+Passing this test establishes static levels and signal routing, not the shape
+or timing of SPI edges, the MISO return path or the display controller type.
+Report the LOW/HIGH readings for each row to choose the next test.
+
+For a slower graphics experiment, change `TFT_SPI_HZ` at the top of the sketch
+to `125000UL` and rebuild. Serial and on-screen clock labels follow that value.
+A full-screen fill then takes about 10 seconds plus overhead. This clock
+setting does not affect the held-level multimeter test.
 
 To return to the charger firmware, from the repository root:
 
