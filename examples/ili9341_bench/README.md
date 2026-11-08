@@ -63,10 +63,17 @@ At **115200 baud**, serial reports initialization, the display ID (normally
 4. Solid white.
 5. Solid black (this step is intentionally blank).
 6. White text, a white outer border and color bars on black.
+7. Black/white checkerboard with 8 x 8 pixel squares.
+8. Black/white checkerboard with single-pixel squares.
+9. Alternating black/white vertical stripes, one pixel wide.
+10. Alternating black/white horizontal stripes, one pixel high.
 
-Each pattern stays for four seconds **after** drawing finishes. A full-screen
+Each pattern stays for two seconds **after** drawing finishes. A full-screen
 fill at 500 kHz takes about 2.5 seconds plus software overhead; allow roughly a
-minute to observe the sequence. The built-in LED blinks between drawing steps;
+minute to observe the sequence. The checkerboards and stripes cover the whole
+screen without overlaid text; serial identifies each pattern. Fine patterns
+use a single 640-byte scanline buffer to avoid slow per-pixel drawing calls.
+The built-in LED blinks between drawing steps;
 full-screen transfers intentionally block this minimal test, so pauses in the
 LED and serial command handling during drawing are expected.
 
@@ -133,10 +140,25 @@ Passing this test establishes static levels and signal routing, not the shape
 or timing of SPI edges, the MISO return path or the display controller type.
 Report the LOW/HIGH readings for each row to choose the next test.
 
-For a slower graphics experiment, change `TFT_SPI_HZ` at the top of the sketch
-to `125000UL` and rebuild. Serial and on-screen clock labels follow that value.
-A full-screen fill then takes about 10 seconds plus overhead. This clock
-setting does not affect the held-level multimeter test.
+## Testing higher SPI clocks
+
+Change `TFT_SPI_HZ` at the top of the sketch, rebuild and flash for each step.
+On a 16 MHz Mega, useful steps are `500000UL`, `1000000UL`, `2000000UL`,
+`4000000UL` and `8000000UL`. Hardware SPI tops out at 8 MHz; requests between
+supported rates round down, so requesting 6 MHz still runs at 4 MHz. Serial
+and on-screen labels show the requested value.
+
+Check several complete cycles for stray colored pixels, missing or shifted
+rows/columns, uneven checks/stripes and damaged text. Single-pixel checks can
+look grey from a distance; inspect them close up. Start at a known-good speed
+and compare the same patterns as you increase it. Visible corruption is a
+reason to step back; a clean standalone run still needs confirmation in the
+full charger firmware with CAN active.
+
+For a slower graphics experiment use `125000UL`; a full-screen fill then takes
+about 10 seconds plus overhead. SPI speed does not affect the held-level
+multimeter test. The default remains 500 kHz; changing this sketch does not
+change the production firmware's display clock in `src/config/BoardConfig.h`.
 
 To return to the charger firmware, from the repository root:
 

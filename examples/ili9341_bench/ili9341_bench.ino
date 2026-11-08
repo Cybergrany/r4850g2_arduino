@@ -16,7 +16,8 @@ constexpr uint8_t WARNING_OUT = 28;
 constexpr uint8_t ERROR_OUT = 29;
 constexpr uint8_t PSU_ACTIVE = 30;
 constexpr uint32_t TFT_SPI_HZ = 500000UL;
-constexpr uint32_t PATTERN_HOLD_MS = 4000UL;
+constexpr uint32_t PATTERN_HOLD_MS = 2000UL;
+constexpr uint8_t PATTERN_COUNT = 10;
 
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
 uint8_t pattern = 0;
@@ -91,6 +92,26 @@ void beginPinTest() {
   showPinTestStep();
 }
 
+void drawAlternatingPattern(uint8_t cellPixels, bool columns, bool rows) {
+  // One landscape scanline, not a framebuffer. Stream the whole pattern once
+  // so fine checks do not incur a separate address-window command per pixel.
+  uint16_t pixels[ILI9341_TFTHEIGHT];
+  const uint16_t width = tft.width(), height = tft.height();
+  tft.startWrite();
+  tft.setAddrWindow(0, 0, width, height);
+  for (uint16_t y = 0; y < height; ++y) {
+    if (y == 0 || (rows && y % cellPixels == 0)) {
+      const uint16_t row = rows ? y / cellPixels : 0;
+      for (uint16_t x = 0; x < width; ++x) {
+        const uint16_t column = columns ? x / cellPixels : 0;
+        pixels[x] = (row + column) % 2 ? ILI9341_BLACK : ILI9341_WHITE;
+      }
+    }
+    tft.writePixels(pixels, width);
+  }
+  tft.endWrite();
+}
+
 void drawPattern() {
   const uint16_t colors[] = {
     ILI9341_RED, ILI9341_GREEN, ILI9341_BLUE, ILI9341_WHITE, ILI9341_BLACK
@@ -102,12 +123,17 @@ void drawPattern() {
     case 2: Serial.println(F("BLUE")); break;
     case 3: Serial.println(F("WHITE")); break;
     case 4: Serial.println(F("BLACK (intentionally blank)")); break;
-    default: Serial.println(F("TEXT / BORDER / COLOR BARS")); break;
+    case 5: Serial.println(F("TEXT / BORDER / COLOR BARS")); break;
+    case 6: Serial.println(F("CHECKERBOARD (8 x 8 pixels)")); break;
+    case 7: Serial.println(F("CHECKERBOARD (1 x 1 pixel)")); break;
+    case 8: Serial.println(F("VERTICAL STRIPES (1 pixel wide)")); break;
+    case 9: Serial.println(F("HORIZONTAL STRIPES (1 pixel high)")); break;
   }
   Serial.flush(); // Show progress before the deliberately slow full-screen fill.
   const uint32_t started = millis();
-  tft.fillScreen(pattern < 5 ? colors[pattern] : ILI9341_BLACK);
-  if (pattern == 5) {
+  if (pattern < 5) tft.fillScreen(colors[pattern]);
+  else if (pattern == 5) {
+    tft.fillScreen(ILI9341_BLACK);
     tft.drawRect(0, 0, tft.width(), tft.height(), ILI9341_WHITE);
     tft.setTextWrap(false);
     tft.setTextSize(2);
@@ -125,11 +151,20 @@ void drawPattern() {
     for (uint8_t i = 0; i < 5; ++i)
       tft.fillRect(10 + i * 60, 182, 60, 42, colors[i]);
     tft.drawRect(10, 182, 300, 42, ILI9341_WHITE);
+  } else {
+    switch (pattern) {
+      case 6: drawAlternatingPattern(8, true, true); break;
+      case 7: drawAlternatingPattern(1, true, true); break;
+      case 8: drawAlternatingPattern(1, true, false); break;
+      case 9: drawAlternatingPattern(1, false, true); break;
+    }
   }
   drawnAt = millis();
   Serial.print(F("Draw complete in "));
   Serial.print(uint32_t(drawnAt - started));
-  Serial.println(F(" ms; holding for 4 seconds."));
+  Serial.print(F(" ms; holding for "));
+  Serial.print(PATTERN_HOLD_MS);
+  Serial.println(F(" ms."));
 }
 
 void initialiseDisplay() {
@@ -178,7 +213,7 @@ void loop() {
       drawPattern();
     } else if (command == 'i' || command == 'I') reportId();
     else if (command == 'n' || command == 'N') {
-      pattern = (pattern + 1) % 6;
+      pattern = (pattern + 1) % PATTERN_COUNT;
       drawPattern();
     }
     // CR/LF and other characters are ignored; commands need no line ending.
@@ -190,7 +225,7 @@ void loop() {
     digitalWrite(LED_BUILTIN, heartbeat ? HIGH : LOW);
   }
   if (!pinTest && uint32_t(now - drawnAt) >= PATTERN_HOLD_MS) {
-    pattern = (pattern + 1) % 6;
+    pattern = (pattern + 1) % PATTERN_COUNT;
     drawPattern();
   }
 }
