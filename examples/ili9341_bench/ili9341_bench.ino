@@ -15,7 +15,7 @@ constexpr uint8_t CHG_ALLOW = 27;
 constexpr uint8_t WARNING_OUT = 28;
 constexpr uint8_t ERROR_OUT = 29;
 constexpr uint8_t PSU_ACTIVE = 30;
-constexpr uint32_t TFT_SPI_HZ = 500000UL;
+constexpr uint32_t TFT_SPI_HZ = 8000000UL;
 constexpr uint32_t PATTERN_HOLD_MS = 2000UL;
 constexpr uint8_t PATTERN_COUNT = 10;
 
