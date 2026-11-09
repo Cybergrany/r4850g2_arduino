@@ -7,8 +7,10 @@ constexpr uint32_t monitorPageMs = 5000, backlightIdleMs = 60000;
 constexpr uint8_t dimBrightness = 24, fullBrightness = 255;
 constexpr uint8_t groupsPerPage = 3, unitsPerPage = 2;
 constexpr uint8_t columns = 26, rows = 15, cellWidth = 12, cellHeight = 16;
-// At 500 kHz, 12 RGB565 pixels + up to 11 address/command bytes take 560 us
-// on the wire. Release CAN's RX interrupt between bursts and limit loop work.
-constexpr uint8_t slicesPerTick = 2, sliceRows = 1;
+// Short SPI transactions, with a cooperative time budget between work units.
+// The 500 kHz fallback retains one row/burst and at most two bursts/call.
+constexpr uint16_t renderBudgetUs = 750;
+constexpr uint8_t burstRows(uint32_t hz) { return hz >= 8000000UL ? 4 : hz >= 4000000UL ? 2 : 1; }
+constexpr uint8_t burstsPerTick(uint32_t hz) { return hz > 2000000UL ? 8 : 2; }
 constexpr uint8_t scanCellsPerTick = 32;
 } }

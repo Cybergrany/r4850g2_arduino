@@ -34,6 +34,7 @@ uint16_t UiModel::draft() const {
   return field_ == UiField::Voltage ? c_.configuration().voltage : c_.configuration().groups[group_].current;
 }
 void UiModel::result(UiNotice n, Issue issue) {
+  recovery_.selection = 0;
   notice_ = n; blocker_ = issue; editing_ = false; page_ = UiPage::Result;
 }
 void UiModel::refresh(uint32_t now) {
@@ -51,6 +52,7 @@ void UiModel::refresh(uint32_t now) {
       plan_.topologyRevision != c_.discovery().revision())) result(UiNotice::Changed);
 }
 void UiModel::tick(uint32_t now) {
+  uiNow_ = now; recoveryTick(now);
   refresh(now);
   if (page_ == UiPage::Availability && group_ >= 0 && !working()) {
     auto action = AvailabilityAction::Accept;
@@ -133,6 +135,7 @@ void UiModel::commit(uint32_t now) {
   queue(now, false);
 }
 void UiModel::input(UiInput event, uint32_t now) {
+  uiNow_ = now;
   if (alertOverlay_) {
     if (now == alertSince_) return;
     if (event.held) { dismissAlert(); return; }
@@ -147,6 +150,15 @@ void UiModel::input(UiInput event, uint32_t now) {
     return;
   }
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
+  if (recovering() && event.held) { action({ActionKind::Back}, now); return; }
+  if (page_ == UiPage::Recovery || page_ == UiPage::RecoveryConfirm ||
+      (recovering() && page_ == UiPage::Detail) || (page_ == UiPage::Result && !working() && recoveryLink().kind != RecoveryKind::None)) {
+    UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
+    if (event.held) { action({ActionKind::Back}, now); return; }
+    if (event.delta) recovery_.selection = move(recovery_.selection, event.delta, count);
+    if (event.clicked && count) action(buttons[recovery_.selection % count].action, now);
+    return;
+  }
   if (availabilityPage() || page_ == UiPage::Tools) {
     if (event.held) { action({ActionKind::Back}, now); return; }
     UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
@@ -221,6 +233,7 @@ void UiModel::input(UiInput event, uint32_t now) {
 
 namespace psu {
 void UiModel::resetNavigation() {
+  recovery_ = {};
   alertOverlay_ = alertSelection_ = 0;
   page_ = UiPage::Groups; field_ = UiField::Current; notice_ = UiNotice::None;
   group_ = -1; unit_ = toolSelection_ = 0; editing_ = confirmYes_ = false; request_ = {};
@@ -253,7 +266,9 @@ void UiModel::confirmAvailability(uint32_t now) {
   availabilitySelection_ = 0; page_ = UiPage::AvailabilityResult;
 }
 void UiModel::action(UiAction a, uint32_t now) {
+  uiNow_ = now;
   if (alertAction(a, now)) return;
+  if (recoveryAction(a, now)) return;
   refresh(now);
   if (availabilityWorking_ && a.kind != ActionKind::HardStop) return;
   switch (a.kind) {
@@ -265,7 +280,8 @@ void UiModel::action(UiAction a, uint32_t now) {
           availabilityAction_ = AvailabilityAction::Include;
       selectAvailability(now); page_ = UiPage::Availability; notice_ = UiNotice::None; break;
     case ActionKind::AvailabilityPrimary:
-      if (startupRetry()) { c_.reconcile(); break; }
+      // Global retry is handled by the recovery confirmation above.
+      if (startupRetry()) break;
       if (startupProbe()) { availabilityAction_ = AvailabilityAction::Probe; reviewAvailability(0, now); break; }
       if (group_ >= 0) reviewAvailability(c_.configuration().groups[group_].members, now);
       break;
@@ -327,6 +343,9 @@ void UiModel::action(UiAction a, uint32_t now) {
     case ActionKind::ConfirmYes: if (page_ == UiPage::Confirm) queue(now,true); break;
     case ActionKind::Back:
       editing_ = false;
+      if (page_ == UiPage::Result && !working() && recoveryLink().kind != RecoveryKind::None) {
+        page_ = group_ < 0 ? UiPage::Groups : UiPage::Config; break;
+      }
       if (availabilityPage()) { page_ = page_ == UiPage::Availability ? UiPage::Groups : UiPage::Availability; availabilitySelection_ = 0; notice_ = UiNotice::None; break; }
       page_ = page_ == UiPage::Detail ? UiPage::Units :
           (page_ == UiPage::Calibration || page_ == UiPage::TouchDebug || page_ == UiPage::Scenarios) ? UiPage::Tools : UiPage::Groups;

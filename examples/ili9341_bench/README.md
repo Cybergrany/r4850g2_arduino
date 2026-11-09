@@ -1,7 +1,7 @@
 # Standalone ILI9341 bench test
 
 A separate Arduino sketch / PlatformIO project using the same pins, display
-library versions, **500 kHz** clock and landscape rotation as
+library versions, **8 MHz** clock and landscape rotation as
 `mega2560_wheel_alerts`. It includes no charger firmware headers, CAN driver,
 touch, wheel, scheduler or EEPROM access. The normal firmware is unchanged.
 
@@ -69,8 +69,8 @@ At **115200 baud**, serial reports initialization, the display ID (normally
 10. Alternating black/white horizontal stripes, one pixel high.
 
 Each pattern stays for two seconds **after** drawing finishes. A full-screen
-fill at 500 kHz takes about 2.5 seconds plus software overhead; allow roughly a
-minute to observe the sequence. The checkerboards and stripes cover the whole
+fill at 8 MHz needs at least 154 ms of pixel wire time, plus software overhead;
+allow roughly half a minute to observe the sequence. The checkerboards and stripes cover the whole
 screen without overlaid text; serial identifies each pattern. Fine patterns
 use a single 640-byte scanline buffer to avoid slow per-pixel drawing calls.
 The built-in LED blinks between drawing steps;
@@ -169,7 +169,7 @@ full charger firmware with CAN active.
 
 For a slower graphics experiment use `125000UL`; a full-screen fill then takes
 about 10 seconds plus overhead. SPI speed does not affect the held-level
-multimeter test. The default remains 500 kHz; changing this sketch does not
+multimeter test. The default remains 8 MHz; changing this sketch does not
 change the production firmware's display clock in `src/config/BoardConfig.h`.
 
 To return to the charger firmware, from the repository root:

@@ -256,8 +256,10 @@ void availabilityInterfaces() {
   retryUi.ui.action({ActionKind::Startup},retry.now);
   UiView::compose(frame,retryUi.ui,retry.c,retry.now);
   CHECK(rowText(frame,3).find("CAN INIT FAILED: RETRY")!=std::string::npos);
-  CHECK(rowText(frame,7).find("Retry startup")!=std::string::npos);
+  CHECK(rowText(frame,7).find("Retry ALL PSUs")!=std::string::npos);
   retry.can.initOk=true; retryUi.ui.action({ActionKind::AvailabilityPrimary},retry.now);
+  CHECK(!retry.c.ready() && retryUi.ui.page()==UiPage::RecoveryConfirm && retryUi.ui.recoverySelection()==0);
+  retryUi.ui.action({ActionKind::RecoveryConfirm},++retry.now);
   CHECK(retry.c.ready() && !retry.c.chargeAllowed()); retry.step(2000); CHECK(retry.c.chargeAllowed());
   // A stale confirmation must not inherit an earlier decision's storage error.
   Rig stale(authorized(),true,false); stale.live=1; stale.step(16000); UiRig staleUi(stale);

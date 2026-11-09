@@ -204,3 +204,16 @@ as they print. Ctrl-X or a new command can interrupt a summary without affecting
 controller work. Existing ACK/status messages and explicitly enabled `raw`/`watch`
 output retain their behaviour; `raw off` and `watch off` make summaries easier to
 follow during an issue storm.
+
+## Display timing diagnostics
+
+`diag ui` reports the configured drawing/read clocks, maximum render-call and
+SPI-transaction durations in microseconds, and latest/maximum completed-scene
+time in milliseconds. Values accumulate since boot. Headless builds reply
+`UI disabled in this build`. Rendering has a cooperative 750 us service budget;
+one work unit or an interrupt can overrun it. The maximum values make those
+overruns visible. See the [loaded scrolling bench comparison](VALIDATION.md#ui-redraw-bench-comparison).
+
+The local interface now links incidents and failed/blocked operation results to
+their [recovery controls](LOCAL_UI.md#recovery-from-notifications-and-results).
+Serial operations retain the same commands, authorization and persistence rules.

@@ -253,18 +253,31 @@ observation recycling and address changes. It resets for reboot/reset-ah or a
 changed identity, removed slot or deployment, and is never stored in EEPROM.
 
 Display initialization and the only full-screen clear run before CAN starts.
-Runtime drawing uses at most two transactions per service call, each carrying
-12 RGB565 pixels (one row of a glyph). At the 500 kHz display clock, the pixel
-and address/command wire time is at most 560 microseconds per burst, excluding
-software overhead; the CAN interrupt can run between SPI
-transactions. Cached cells are committed only after their entire glyph has been
-sent, even if the scene changes mid-glyph. Missing display ID disables local
-controls while serial/CAN remain available. Optional PWM dimming consumes the
-first wake interaction. Read-only builds cycle group pages automatically.
-After composing a scene, `Display::invalidate()` schedules one comparison pass.
-`FrameChanges` scans at most 32 cells per loop with a comparison-based cursor
-wrap, and does no scanning once that pass is complete. Mid-glyph invalidation
-retains a full new pass so the completed old glyph cannot hide a newer value.
+Runtime drawing retains 8 MHz with a separate 1 MHz read cap. The renderer uses
+visible RGB565 row comparisons, ignores blank foreground changes and batches
+up to four changed scanlines per SPI transaction at 8 MHz, two at 4 MHz, one
+below. It prepares each strip before starting SPI and closes every transaction
+before continuing. A 750 us cooperative service budget bounds repeated work,
+with eight transfers maximum above 2 MHz, two at 2 MHz/below. Interrupts and one
+work unit can overrun the budget; `diag ui` reports observed maximum durations.
+At 500 kHz the fallback remains one 12-pixel row and at most two transfers.
+
+`Display::invalidate()` schedules a comparison pass. `FrameChanges` scans at
+most 32 cells per loop, with no idle scanning. Completed cells alone enter the
+painted cache; invalidation during a partial glyph retains a full new pass.
+The production rasterizer is tested against an independent pixel image and
+recorded SPI boundaries at five clocks. Missing display ID disables local
+controls while serial/CAN remain available. The boot clear runs before CAN RX.
+
+`UiRecovery` resolves both incidents and operation results to current backend
+state. A single bounded bookmark retains the interrupted editor/page and alert.
+Recovery opening is read-only. Its separate confirmation captures configuration,
+topology, availability, operation sequence, incident ID and expiry; the backend
+rechecks its usual guards on execution. Global retry, explicit ON, sensor retry
+and journal save reuse existing controller/storage APIs. A save owns its token
+until verified completion; another operation cannot claim that result. Ordinary
+notifications wait while the operator uses recovery; the live registry/GPIOs
+continue updating. Identity binding and group creation remain serial operations.
 
 `UiModel` owns the sequence of its operation and retains its result masks; another
 serial job cannot be mistaken for its successful apply. Edits/confirmations are
@@ -358,7 +371,7 @@ Export configuration and recommission deliberately before downgrading.
 XPT2046. `UiLayout` supplies the same cell rectangles to rendering and hit tests.
 The full-screen editor uses four cached character cells per enlarged digit;
 `Ili9341Display` clips a scaled flash-font glyph into each cell. RAM scene size
-and bounded pixel slices are unchanged. `Display::pending()` gates newly drawn
+is unchanged; pixel strips remain bounded. `Display::pending()` gates newly drawn
 screens; `TouchGesture` captures a target, cancels dragging and consumes input
 across page changes or simultaneous wheel events.
 

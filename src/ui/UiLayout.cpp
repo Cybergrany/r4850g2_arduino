@@ -18,13 +18,46 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
       add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
       add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
-    case UiPage::AlertDetail:
-      add(12,0,26,3,ActionKind::Acknowledge,UI_TEXT("Acknowledge"));
+    case UiPage::AlertDetail: {
+      const auto link = m.recoveryLink();
+      add(12,0,link.kind == RecoveryKind::None ? 26 : 12,3,ActionKind::Acknowledge,UI_TEXT("Acknowledge"));
+      if (link.kind != RecoveryKind::None) add(12,14,12,3,ActionKind::Recover,recoveryLabel(link.kind));
       if (m.displayedAlert().code == AlertCode::ThermalStop)
         add(10,0,26,2,ActionKind::Resume,UI_TEXT("Resume after cooling"));
       else if (m.displayedAlert().code == AlertCode::TemperatureSensor)
         add(10,0,26,2,ActionKind::RetrySensors,UI_TEXT("Retry sensors"));
       break;
+    }
+    case UiPage::RecoveryConfirm:
+      add(12,0,12,3,ActionKind::Back,UI_TEXT("Cancel"));
+      add(12,14,12,3,ActionKind::RecoveryConfirm,UI_TEXT("Confirm")); break;
+    case UiPage::Recovery:
+      add(12,0,8,3,ActionKind::Back,UI_TEXT("Back"));
+      if (m.availableRecoveryCommand() != RecoveryCommand::None)
+        add(12,9,17,3,ActionKind::RecoveryReview,m.availableRecoveryCommand() == RecoveryCommand::Retry ? UI_TEXT("Retry ALL...") :
+            m.availableRecoveryCommand() == RecoveryCommand::Save ? UI_TEXT("Save settings...") :
+            m.availableRecoveryCommand() == RecoveryCommand::Sensors ? UI_TEXT("Retry sensors...") :
+            m.recoveryKind() == RecoveryKind::Temperatures ? UI_TEXT("Resume...") : UI_TEXT("Enable..."));
+      else if (m.recoveryKind() == RecoveryKind::Bus || m.recoveryKind() == RecoveryKind::Temperatures) {
+        add(12,9,8,3,ActionKind::Previous,UI_TEXT("Prev")); add(12,18,8,3,ActionKind::Next,UI_TEXT("Next"));
+      }
+      if (m.recoveryKind() == RecoveryKind::Storage || (m.recoveryKind() == RecoveryKind::Temperatures &&
+          m.availableRecoveryCommand() != RecoveryCommand::None)) {
+        add(10,0,12,2,ActionKind::Previous,UI_TEXT("Prev PSU")); add(10,14,12,2,ActionKind::Next,UI_TEXT("Next PSU"));
+      }
+      break;
+    case UiPage::Detail:
+      if (m.recovering()) {
+        add(12,0,12,3,ActionKind::Back,UI_TEXT("Back"));
+        add(12,14,12,3,ActionKind::RecoveryReview,UI_TEXT("Retry ALL..."));
+      } else add(12,0,26,3,ActionKind::Back,UI_TEXT("Back"));
+      break;
+    case UiPage::Result: {
+      const auto link = m.recoveryLink();
+      add(12,0,link.kind == RecoveryKind::None ? 26 : 12,3,ActionKind::Back,UI_TEXT("Back"));
+      if (link.kind != RecoveryKind::None) add(12,14,12,3,ActionKind::Recover,recoveryLabel(link.kind));
+      break;
+    }
     case UiPage::Groups:
       add(1,0,26,1,ActionKind::Startup,UI_TEXT(""));
       // Group tiles are buttons too; their content is drawn by UiView.
@@ -47,7 +80,8 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       add(3,0,26,3,ActionKind::EditVoltage,UI_TEXT(""));
       add(7,0,26,3,ActionKind::EditCurrent,UI_TEXT(""));
       add(12,0,12,3,ActionKind::Back,UI_TEXT("Back"));
-      add(12,14,12,3,ActionKind::Tools,UI_TEXT("Tools")); break;
+      if (!m.recovering()) add(12,14,12,3,ActionKind::Tools,UI_TEXT("Tools"));
+      break;
     case UiPage::Editor:
       add(5,0,5,4,ActionKind::Adjust,UI_TEXT("-"),-1);
       add(5,21,5,4,ActionKind::Adjust,UI_TEXT("+"),1);
@@ -69,7 +103,7 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       if (m.cutoffFitted()) add(10,0,26,2,ActionKind::HardStop,UI_TEXT("Hard stop: AC cutoff"));
       add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
     case UiPage::Availability:
-      add(6,0,26,2,ActionKind::AvailabilityPrimary,m.startupRetry() ? UI_TEXT("Retry startup") : m.startupProbe() ? UI_TEXT("Power PSUs for discovery") :
+      add(6,0,26,2,ActionKind::AvailabilityPrimary,m.startupRetry() ? UI_TEXT("Retry ALL PSUs...") : m.startupProbe() ? UI_TEXT("Power PSUs for discovery") :
           m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Include group") : UI_TEXT("Continue without group"));
       add(8,0,26,2,ActionKind::Back,m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Keep excluded") : UI_TEXT("Wait for group"));
       add(10,0,26,2,ActionKind::AvailabilityIndividuals,UI_TEXT("Choose individuals"));
@@ -128,6 +162,8 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
     const bool selected=(m.page()==UiPage::Tools && i==m.toolSelection()) ||
         (m.availabilityPage() && i==m.availabilitySelection()) ||
         (m.page()==UiPage::AlertDetail && i==m.alertSelection()) ||
+        ((m.page()==UiPage::Recovery || m.page()==UiPage::RecoveryConfirm || m.page()==UiPage::Result ||
+          (m.recovering() && m.page()==UiPage::Detail)) && i==m.recoverySelection()) ||
         (m.page()==UiPage::Config && m.field()==UiField::Tools && b[i].action.kind==ActionKind::Tools);
     const uint8_t style=selectedStyle | (selected ? Accent : Text);
     for (uint8_t r=b[i].row;r<b[i].row+b[i].height;++r) f.text(r,b[i].col,b[i].width,UI_TEXT(""),style);

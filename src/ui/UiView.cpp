@@ -7,6 +7,8 @@
 namespace psu {
 void drawAlerts(UiFrame&, const UiModel&, const PsuController&, uint32_t);
 void drawAvailability(UiFrame&, const UiModel&, const PsuController&, uint32_t);
+void drawRecoveryFeedback(UiFrame&, const UiModel&, uint8_t);
+void drawRecovery(UiFrame&, const UiModel&, const PsuController&, uint32_t);
 namespace {
 void line(UiFrame& f, uint8_t row, FlashText s, uint8_t style = Text) { f.text(row, 0, ui::columns, s, style); }
 void number(UiFrame& f, uint8_t row, uint8_t col, uint8_t width, float value, const char* unit, uint8_t style = Text, uint8_t decimals = 1) {
@@ -235,7 +237,7 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     f.text(row + 1, 14, 1, UI_TEXT("-"), Muted);
     number(f, row + 1, 15, 11, (voltage ? limits::maxVoltage : c.groupCurrentMaximum(m.group())) / 100.0f, voltage ? "V" : "A", Muted, 2);
   }
-  if (!PSU_ENABLE_TOUCH) line(f, 11, UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
+  if (!PSU_ENABLE_TOUCH) line(f, 11, m.recovering() ? UI_TEXT("Hold: back to incident") : UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
   else if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
   line(f, 12, UI_TEXT("EEPROM saved after ACKs"), Muted);
   line(f, 14, m.editing() ? UI_TEXT("Click:Apply  Hold:Cancel") : UI_TEXT("Click:Edit  Hold:Groups"), Muted);
@@ -263,6 +265,7 @@ void result(UiFrame& f, const UiModel& m) {
     case UiNotice::ApplyFailed: title = UI_TEXT("APPLY FAILED - NOT SAVED"); body = UI_TEXT("Some units may have accepted settings. Inspect PSU details; there is no automatic rollback."); color = Error; break;
     case UiNotice::SaveFailed: title = UI_TEXT("APPLIED / EEPROM FAILED"); body = UI_TEXT("Live settings were accepted, but not saved. Retry serial save after checking EEPROM."); color = Error; break;
     case UiNotice::SavedOlder: title = UI_TEXT("EARLIER SNAPSHOT SAVED"); body = UI_TEXT("Configuration changed while saving. Current RAM edits remain unsaved; review serial config."); break;
+    case UiNotice::ConfigSaved: title = UI_TEXT("CONFIG SAVED"); body = UI_TEXT("Reviewed RAM snapshot verified. Saving did not apply staged changes."); color = Good; break;
     case UiNotice::Cancelled: title = UI_TEXT("CANCELLED - DRAFT RETAINED"); body = UI_TEXT("No partial apply sent. Review the staged request before applying again."); break;
     default: break;
   }
@@ -274,6 +277,9 @@ void result(UiFrame& f, const UiModel& m) {
   line(f, 14, m.working() ? UI_TEXT("Hold:Groups (continues)") : UI_TEXT("Click:Config Hold:Groups"), Muted);
 }
 void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+  // Recovery pages carry their own control/protection details. Keep their
+  // target and review heading intact, including during a thermal latch.
+  if (m.page() == UiPage::Recovery || m.page() == UiPage::RecoveryConfirm) return;
   const auto s = c.controlStatus(now); const auto& e = c.enableControl();
   if (s.activity == Activity::Running && !c.excluded()) return;
   const bool fault = s.activity == Activity::StopUnconfirmed || (s.activity == Activity::StartBlocked && s.blocker != Issue::NoProfile);
@@ -325,14 +331,18 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
     case UiPage::Config: config(f, m, c, now); break;
     case UiPage::Confirm: confirmation(f, m); break;
     case UiPage::Result: result(f, m); break;
+    case UiPage::Recovery: case UiPage::RecoveryConfirm: drawRecovery(f, m, c, now); break;
     case UiPage::Availability: case UiPage::AvailabilityUnits: case UiPage::AvailabilityConfirm: case UiPage::AvailabilityResult:
       drawAvailability(f, m, c, now); break;
     default: UiLayout::extras(f,m,c,now); break;
   }
+  if (m.recovering() && (m.page()==UiPage::Recovery || m.page()==UiPage::Detail || m.page()==UiPage::Availability))
+    drawRecoveryFeedback(f,m,m.page()==UiPage::Detail ? 11 : m.page()==UiPage::Availability ? 5 : 9);
 #if PSU_ENABLE_TOUCH
   UiLayout::controls(f,m);
 #else
-  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage()) UiLayout::controls(f,m);
+  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage() || m.recovering() ||
+      (m.page()==UiPage::Result && !m.working() && m.recoveryLink().kind != RecoveryKind::None)) UiLayout::controls(f,m);
 #endif
   controlBanner(f, m, c, now);
   // Keep status and V/A/W intact. Alerts replace the Tools label with a badge.

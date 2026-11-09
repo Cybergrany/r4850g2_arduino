@@ -3,6 +3,7 @@
 #include "../config/BoardConfig.h"
 #include "../config/TouchConfig.h"
 #include <string.h>
+#include <glcdfont.c> // Pinned Adafruit classic font, stored in flash on AVR.
 namespace psu {
 namespace {
 // Datasheet section 8.3.23: ID4 is 0xD3. Adafruit's ILI9341_RDID4 names 0xDD.
@@ -44,43 +45,102 @@ bool Ili9341Display::canDim() const { return board::displayBacklight >= 0 && ui:
 void Ili9341Display::dim(bool dimmed) {
   if (board::displayBacklight >= 0) analogWrite(board::displayBacklight, dimmed ? ui::dimBrightness : ui::fullBrightness);
 }
-void Ili9341Display::Glyph::drawPixel(int16_t x, int16_t y, uint16_t value) {
-  if (x < 0 || y < 0 || x >= ui::cellWidth || y >= ui::cellHeight) return;
-  if (value) rows[y] |= uint16_t(1U << x); else rows[y] &= uint16_t(~(1U << x));
+void Ili9341Display::invalidate() {
+  changes_.invalidate(); sceneStarted_ = millis();
 }
 void Ili9341Display::Glyph::prepare(char c) {
   memset(rows, 0, sizeof(rows));
+  if (c == ' ') return;
   const uint8_t code = uint8_t(c);
-  if (code >= 128 && code < 176) {
-    const uint8_t digit = (code-128)/4, q = (code-128)%4;
-    drawChar(-int16_t(q%2)*ui::cellWidth, -int16_t(q/2)*ui::cellHeight,
-        digit < 10 ? '0'+digit : digit == 10 ? '.' : '-', 1, 0, 4);
-  } else drawChar(0, 0, c, 1, 0, 2);
-}
-void Ili9341Display::service(const UiFrame& frame) {
-  if (!available_) return;
-  uint8_t searchBudget = ui::scanCellsPerTick;
-  for (uint8_t slice = 0; slice < ui::slicesPerTick; ++slice) {
-    if (scanRow_ == ui::cellHeight) {
-      if (!changes_.next(frame, previous_, searchBudget, activeIndex_, active_)) return;
-      glyph_.prepare(active_.character); scanRow_ = 0;
-    }
-    uint16_t pixels[ui::cellWidth * ui::sliceRows];
-    const uint16_t foreground = color(active_.style), background = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
-    for (uint8_t y = 0; y < ui::sliceRows; ++y)
-      for (uint8_t x = 0; x < ui::cellWidth; ++x)
-        pixels[y * ui::cellWidth + x] = glyph_.rows[scanRow_ + y] & (1U << x) ? foreground : background;
-    // arduino-CAN's SPI.usingInterrupt masks its RX IRQ during transactions.
-    // Release it every 12 pixels, never hold it for a whole glyph/line/screen.
-    tft_.startWrite();
-    tft_.setAddrWindow(4 + activeIndex_ % ui::columns * ui::cellWidth,
-                      activeIndex_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, ui::sliceRows);
-    tft_.writePixels(pixels, ui::cellWidth * ui::sliceRows); tft_.endWrite();
-    scanRow_ += ui::sliceRows;
-    if (scanRow_ == ui::cellHeight) previous_.cell(activeIndex_, active_);
+  const bool large = code >= 128 && code < 176;
+  const uint8_t digit = large ? (code - 128) / 4 : 0, quadrant = large ? (code - 128) % 4 : 0;
+  const uint8_t character = large ? (digit < 10 ? '0' + digit : digit == 10 ? '.' : '-') : code;
+  const uint8_t scale = large ? 4 : 2;
+  uint8_t columns[5];
+  for (uint8_t x = 0; x < 5; ++x) {
+#ifdef __AVR__
+    columns[x] = pgm_read_byte(font + uint16_t(character) * 5 + x);
+#else
+    columns[x] = font[uint16_t(character) * 5 + x];
+#endif
+  }
+  const uint8_t first = large && quadrant % 2 ? 3 : 0;
+  const uint8_t end = large && !(quadrant % 2) ? 3 : 5;
+  for (uint8_t y = 0; y < ui::cellHeight; y += scale) {
+    const uint8_t sy = (y + quadrant / 2 * ui::cellHeight) >> (large ? 2 : 1);
+    uint16_t row = 0, pixels = large ? 15 : 3;
+    for (uint8_t x = first; x < end; ++x, pixels <<= scale)
+      if (columns[x] & (1U << sy)) row |= pixels;
+    for (uint8_t repeat = 0; repeat < scale; ++repeat) rows[y + repeat] = row;
   }
 }
-static_assert(ui::cellHeight % ui::sliceRows == 0, "Glyph slices must fit exactly");
+void Ili9341Display::service(const UiFrame& frame) {
+  if (!available_ || !pending()) return;
+  const uint32_t started = micros();
+  uint8_t searchBudget = ui::scanCellsPerTick, transfers = 0;
+  while (transfers < ui::burstsPerTick(board::displaySpiHz) && uint32_t(micros() - started) < ui::renderBudgetUs) {
+    if (scanRow_ == ui::cellHeight) {
+      if (!changes_.next(frame, previous_, searchBudget, activeIndex_, active_)) break;
+      const auto old = previous_.cell(activeIndex_);
+      const uint16_t bg = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
+      const uint16_t oldBg = old.style & selectedStyle ? 0x21e5 : 0x10c2;
+      // Foreground styles cannot affect an empty cell. Still commit metadata so
+      // the next invalidation does not rediscover the same invisible difference.
+      if (old.character == ' ' && active_.character == ' ' && bg == oldBg) {
+        previous_.cell(activeIndex_, active_); continue;
+      }
+      glyph_.prepare(active_.character);
+      Glyph previousGlyph;
+      if (old.character == active_.character) memcpy(previousGlyph.rows, glyph_.rows, sizeof(glyph_.rows));
+      else previousGlyph.prepare(old.character);
+      dirtyRows_ = 0;
+      const uint16_t fg = color(active_.style), oldFg = color(old.style);
+      for (uint8_t y = 0; y < ui::cellHeight; ++y) {
+        const uint16_t a = glyph_.rows[y], b = previousGlyph.rows[y];
+        // Four pixel classes: foreground on both, background on both, and
+        // the two glyph edges. Compare RGB565 values, not style metadata.
+        if ((fg != oldFg && (a & b)) || (bg != oldBg && (~(a | b) & 0x0fff)) ||
+            (fg != oldBg && (a & ~b)) || (bg != oldFg && (b & ~a))) dirtyRows_ |= uint16_t(1U << y);
+      }
+      scanRow_ = 0;
+      // Raster comparison is also a work unit. Do not start an SPI burst if it
+      // consumed this call's budget; the prepared glyph resumes next time.
+      if (uint32_t(micros() - started) >= ui::renderBudgetUs) break;
+    }
+    while (scanRow_ < ui::cellHeight && !(dirtyRows_ & (1U << scanRow_))) ++scanRow_;
+    if (scanRow_ == ui::cellHeight) { previous_.cell(activeIndex_, active_); continue; }
+    uint8_t rows = 1;
+    while (rows < ui::burstRows(board::displaySpiHz) && scanRow_ + rows < ui::cellHeight &&
+        (dirtyRows_ & (1U << (scanRow_ + rows)))) ++rows;
+    uint16_t pixels[ui::cellWidth * ui::burstRows(board::displaySpiHz)];
+    const uint16_t fg = color(active_.style), bg = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
+    for (uint8_t y = 0; y < rows; ++y) {
+      uint16_t bits = glyph_.rows[scanRow_ + y];
+      for (uint8_t x = 0; x < ui::cellWidth; ++x, bits >>= 1)
+        pixels[y * ui::cellWidth + x] = bits & 1 ? fg : bg;
+    }
+    if (uint32_t(micros() - started) >= ui::renderBudgetUs) break;
+    // CAN's registered RX interrupt is masked only inside this bounded burst.
+    const uint32_t transaction = micros();
+    tft_.startWrite();
+    tft_.setAddrWindow(4 + activeIndex_ % ui::columns * ui::cellWidth,
+                      activeIndex_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, rows);
+    tft_.writePixels(pixels, ui::cellWidth * rows); tft_.endWrite();
+    const uint32_t transactionUs = micros() - transaction;
+    if (transactionUs > stats_.transactionMaxUs) stats_.transactionMaxUs = transactionUs;
+    ++transfers; scanRow_ += rows;
+    // Skip unchanged trailing rows even at the transfer limit; pending() must
+    // reflect exactly the pixels and comparison pass still outstanding.
+    while (scanRow_ < ui::cellHeight && !(dirtyRows_ & (1U << scanRow_))) ++scanRow_;
+    if (scanRow_ == ui::cellHeight) previous_.cell(activeIndex_, active_);
+  }
+  const uint32_t elapsed = micros() - started;
+  if (elapsed > stats_.renderMaxUs) stats_.renderMaxUs = elapsed;
+  if (!pending()) {
+    stats_.sceneMs = millis() - sceneStarted_;
+    if (stats_.sceneMs > stats_.sceneMaxMs) stats_.sceneMaxMs = stats_.sceneMs;
+  }
+}
 static_assert(ui::columns * ui::cellWidth + 8 == 320 && ui::rows * ui::cellHeight == 240, "ILI9341 landscape layout");
 }
 #endif

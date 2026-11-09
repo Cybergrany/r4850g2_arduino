@@ -765,6 +765,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
+      case 11: io_.println(F("diag ui: drawing/read clocks, maximum render/SPI duration and completed-scene latency. Compare diag bus under load.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {

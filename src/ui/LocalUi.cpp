@@ -2,6 +2,7 @@
 #include "LocalUi.h"
 #if PSU_ENABLE_DISPLAY
 #include "UiLayout.h"
+#include "../config/BoardConfig.h"
 #include <string.h>
 #include <stdio.h>
 namespace psu {
@@ -86,6 +87,9 @@ void LocalUi::tick(uint32_t now) {
   if (uint32_t(now-lastPage_)>=ui::monitorPageMs) { model_.nextGroupPage(); lastPage_=now; dirty_=true; }
 #endif
   if (oldPage!=model_.page() || oldAlert!=model_.alertDisplayId()) {
+#if PSU_ENABLE_ENCODER
+    wheel_.cancelGesture();
+#endif
     dirty_=true; pageReady_=false;
 #if PSU_ENABLE_TOUCH
     gesture_.cancel();
@@ -188,6 +192,14 @@ void LocalUi::drawTouch() {
 }
 #endif
 bool LocalUi::command(uint8_t n,char** a,Print& out,uint32_t now) {
+  if (n == 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
+    const auto s = display_.statistics();
+    out.print(F("UI available=")); out.print(available_); out.print(F(" draw-Hz=")); out.print(board::displaySpiHz);
+    out.print(F(" read-max-Hz=")); out.println(board::displayReadMaxSpiHz);
+    out.print(F("render-max-us=")); out.print(s.renderMaxUs); out.print(F(" SPI-max-us=")); out.print(s.transactionMaxUs);
+    out.print(F(" scene-ms=")); out.print(s.sceneMs); out.print(F(" scene-max-ms=")); out.println(s.sceneMaxMs);
+    out.println(F("750us cooperative budget; one work unit/interrupt can overrun. Compare diag bus.")); return true;
+  }
   if (PSU_STRCMP(a[0], "touch")) return false;
 #if PSU_ENABLE_TOUCH
   if (n==2 && !PSU_STRCMP(a[1], "status")) {

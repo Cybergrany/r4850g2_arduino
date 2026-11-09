@@ -1,14 +1,38 @@
 # Validation
 
-Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
-touch/calibration, CAN-free simulation and cooperative scheduling validation was
-extended through 2026-11-07 with shared operator alerts, thermal current reductions,
-persistent thermal shutdown, warning/error GPIOs, periodic serial summaries and
-the PSU_ACTIVE permission output. That wheel-only wiring snapshot used a
-500 kHz display clock and shorter rendering bursts. Existing AC-cutoff startup,
-source availability, remembered exclusions and sustained-readiness regressions
-remain covered.
-No firmware upload or physical validation of the new patch was performed here.
+Target: Arduino Mega 2560, eight-slot capacity. Validation covers the parallel
+backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
+simulation. No firmware upload or physical validation of this patch was performed.
+
+## UI formatting and recovery (2026-11-09)
+
+- Shared decimal formatter regression: leading/trailing zeros, rounding, negative
+  temperatures, engineering-unit fallback, narrow fields and fullscreen digits.
+  `tools/check_avr_formats.py` rejects unsupported AVR printf conversions in
+  authored production sources and runs automatically with the host suite.
+- The production `Ili9341Display.cpp` is compiled against a recording display/SPI
+  surface at 500 kHz, 1, 2, 4 and 8 MHz. Tests compare every final pixel with an
+  independent classic-font raster, including large digits, blank styles, rapid
+  reversals and scene changes at transaction boundaries. They check transfer
+  size/count bounds, transaction closure, idle behaviour, microsecond/millisecond
+  rollover and observable cooperative-budget overruns.
+- The synthetic three-row button highlight needs **28 transfers at 8 MHz**, versus
+  **1,248** for the previous renderer redrawing all 78 cells as one-row strips.
+  This is a transfer-count result, not measured Mega latency. Simulated wire timing excludes AVR raster/ISR costs.
+- Controller/UI host suite: **1,108,327 checks** with snapshot exports. Tests
+  cover Config/Ack independence, affected-group routing, no-PSU operation,
+  returned units, suspended edits, confirmed global retry,
+  stale incident/configuration/binding/expiry reviews, newer OFF requests,
+  journal completion ownership/failure/newer drafts and thermal/sensor guards.
+  Touch/simulator integration: **1,086 checks** with snapshot exports, exercising
+  the actual button hit targets, availability return/Ack, cancelled save review
+  and verified asynchronous recovery save.
+- Existing real ClickEncoder, controller/EEPROM interruption and touch/calibration
+  regressions remain enabled. All nineteen Mega profiles and all three debug
+  isolation checks pass; current sizes are below.
+
+Use the [bench comparison](#ui-redraw-bench-comparison) before claiming hardware
+latency, loaded CAN behaviour or PSU response.
 
 ## Wheel acknowledgement repair (2026-11-09)
 
@@ -32,11 +56,13 @@ The overview should return while the missing-member warning remains active.
 Then check click-to-open and hold-to-return navigation. No PSU absence should
 be accepted and no current enabled by acknowledging the notification.
 
-The complete matrix and size table below are the earlier 2026-11-07 snapshot.
+The build matrix and size table below include the UI formatting/recovery patch.
 
 ```sh
 python3 tools/test_host.py
 python3 tools/test_touch.py
+python3 tools/test_renderer.py
+python3 tools/check_avr_formats.py
 python3 tools/test_fan_output.py
 python3 tools/test_charge_allow.py
 python3 tools/test_alert_outputs.py
@@ -65,43 +91,33 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6735 | 144288 | 1457 |
-| `mega2560_wheel_alerts` | 6738 | 144596 | 1454 |
-| `mega2560_serial` | 4997 | 99998 | 3195 |
-| `mega2560_display` | 6704 | 137436 | 1488 |
-| `mega2560_local` | 5792 | 102044 | 2400 |
+| `mega2560` | 6771 | 158550 | 1421 |
+| `mega2560_serial` | 4997 | 100220 | 3195 |
+| `mega2560_display` | 6740 | 149764 | 1452 |
+| `mega2560_local` | 5828 | 115892 | 2364 |
 | `mega2560_minimal` | 4054 | 46320 | 4138 |
-| `mega2560_touch` | 6937 | 153752 | 1255 |
-| `mega2560_touch_wheel` | 6968 | 155426 | 1224 |
-| `mega2560_ui_debug` | 6744 | 147272 | 1448 |
-| `mega2560_touch_debug` | 6946 | 156482 | 1246 |
-| `mega2560_touch_local` | 5994 | 108376 | 2198 |
-| `mega2560_touch_debug_local` | 6003 | 109448 | 2189 |
-| `mega2560_touch_enable` | 6937 | 154060 | 1255 |
-| `mega2560_touch_fan` | 6942 | 154500 | 1250 |
-| `mega2560_serial_fan` | 5002 | 100418 | 3190 |
-| `mega2560_serial_cutoff` | 4998 | 100070 | 3194 |
-| `mega2560_touch_cutoff` | 6943 | 154684 | 1249 |
-| `mega2560_serial_alerts` | 4999 | 100232 | 3193 |
-| `mega2560_touch_alerts` | 6945 | 154910 | 1247 |
+| `mega2560_touch` | 6973 | 168100 | 1219 |
+| `mega2560_touch_wheel` | 7004 | 169730 | 1188 |
+| `mega2560_ui_debug` | 6780 | 161124 | 1412 |
+| `mega2560_touch_debug` | 6982 | 170670 | 1210 |
+| `mega2560_touch_local` | 6030 | 122322 | 2162 |
+| `mega2560_touch_debug_local` | 6039 | 122570 | 2153 |
+| `mega2560_touch_enable` | 6973 | 168410 | 1219 |
+| `mega2560_touch_fan` | 6978 | 168832 | 1214 |
+| `mega2560_serial_fan` | 5002 | 100640 | 3190 |
+| `mega2560_serial_cutoff` | 4998 | 100292 | 3194 |
+| `mega2560_touch_cutoff` | 6979 | 168882 | 1213 |
+| `mega2560_serial_alerts` | 4999 | 100454 | 3193 |
+| `mega2560_touch_alerts` | 6981 | 169134 | 1211 |
+| `mega2560_wheel_alerts` | 6774 | 158960 | 1418 |
 
-The largest static RAM use is **6968 bytes**, leaving **1224 bytes** in the
-touch/wheel profile. The full touch/serial/enable/fan/cutoff/alert-output example
-leaves **1247 bytes**; the serial alert-output profile leaves **3193 bytes**.
-The touch-disabled wheel/serial/CHG_ALLOW/alert-output profile leaves **1454 bytes**.
-Compared with commit `35fbaa0`, no existing profile grows by more than **181
-bytes** of total static RAM. Both the 256-byte increase and 1 KiB headroom targets
-are met.
-
-AVR `sizeof` measurements against that baseline give **182 bytes** of new
-controller state (including the alert registry and thermal/config state) and
-**13 bytes** in the UI model. Serial adds 14 bytes (12 for periodic broadcasts), the fresh wheel-gesture guard
-adds 6, fitted alert outputs add 1, fitted PSU_ACTIVE adds 1, and the CAN loss-event latch adds 1. SIM
-temperature overrides add 4 bytes;
-physical alert outputs are excluded there. Even the combined state remains below
-256 bytes. The alert registry is fixed-size and allocation-free. Zero-initialized
-cells avoid a redundant 120-byte SRAM initialization template, and the common
-`-fno-tree-switch-conversion` build flag keeps lookup constants out of AVR RAM.
+Compared with the immediately preceding commit `f26cd5c`, display profiles add
+**36 bytes** of total static RAM; headless profiles do not grow. This meets the
+128-byte growth target. The largest profile uses **7004 bytes**, leaving **1188
+bytes** (more than 1 KiB) for the stack and runtime state. The wheel/alert bench
+profile leaves **1418 bytes**. Replacing the GFX-derived scratch glyph with a
+small direct classic-font raster offsets most of the recovery bookmark and
+render-statistics state. No scene buffer was added.
 
 Static RAM excludes stack/interrupt nesting. No full colour framebuffer is used;
 two text/style scenes occupy 1170 bytes. Worst-case stack and loaded display/CAN
@@ -116,13 +132,60 @@ dependency graphs also omit CAN. This verifies software isolation, not touch
 hardware or production CAN timing.
 
 The `mega2560_wheel_alerts` ELF includes the wheel service and physical MCP2515
-driver, with no physical XPT2046 driver. Display bursts are now one 12-pixel row,
-at most two bursts per loop. At 500 kHz, the calculated wire time per burst is
-at most 560 microseconds including address/command bytes; actual SPI/interrupt
-timing and compatibility with the bench level shifter still require measurement.
-During page changes and alert popups, check `diag bus` for receive drops and
-hardware overflows. Keep the unused panel T_CS pulled HIGH at 3.3 V when its SPI
-lines remain connected. These settings do not change the CAN bus bitrate.
+driver, without the physical XPT2046 driver. At the retained 8 MHz clock a maximum
+four-row strip carries 48 pixels plus 11 address/command bytes: **107 us of wire
+time**, excluding driver/CPU/interrupt overhead. At 4 MHz/two rows this is 118 us;
+at 2 MHz/one row, 140 us; at 1 MHz, 280 us; at 500 kHz, 560 us. SPI is released
+between strips. A 750 us budget is checked between bounded work units; a work
+unit or interrupt can overrun it. `diag ui` exposes actual observed maxima.
+These wire calculations and synthetic tests do not prove hardware timing.
+Keep unused T_CS HIGH at 3.3 V if its SPI lines remain connected. CAN bitrate and
+scheduling, EEPROM schema and the 1 MHz display read cap are unchanged.
+
+## UI redraw bench comparison
+
+Use the same Mega, level shifting, 8 MHz draw clock, PSU count, normal polling and
+serial settings for each run. Record the baseline's highlight latency with a
+video if it predates `diag ui`. The patch's timing counters start at boot; full
+page changes can dominate `scene-max-ms`, so record `scene-ms` while repeating
+an ordinary menu highlight as well as the overall maximum.
+
+1. With the usual commissioned setup and CAN traffic running, send:
+   ```text
+   watch off
+   raw off
+   diag ui
+   diag bus
+   ```
+2. Turn between Tools menu choices for 30 seconds, including quick reversals.
+   Check that filled highlights move cleanly. Also exercise group-page changes,
+   PSU details, and editing `54.10 V` / fractional current without applying unless
+   intended. Use touch release/press and wheel clicks after each navigation.
+3. While repeating highlights, sample `diag ui` and `diag bus`. Record a second
+   bus snapshot after the run. Compare **counter increases**, especially
+   `rx-drops`, `hw-overflow-events`, `tx-errors`, `loop-max-us` and command results.
+   Trace drops alone are diagnostic-output congestion, not CAN receive loss.
+4. Repeat the same sequence on the patched firmware. Aim for ordinary menu
+   highlight completion **below 100 ms at 8 MHz**. Large filled group tiles and
+   full-page transitions move more pixels; measure those separately. A phone
+   video can corroborate input-to-highlight time, which `scene-ms` measures only
+   from composition to completed drawing. Check that telemetry stays fresh and
+   the established bench apply/stop cycle has no command timeouts.
+5. With PSUs absent, open the warning's Config shortcut: choose Wait and return
+   to the same incident; Ack must leave WARNING active and accept no absences.
+   Test Continue without only through its separate review/confirmation. In SIM,
+   exercise failed saves, thermal stops, sensor retries and calibration; they
+   must retain their backend guards and must not affect physical CAN/GPIOs.
+
+| Measurement | Baseline | Patched |
+| --- | --- | --- |
+| Ordinary highlight latency, ms | bench measurement | bench measurement |
+| Latest/max completed scene, ms | if available | `diag ui` |
+| Maximum render-call / SPI transaction, us | if available | `diag ui` |
+| RX drops / hardware overflows added | `diag bus` delta | `diag bus` delta |
+| TX errors / command timeouts added | bus/status results | bus/status results |
+
+A clean host run and build do not replace this loaded bench comparison.
 
 ## Host coverage
 
