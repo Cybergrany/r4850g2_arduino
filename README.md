@@ -38,7 +38,7 @@ See [serial connection behaviour](docs/SERIAL.md).
 | Environment | Screen | Wheel | Serial |
 | --- | --- | --- | --- |
 | `mega2560` (default) | ILI9341 dashboard/config | Navigate/edit | Yes |
-| `mega2560_wheel_alerts` | 8 MHz display, touch disabled; D27–D30 outputs | Navigate/edit | Yes |
+| `mega2560_wheel_alerts` | 8 MHz display, touch disabled; D26 enable, D27–D30 outputs | Navigate/edit | Yes |
 | `mega2560_serial` | No | No | Yes |
 | `mega2560_display` | Group overview, automatic paging | No | Yes |
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
@@ -67,7 +67,7 @@ at least one PSU is permitted a positive current limit. Inspect it using
 
 For the current display/wheel wiring, use `mega2560_wheel_alerts`: screen at
 **8 MHz SPI**, touch disabled, serial and wheel enabled, plus CHG_ALLOW D27,
-WARNING D28, ERROR D29 and PSU_ACTIVE D30:
+WARNING D28, ERROR D29, PSU_ACTIVE D30 and the ENABLE_IN switch on D26:
 
 ```sh
 pio run -e mega2560_wheel_alerts

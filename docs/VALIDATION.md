@@ -31,6 +31,9 @@ simulation. No firmware upload or physical validation of this patch was performe
   regressions remain enabled. All nineteen Mega profiles and all three debug
   isolation checks pass; current sizes are below.
 
+The wheel/alert build also includes remote commit `38673a9`, enabling the D26
+ENABLE_IN switch; that combined profile was rebuilt after integration.
+
 Use the [bench comparison](#ui-redraw-bench-comparison) before claiming hardware
 latency, loaded CAN behaviour or PSU response.
 
@@ -109,7 +112,7 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 | `mega2560_touch_cutoff` | 6979 | 168882 | 1213 |
 | `mega2560_serial_alerts` | 4999 | 100454 | 3193 |
 | `mega2560_touch_alerts` | 6981 | 169134 | 1211 |
-| `mega2560_wheel_alerts` | 6774 | 158960 | 1418 |
+| `mega2560_wheel_alerts` | 6774 | 159226 | 1418 |
 
 Compared with the immediately preceding commit `f26cd5c`, display profiles add
 **36 bytes** of total static RAM; headless profiles do not grow. This meets the

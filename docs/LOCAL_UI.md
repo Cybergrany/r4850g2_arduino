@@ -16,7 +16,9 @@ the encoder only controls settings when an enabled display initializes.
 The display now runs at **8 MHz SPI** (`board::displaySpiHz` in
 `src/config/BoardConfig.h`). Use `mega2560_wheel_alerts` for the current screen,
 wheel and serial setup with touch disabled, CHG_ALLOW D27, WARNING D28, ERROR D29
-and PSU_ACTIVE D30. `mega2560` is also touch-disabled, without those optional
+and PSU_ACTIVE D30, with ENABLE_IN on D26. Connect its latching switch to GND;
+see [switch semantics](CONTROL.md#optional-enable_in-switch).
+`mega2560` is also touch-disabled, without those optional
 outputs. Explicit touch profiles remain available.
 
 Use a module with **5 V compatible logic inputs**, or appropriate level shifting.
