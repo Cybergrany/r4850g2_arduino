@@ -83,6 +83,10 @@ For a blank screen, the [standalone ILI9341 bench sketch](examples/ili9341_bench
 uses the same pins and 500 kHz clock, cycles test patterns and reports display ID
 over serial without loading the charger application or changing EEPROM.
 
+For an unresponsive wheel, the [standalone wheel serial test](examples/wheel_bench/README.md)
+reports raw D3/D4/D5 levels, rotation and button events without the display,
+CAN, ClickEncoder or TimerOne. It uses the same wheel pins as `mega2560_wheel_alerts`.
+
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
