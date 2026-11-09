@@ -19,6 +19,7 @@ constexpr uint8_t displayChipSelect = 22, displayDataCommand = 23;
 constexpr int8_t displayReset = 24;
 constexpr int8_t displayBacklight = -1; // Optional PWM logic input, e.g. pin 6; not a bare LED load.
 constexpr uint32_t displaySpiHz = 500000UL; // Conservative clock for the bench level shifter.
+constexpr uint32_t displayReadMaxSpiHz = 1000000UL; // Reads have stricter timing; never exceed the draw clock.
 constexpr uint8_t displayRotation = 1; // 1 or 3: landscape.
 constexpr bool displayVerifyId = true; // Connect TFT SDO/MISO; opt out only for a verified write-only module.
 constexpr uint32_t serialBaud = 115200UL;
