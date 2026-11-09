@@ -103,6 +103,8 @@ module; the historical Nano PCB pictured below does not accept a Mega directly.
 For Arduino IDE, retain the complete `src/` tree, open the root `.ino`, select
 Mega 2560, and install enabled libraries from `platformio.ini`. The sketch marker
 is empty; `src/main.cpp` supplies `setup`/`loop`. Validation uses PlatformIO.
+The [patched ClickEncoder driver](src/vendor/ClickEncoder/README.md) is bundled
+under `src/`; it is built automatically and needs no separate installation.
 
 ## Configuration files
 

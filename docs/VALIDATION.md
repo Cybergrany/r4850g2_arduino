@@ -4,11 +4,35 @@ Target: Arduino Mega 2560, eight-slot capacity. Parallel backend, ILI9341 UI,
 touch/calibration, CAN-free simulation and cooperative scheduling validation was
 extended through 2026-11-07 with shared operator alerts, thermal current reductions,
 persistent thermal shutdown, warning/error GPIOs, periodic serial summaries and
-the PSU_ACTIVE permission output. The current wheel-only wiring profile uses a
+the PSU_ACTIVE permission output. That wheel-only wiring snapshot used a
 500 kHz display clock and shorter rendering bursts. Existing AC-cutoff startup,
 source availability, remembered exclusions and sustained-readiness regressions
 remain covered.
 No firmware upload or physical validation of the new patch was performed here.
+
+## Wheel acknowledgement repair (2026-11-09)
+
+The bundled encoder fixes a reproduced missing-short-click failure. Validation:
+
+- Real driver/adapter regression: 19,652 checks; the unpatched driver failed
+  the first short-click assertion. GPIO samples and timer callbacks are simulated.
+- Controller/UI suite: 1,102,576 checks, including acknowledgement of the startup
+  missing-members popup without changing the charging/absence decisions.
+- Touch/simulator integration: 1,023 checks (without snapshot exports).
+- Eight Mega builds passed: `mega2560`, `mega2560_local`,
+  `mega2560_touch_wheel`, `mega2560_wheel_alerts`, `mega2560_serial`,
+  `mega2560_ui_debug`, `mega2560_touch_debug`, `mega2560_touch_debug_local`.
+- All three debug-isolation checks passed; encoder-disabled builds exclude
+  ClickEncoder. No additional static RAM: `mega2560_wheel_alerts` uses 6,738
+  bytes RAM and 144,680 bytes flash. The touch/wheel build retains 1,224 bytes
+  of static RAM headroom. These builds retain the configured 8 MHz drawing clock.
+
+On the bench, release the wheel button and short-press/release **Acknowledge**.
+The overview should return while the missing-member warning remains active.
+Then check click-to-open and hold-to-return navigation. No PSU absence should
+be accepted and no current enabled by acknowledging the notification.
+
+The complete matrix and size table below are the earlier 2026-11-07 snapshot.
 
 ```sh
 python3 tools/test_host.py
@@ -35,7 +59,8 @@ omit it or choose another writable cache. Pass the same cache to
 All nineteen profiles build successfully
 with the pinned Atmel AVR platform 5.3.0, Arduino AVR framework 5.4.0, AVR GCC
 7.3.0, CAN 0.3.1, Adafruit ILI9341 1.6.3, Adafruit GFX 1.12.6,
-Adafruit BusIO 1.17.4, ClickEncoder d6d5738fdf, and TimerOne 1.2.0.
+Adafruit BusIO 1.17.4 and TimerOne 1.2.0. ClickEncoder d6d5738fdf is now
+[bundled with a single-click fix](../src/vendor/ClickEncoder/README.md).
 A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
@@ -100,6 +125,15 @@ hardware overflows. Keep the unused panel T_CS pulled HIGH at 3.3 V when its SPI
 lines remain connected. These settings do not change the CAN bus bitrate.
 
 ## Host coverage
+
+The wheel regression now runs the actual bundled ClickEncoder and `WheelInput`
+against GPIO samples and its registered 1 ms timer callback. The original driver
+fails the first short-click assertion; the corrected driver must also pass
+repeated clicks, held-button suppression, rotation, queued-click cancellation,
+release bounce and the alert guard across timer rollover. The UI model separately
+checks that a wheel click dismisses a missing-members popup without accepting
+absences, enabling output, clearing the active warning or starting a save.
+These checks do not emulate AVR interrupt timing or establish hardware response.
 
 The tests compile production configuration, protocol, discovery, controller,
 EEPROM, serial parser, and MCP2515 transmit code with simulated hardware/time.

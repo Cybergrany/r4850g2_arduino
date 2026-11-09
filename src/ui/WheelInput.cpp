@@ -1,7 +1,7 @@
 #include "WheelInput.h"
 #if PSU_ENABLE_ENCODER
 #include "../config/BoardConfig.h"
-#include <ClickEncoder.h>
+#include "../vendor/ClickEncoder/ClickEncoder.h"
 #include <TimerOne.h>
 
 namespace psu {

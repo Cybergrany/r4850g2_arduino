@@ -70,6 +70,18 @@ Reads temporarily use the lower of `displaySpiHz` and `displayReadMaxSpiHz`
 (default cap 1 MHz), then restore the drawing speed even if the ID is wrong.
 This lets drawing run faster without exceeding the stricter read timing.
 
+A missing-members alert has one **Acknowledge** button, so rotating the wheel
+does not change its selection. Release the wheel button, then short-press and
+release to dismiss the notification. This does not accept missing PSUs or enable
+charging; those decisions remain in Tools → Startup. A press already in progress
+when an alert appears is discarded until the button has been released for 50 ms
+and a new press begins.
+
+The wheel uses a [bundled ClickEncoder fix](../src/vendor/ClickEncoder/README.md):
+the old pinned driver's double-decrement bug prevented short clicks when
+double-click recognition was disabled. The standalone GPIO test could pass
+while that library bug left the main UI unable to acknowledge alerts.
+
 Commission the installation using the [serial getting-started guide](GETTING_STARTED.md):
 discover devices, bind stable identities/ratings, and create disjoint groups.
 The UI deliberately does not adopt replacement identities or edit membership.

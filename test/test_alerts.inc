@@ -153,6 +153,24 @@ void thermalQueuedChanges() {
   starting.step(10000); CHECK(starting.current[0]<=600 && starting.c.unitControl(0).fault==CommandState::Idle);
 }
 void alertUiAndSerial() {
+  // A startup missing-members popup has one wheel action. Acknowledge returns
+  // to the overview without accepting absences, enabling output or saving.
+  Rig bench; FakeEeprom benchBytes; MemoryManager benchMemory(benchBytes);
+  CHECK(bench.c.setAutoResume(false)==Result::Ok);
+  UiModel benchUi(bench.c,benchMemory); benchUi.tick(bench.now);
+  bench.c.alerts().acknowledgeAll(); bench.c.alerts().reset(AlertManager::Startup);
+  bench.c.alerts().set(AlertManager::Startup,AlertCode::Missing,++bench.now);
+  const auto revision=bench.c.configurationRevision();
+  const auto accepted=bench.c.acceptedAbsences();
+  benchUi.notifications(bench.now); CHECK(benchUi.page()==UiPage::AlertDetail);
+  benchUi.input({1,false,false},++bench.now);
+  CHECK(benchUi.page()==UiPage::AlertDetail && benchUi.alertSelection()==0);
+  benchUi.input({0,true,false},++bench.now);
+  CHECK(benchUi.page()==UiPage::Groups && bench.c.alerts().at(AlertManager::Startup).acknowledged);
+  CHECK(bench.c.alerts().at(AlertManager::Startup).active && bench.c.alerts().warning());
+  CHECK(bench.c.acceptedAbsences()==accepted && bench.c.configurationRevision()==revision);
+  CHECK(!bench.c.enableControl().enabled() && !benchMemory.saving());
+
   Rig r; FakeEeprom bytes; MemoryManager memory(bytes); UiModel model(r.c,memory); model.tick(r.now);
   model.action({ActionKind::Configure},r.now); model.input({0,true,false},r.now); model.input({1,false,false},r.now);
   const auto edit=model.editValue(); const auto underlying=model.page();
