@@ -64,6 +64,11 @@ not prevent CAN or serial operation. The ID check expects ILI9341 ID `0x9341`;
 connect SDO/MISO. Disable `displayVerifyId` only after verifying a write-only
 module and its wiring: that removes automatic detection of an absent display.
 Display detection happens at boot; reset after connecting/replacing the display.
+The check reads command `0xD3`, byte indices 2/3. Adafruit ILI9341 1.6.3's
+`ILI9341_RDID4` macro is `0xDD`, so it must not be used for this device-code read.
+Reads temporarily use the lower of `displaySpiHz` and `displayReadMaxSpiHz`
+(default cap 1 MHz), then restore the drawing speed even if the ID is wrong.
+This lets drawing run faster without exceeding the stricter read timing.
 
 Commission the installation using the [serial getting-started guide](GETTING_STARTED.md):
 discover devices, bind stable identities/ratings, and create disjoint groups.

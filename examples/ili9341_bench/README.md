@@ -87,6 +87,18 @@ Single-character serial commands work without Enter; CR/LF are ignored:
 If the monitor opens after boot, send `r` to repeat the ID and patterns. No serial
 connection is needed for automatic patterns.
 
+The ID read uses command **`0xD3`**, with byte indices 2/3 expected to return
+`0x93`/`0x41` ([ILI9341 datasheet, section 8.3.23](https://cdn-shop.adafruit.com/datasheets/ILI9341.pdf#page=187)).
+Adafruit ILI9341 1.6.3 defines `ILI9341_RDID4` as `0xDD`; earlier versions of this
+sketch incorrectly used that symbol, so their reported IDs were not a valid
+test of the documented device code. Update the sketch before troubleshooting
+readback. The production display check uses the corrected command too.
+
+ID reads run at the lower of `TFT_SPI_HZ` and `TFT_READ_MAX_SPI_HZ` (default
+1 MHz cap), then restore the drawing clock. The serial report includes the
+read command and clock. This keeps ID reads conservative while testing fast
+drawing; a successful ID read does not validate MISO at the drawing speed.
+
 | Observation | What it establishes |
 | --- | --- |
 | Patterns visible and ID `0x9341` | Basic initialization, display writes and ID reads work independently of the charger application. |

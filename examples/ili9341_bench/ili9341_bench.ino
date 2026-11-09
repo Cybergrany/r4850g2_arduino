@@ -16,6 +16,9 @@ constexpr uint8_t WARNING_OUT = 28;
 constexpr uint8_t ERROR_OUT = 29;
 constexpr uint8_t PSU_ACTIVE = 30;
 constexpr uint32_t TFT_SPI_HZ = 8000000UL;
+constexpr uint32_t TFT_READ_MAX_SPI_HZ = 1000000UL; // Cap reads independently of drawing speed.
+// ILI9341 datasheet section 8.3.23. Adafruit's ILI9341_RDID4 is 0xDD, not 0xD3.
+constexpr uint8_t TFT_READ_ID4 = 0xD3;
 constexpr uint32_t PATTERN_HOLD_MS = 2000UL;
 constexpr uint8_t PATTERN_COUNT = 10;
 
@@ -38,12 +41,17 @@ void printHexByte(uint8_t value) {
 }
 
 void reportId() {
-  const uint8_t high = tft.readcommand8(ILI9341_RDID4, 2);
-  const uint8_t low = tft.readcommand8(ILI9341_RDID4, 3);
+  const uint32_t readHz = TFT_SPI_HZ < TFT_READ_MAX_SPI_HZ ? TFT_SPI_HZ : TFT_READ_MAX_SPI_HZ;
+  tft.setSPISpeed(readHz);
+  const uint8_t high = tft.readcommand8(TFT_READ_ID4, 2);
+  const uint8_t low = tft.readcommand8(TFT_READ_ID4, 3);
+  tft.setSPISpeed(TFT_SPI_HZ);
   Serial.print(F("Display ID = 0x"));
   printHexByte(high);
   printHexByte(low);
-  Serial.println(F("; expected 0x9341. Diagnostic only; drawing is never blocked."));
+  Serial.print(F("; expected 0x9341. Read 0xD3 at "));
+  Serial.print(readHz);
+  Serial.println(F(" Hz. Diagnostic only; drawing is never blocked."));
 }
 
 void pinTestIdle() {

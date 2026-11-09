@@ -5,6 +5,8 @@
 #include <string.h>
 namespace psu {
 namespace {
+// Datasheet section 8.3.23: ID4 is 0xD3. Adafruit's ILI9341_RDID4 names 0xDD.
+constexpr uint8_t readId4Command = 0xd3;
 uint16_t color(uint8_t style) {
   switch (style & 7) {
     case Muted: return 0xadf5;
@@ -24,8 +26,16 @@ bool Ili9341Display::begin() {
   pinMode(board::canChipSelect, OUTPUT); digitalWrite(board::canChipSelect, HIGH);
   if (board::displayBacklight >= 0) { pinMode(board::displayBacklight, OUTPUT); analogWrite(board::displayBacklight, 0); }
   tft_.begin(board::displaySpiHz); tft_.setRotation(board::displayRotation);
-  available_ = !board::displayVerifyId ||
-      (tft_.readcommand8(ILI9341_RDID4, 2) == 0x93 && tft_.readcommand8(ILI9341_RDID4, 3) == 0x41);
+  available_ = true;
+  if (board::displayVerifyId) {
+    const uint32_t readHz = board::displaySpiHz < board::displayReadMaxSpiHz ?
+        board::displaySpiHz : board::displayReadMaxSpiHz;
+    tft_.setSPISpeed(readHz);
+    const uint8_t high = tft_.readcommand8(readId4Command, 2);
+    const uint8_t low = tft_.readcommand8(readId4Command, 3);
+    tft_.setSPISpeed(board::displaySpiHz);
+    available_ = high == 0x93 && low == 0x41;
+  }
   if (!available_) return false;
   // Boot-only full clear, before CAN's receive interrupt exists.
   tft_.fillScreen(0x10c2); previous_.clear(); dim(false); return true;
