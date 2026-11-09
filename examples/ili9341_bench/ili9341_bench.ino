@@ -15,7 +15,7 @@ constexpr uint8_t CHG_ALLOW = 27;
 constexpr uint8_t WARNING_OUT = 28;
 constexpr uint8_t ERROR_OUT = 29;
 constexpr uint8_t PSU_ACTIVE = 30;
-constexpr uint32_t TFT_SPI_HZ = 500000UL;
+constexpr uint32_t TFT_SPI_HZ = 8000000UL;
 constexpr uint32_t TFT_READ_MAX_SPI_HZ = 1000000UL; // Cap reads independently of drawing speed.
 // ILI9341 datasheet section 8.3.23. Adafruit's ILI9341_RDID4 is 0xDD, not 0xD3.
 constexpr uint8_t TFT_READ_ID4 = 0xD3;
