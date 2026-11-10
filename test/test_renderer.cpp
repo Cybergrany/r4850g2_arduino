@@ -10,6 +10,7 @@ std::array<uint16_t,320*240> pixels;
 std::vector<Transfer> transfers;
 uint64_t clockUs=0;
 uint32_t spiHz=0,yields=0,cpuCost=1,wireScale=1;
+uint32_t solidWrites=0,pixelWrites=0;
 void (*afterTransfer)()=nullptr;
 bool open=false;
 }
@@ -56,6 +57,48 @@ void changeDuringTransfer() {
   interruptedFrame->cell(0,{'Z',Accent}); interruptedFrame->largeNumber(8,"-0.5",Warning);
   interruptedDisplay->invalidate(); raster::afterTransfer=nullptr;
 }
+void area(UiFrame& f,uint8_t row,uint8_t col,uint8_t width,uint8_t height,uint8_t style) {
+  for(uint8_t y=row;y<row+height;++y) f.text(y,col,width,y==row?"Settings":"",style);
+}
+void highlightMovement() {
+  for(unsigned mode=0;mode<3;++mode) {
+    Ili9341Display d; UiFrame f; f.clear(); CHECK(d.begin());
+    // Production group tiles: 8 x 12 cells. Charger selection: 26 x 5.
+    // Tools buttons retain their fill and change the selected text colour.
+    const uint8_t width=mode==0?8:mode==1?26:12,height=mode==0?12:mode==1?5:2;
+    const uint8_t secondRow=mode==1?8:2,secondCol=mode==1?0:mode==0?9:14;
+    area(f,2,0,width,height,selectedStyle|Accent);
+    area(f,secondRow,secondCol,width,height,mode==2?selectedStyle|Text:Accent);
+    d.invalidate(); finish(d,f);
+    const auto before=raster::transfers.size(); const auto solid=raster::solidWrites;
+    area(f,2,0,width,height,mode==2?selectedStyle|Text:Accent);
+    area(f,secondRow,secondCol,width,height,selectedStyle|Accent);
+    d.invalidate(true); unsigned calls=0;
+    while(d.pending() && calls<10000) { step(d,f); ++calls; }
+    CHECK(!d.pending()); imageMatches(f);
+    if(mode<2) {
+      CHECK(raster::transfers.size()-before==2U*width*height*16/ui::burstRows(board::displaySpiHz));
+      CHECK(raster::solidWrites-solid>2U*width*(height-1)*16/ui::burstRows(board::displaySpiHz));
+    }
+    const auto change=d.statistics().changeMs;
+    CHECK(change && d.statistics().changeMaxMs==change);
+    // A later unchanged telemetry pass must preserve the input-scene time and
+    // need only one service call with this synthetic comparison CPU model.
+    const auto unchanged=raster::transfers.size(); raster::clockUs+=500000;
+    d.invalidate(); step(d,f); CHECK(!d.pending());
+    CHECK(raster::transfers.size()==unchanged && d.statistics().changeMs==change);
+    std::cout<<board::displaySpiHz<<" Hz "<<(mode==0?"group":mode==1?"charger":"Tools")
+      <<" move transfers="<<raster::transfers.size()-before<<" calls="<<calls<<" change="<<change<<" ms (synthetic SPI only)\n";
+    // Rapid full-highlight reversals can interrupt a solid strip or a glyph.
+    for(unsigned i=0;i<16;++i) {
+      area(f,2,0,width,height,i%2?Accent:selectedStyle|Accent);
+      area(f,secondRow,secondCol,width,height,i%2?selectedStyle|Accent:Accent);
+      d.invalidate(true); step(d,f);
+    }
+    finish(d,f);
+    d.resetStatistics(); CHECK(!d.statistics().changeMaxMs && !d.statistics().renderMaxUs);
+  }
+}
 void run() {
   Ili9341Display display; UiFrame frame; frame.clear(); CHECK(display.begin());
   display.invalidate(); finish(display,frame); CHECK(raster::transfers.empty());
@@ -98,5 +141,9 @@ void run() {
   CHECK(display.statistics().sceneMs<1000);
   raster::wireScale=20; frame.text(0,0,26,"Slow transaction",selectedStyle|Good); display.invalidate(); finish(display,frame);
   CHECK(display.statistics().renderMaxUs>ui::renderBudgetUs && display.statistics().transactionMaxUs>ui::renderBudgetUs);
+  raster::wireScale=1;
+  // Costly preparation must yield but never keep discarding the first strip.
+  raster::cpuCost=250; frame.text(0,0,26,"Prepared work",selectedStyle|Good);
+  display.invalidate(true); finish(display,frame); raster::cpuCost=1;
 }
-int main() { try { run(); } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }
+int main() { try { run(); highlightMovement(); } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

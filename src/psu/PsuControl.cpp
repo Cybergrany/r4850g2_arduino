@@ -19,14 +19,13 @@ Issue PsuController::routingIssue(uint8_t i, uint32_t now) const {
   if (config_.deploymentId != deployment::id) return Issue::DeploymentMismatch;
   if (i >= count()) return Issue::Invalid;
   if (!identified(config_.units[i].identity)) return Issue::Unbound;
-  for (uint8_t j = 0; j < Discovery::capacity; ++j) {
-    const auto& d = discovery_.device(j);
-    if (d.conflict && d.fresh(now, limits::identityLeaseMs) && sameIdentity(d.identity, config_.units[i].identity))
-      return Issue::Conflict;
-  }
-  const auto* d = deviceForSlot(i, now);
-  if (!d || !d->fresh(now, staleMs())) return Issue::Missing;
-  return d->verified(now) ? Issue::None : Issue::IdentityPending;
+  const int8_t index = routeIndex(i, now);
+  if (index == -2) return Issue::Conflict;
+  if (index < 0) return Issue::Missing;
+  const auto& d = discovery_.device(index);
+  if (d.conflict) return Issue::Conflict;
+  if (!d.fresh(now, staleMs())) return Issue::Missing;
+  return d.verified(now) ? Issue::None : Issue::IdentityPending;
 }
 void PsuController::cancelJob() {
   if (busy()) {

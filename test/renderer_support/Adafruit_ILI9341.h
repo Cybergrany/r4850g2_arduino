@@ -9,6 +9,7 @@ extern std::array<uint16_t,320*240> pixels;
 extern std::vector<Transfer> transfers;
 extern uint64_t clockUs;
 extern uint32_t spiHz, yields, cpuCost, wireScale;
+extern uint32_t solidWrites, pixelWrites;
 extern void (*afterTransfer)();
 extern bool open;
 }
@@ -27,6 +28,16 @@ class Adafruit_ILI9341 {
   void startWrite() { assert(!raster::open); raster::open=true; }
   void setAddrWindow(uint16_t x,uint16_t y,uint16_t w,uint16_t h) { assert(raster::open); current_={x,y,w,h,0}; }
   void writePixels(uint16_t* data,uint32_t count) {
+    ++raster::pixelWrites; transfer(data,count);
+  }
+  void writeColor(uint16_t color,uint32_t count) {
+    ++raster::solidWrites; assert(count<=48);
+    uint16_t data[48]; for(uint32_t i=0;i<count;++i) data[i]=color;
+    transfer(data,count);
+  }
+  void endWrite() { assert(raster::open); raster::open=false; raster::transfers.push_back(current_); ++raster::yields; if(raster::afterTransfer) raster::afterTransfer(); }
+ private:
+  void transfer(const uint16_t* data,uint32_t count) {
     assert(raster::open && count==uint32_t(current_.w)*current_.h);
     assert(current_.x+current_.w<=320 && current_.y+current_.h<=240);
     for(uint16_t y=0;y<current_.h;++y) for(uint16_t x=0;x<current_.w;++x)
@@ -34,7 +45,5 @@ class Adafruit_ILI9341 {
     current_.us=((uint64_t(count)*2+11)*8000000+raster::spiHz-1)/raster::spiHz*raster::wireScale;
     raster::clockUs+=current_.us;
   }
-  void endWrite() { assert(raster::open); raster::open=false; raster::transfers.push_back(current_); ++raster::yields; if(raster::afterTransfer) raster::afterTransfer(); }
- private:
   raster::Transfer current_={};
 };

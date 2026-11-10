@@ -537,6 +537,7 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `hello`, `help`, `help diagnostics` | Console recovery greeting and help |
 | `discover`, `diag bus` | Read-only sweep and responder/address/identity diagnostics |
 | `diag group NAME`, `diag psu N` | Group/member readiness, freshness, requested/authorized settings, failures |
+| `diag ui`, `diag ui reset` | Display clocks, render/SPI/scene/change timings and main-loop phase maxima; reset timings without changing operation |
 | `config`, `groups` | Deployment, global drafts, operating voltage, groups, bindings, ratings |
 | `count N` | Set configured slot count, 1–9; cannot shrink through existing membership |
 | `bind N ID RATING`, `adopt N ID RATING` | Explicit identity binding/replacement; rating in amps |
@@ -561,6 +562,13 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `fan all/GROUP/slots auto/max/policy` | Immediate fan override; AUTO requires OFF/confirmed zero hold; policy restores normal rules |
 
 ## Checking scheduling under load
+
+For display latency, first let the current page finish, then use `diag ui reset`,
+move one highlight, and read `diag ui`. `change-ms` retains the latest/maximum
+completed nonperiodic change even after the next telemetry refresh. The
+`phase-us control/storage/serial/ui` maxima help locate time spent outside
+drawing. Timing includes interrupts; use a video for the complete physical
+input-to-highlight delay. See the [bench comparison](VALIDATION.md#ui-redraw-bench-comparison).
 
 Run `diag bus` before and after exercising page changes, wheel edits, `watch on`,
 brief `raw on`, `poll all`, and a controller `save`, with all intended PSUs on:

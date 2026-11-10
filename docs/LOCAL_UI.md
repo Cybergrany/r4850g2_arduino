@@ -215,20 +215,36 @@ is two rows; at lower clocks, one row. A service call checks a **750 us cooperat
 budget** between work units, with a ceiling of eight transfers above 2 MHz and
 two at 2 MHz or below. At 500 kHz the conservative one-row/two-transfer limit
 remains. Pixel preparation happens before opening SPI, and every transaction
-ends before another strip, so CAN reception can run between them. The budget
-can overrun by a work unit or interrupt; it is not a hard real-time guarantee.
+ends before another strip, so CAN reception can run between them. Uniform strips
+use a solid-colour write without constructing individual pixels; filled blank
+cells also skip glyph expansion. The first prepared strip may finish after the
+budget expires so expensive preparation cannot prevent all progress. The budget
+can overrun by a bounded work unit or interrupt; it is not a hard real-time guarantee.
 
 There is no pixel framebuffer or extra scene buffer. Cells are recorded as
 painted only after all necessary strips complete; changing a scene mid-glyph
-schedules a complete new comparison pass. Each call compares at most 32 cells;
-completed scenes require no idle scanning. Input still composes immediately and
-live readings refresh every 500 ms. Touch targets on new pages arm only after
+schedules a complete new comparison pass. Comparison proceeds in batches of
+eight cells, checking elapsed time between batches instead of stopping after
+32 cells regardless of time remaining. Completed scenes require no idle scanning.
+Input still composes immediately and live readings refresh every 500 ms.
+Touch targets on new pages arm only after
 drawing finishes. Initialization and its full clear happen before CAN reception.
 
-Use `diag ui` to inspect drawing/read clocks, maximum render-call duration,
-maximum SPI-transaction duration, and latest/maximum completed-scene time since
-boot. Pair it with `diag bus` while scrolling. The drawing clock remains 8 MHz
-and display reads remain capped at 1 MHz. `PSU_DISPLAY_SPI_HZ` permits the slower
+Use `diag ui` to inspect:
+
+- `render-max-us` / `SPI-max-us`: maximum render-call / transaction duration.
+- `scene-ms(last/max)`: latest and maximum completed-scene duration.
+- `change-ms`: latest/maximum completed nonperiodic change (input, navigation,
+  alerts or results). Periodic telemetry refreshes do not overwrite this pair.
+- `phase-us control/storage/serial/ui`: maximum duration of each main-loop
+  phase: control/I/O, storage/protection, serial, and UI composition/drawing.
+
+All durations include interrupts. Scene/change timing starts after composition
+and includes time between render calls, not the earlier physical input delay.
+`diag ui reset` clears display and phase timings; it leaves pending drawing,
+configuration and CAN counters alone. Let a page finish before resetting, then
+move one highlight and capture `diag ui` plus `diag bus`. The drawing clock
+remains 8 MHz and display reads remain capped at 1 MHz. `PSU_DISPLAY_SPI_HZ` permits the slower
 supported clocks for testing; it does not alter CAN speed. See the
 [loaded bench comparison](VALIDATION.md#ui-redraw-bench-comparison).
 

@@ -54,6 +54,14 @@ Address changes, identity changes, stale-to-live transitions and conflicts
 invalidate epochs. Slots retain their config when count shrinks; existing group
 membership must first be edited to permit shrinking.
 
+Repeated slot queries share an identity-to-discovery-index cache for the same
+timestamp and discovery revision. A configuration change clears it immediately;
+another timestamp, identity/address epoch, conflict or negotiation invalidates
+it. Missing and ambiguous results are cached under the same rules. Telemetry,
+freshness, readiness, authorization and queued-write validation are never cached:
+callers read the current device and apply their existing guards. Discovery still
+checks expiry and conflicts every tick, comparing each fresh identity pair once.
+
 `Deployment.h` is the installation definition file. Its unique ID prevents
 EEPROM from a previous installation authorizing control after firmware is moved.
 The compiled group/binding template starts with no operating authorization or
@@ -235,6 +243,9 @@ queue; it performs no printing. Trace overflow drops diagnostic entries and
 warns the operator, leaving the controller's ACK/state processing intact. The
 console reports trace drops separately from CAN receive drops. Custom Stream
 adapters must implement `availableForWrite()`; the Mega HardwareSerial does.
+Unsolicited control/availability status is sampled every 100 ms instead of
+recomputing all members on every idle loop. Commands, ACK processing, alert
+broadcasts and the protective state machines retain their existing scheduling.
 
 The local UI is separated into `UiModel` (navigation, editing, confirmations and
 operation ownership), `UiView` (320x240 layout), `UiFrame` (585-byte text/style
@@ -258,17 +269,30 @@ Runtime drawing retains 8 MHz with a separate 1 MHz read cap. The renderer uses
 visible RGB565 row comparisons, ignores blank foreground changes and batches
 up to four changed scanlines per SPI transaction at 8 MHz, two at 4 MHz, one
 below. It prepares each strip before starting SPI and closes every transaction
-before continuing. A 750 us cooperative service budget bounds repeated work,
+before continuing. Uniform strips use the driver's solid-colour writer; blank
+filled cells skip glyph expansion. A 750 us cooperative service budget bounds repeated work,
 with eight transfers maximum above 2 MHz, two at 2 MHz/below. Interrupts and one
 work unit can overrun the budget; `diag ui` reports observed maximum durations.
+Once a first strip is prepared, it may finish even if preparation consumed the
+budget, avoiding repeated discard of the same work. Subsequent strips yield.
 At 500 kHz the fallback remains one 12-pixel row and at most two transfers.
 
-`Display::invalidate()` schedules a comparison pass. `FrameChanges` scans at
-most 32 cells per loop, with no idle scanning. Completed cells alone enter the
-painted cache; invalidation during a partial glyph retains a full new pass.
+`Display::invalidate()` schedules a comparison pass. `FrameChanges` compares
+cells in batches of eight with a time-budget check between batches, removing
+the old 32-cell-per-loop cap. Completed scenes require no idle scanning. A cell
+enters the painted cache only when complete; invalidation during a partial glyph
+retains a full new pass.
 The production rasterizer is tested against an independent pixel image and
 recorded SPI boundaries at five clocks. Missing display ID disables local
 controls while serial/CAN remain available. The boot clear runs before CAN RX.
+
+Nonperiodic invalidations (input, navigation, alerts/results) retain separate
+completed-change timing so a later telemetry-only comparison cannot overwrite
+it. Timing starts after composition and includes the gaps between render calls;
+it does not measure the entire input-to-pixel delay. Application also records
+maximum control/I/O, storage/protection, serial and UI phase durations when both
+serial and display are built. `diag ui reset` clears these timing maxima without
+resetting CAN counters or interrupting drawing. Durations include interrupts.
 
 `UiRecovery` resolves both incidents and operation results to current backend
 state. A single bounded bookmark retains the interrupted editor/page and alert.

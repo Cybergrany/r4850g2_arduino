@@ -10,14 +10,20 @@ Psu* Discovery::address(uint8_t a) {
   for (auto& d : devices_) if (d.occupied && d.address == a) return &d;
   return nullptr;
 }
-const Psu* Discovery::identity(const Identity& id, uint32_t now) const {
-  if (!identified(id)) return nullptr;
-  const Psu* found = nullptr;
-  for (const auto& d : devices_) if (d.fresh(now, limits::identityLeaseMs) && sameIdentity(id, d.identity)) {
-    if (found) return nullptr; // Same identity at two live addresses is ambiguous.
-    found = &d;
+int8_t Discovery::identityIndex(const Identity& id, uint32_t now) const {
+  if (!identified(id)) return -1;
+  int8_t found = -1;
+  for (uint8_t i = 0; i < capacity; ++i) {
+    const auto& d = devices_[i];
+    if (!d.fresh(now, limits::identityLeaseMs) || !sameIdentity(id, d.identity)) continue;
+    if (found >= 0) return -2; // Never choose one of two live copies.
+    found = i;
   }
   return found;
+}
+const Psu* Discovery::identity(const Identity& id, uint32_t now) const {
+  const int8_t index = identityIndex(id, now);
+  return index < 0 ? nullptr : &devices_[index];
 }
 void Discovery::receive(const CanFrame& f, uint32_t now) {
   if (protocol::isNegotiation(f)) {
@@ -63,7 +69,18 @@ void Discovery::tick(uint32_t now, uint32_t staleMs) {
   if (negotiating_ && uint32_t(now - lastNegotiation_) >= control::availabilitySettleMs) {
     negotiating_ = false; ++revision_;
   }
-  for (auto& d : devices_) {
+  // Compute each pair once. No route/telemetry is cached here: expiry and
+  // duplicate detection still run on every tick, including timer rollover.
+  uint16_t freshIdentities = 0, conflicts = 0;
+  static_assert(capacity <= 16, "Discovery pair masks must fit");
+  for (uint8_t i = 0; i < capacity; ++i)
+    if (devices_[i].fresh(now, limits::identityLeaseMs) && identified(devices_[i].identity)) freshIdentities |= uint16_t(1) << i;
+  for (uint8_t i = 0; i < capacity; ++i) if (freshIdentities & (uint16_t(1) << i))
+    for (uint8_t j = i + 1; j < capacity; ++j)
+      if ((freshIdentities & (uint16_t(1) << j)) && sameIdentity(devices_[i].identity, devices_[j].identity))
+        conflicts |= (uint16_t(1) << i) | (uint16_t(1) << j);
+  for (uint8_t i = 0; i < capacity; ++i) {
+    auto& d = devices_[i];
     if (!d.occupied) continue;
     // Expire freshness permanently until that field is received again. Keeping
     // only a timestamp would let a months-old value revive after millis wraps.
@@ -71,10 +88,7 @@ void Discovery::tick(uint32_t now, uint32_t staleMs) {
       if (uint32_t(now - d.telemetry.updated[m]) > staleMs) d.telemetry.freshMask &= uint16_t(~(1U << m));
     if (d.telemetry.alarmSeen && uint32_t(now - d.telemetry.lastAlarm) > staleMs) d.telemetry.alarmSeen = false;
     const bool live = d.fresh(now, staleMs);
-    bool conflict = false;
-    for (const auto& other : devices_)
-      if (&d != &other && d.fresh(now, limits::identityLeaseMs) && other.fresh(now, limits::identityLeaseMs) &&
-          identified(d.identity) && sameIdentity(d.identity, other.identity)) conflict = true;
+    const bool conflict = conflicts & (uint16_t(1) << i);
     if (d.live != live || d.conflict != conflict) {
       d.live = live; d.conflict = conflict; d.epoch = ++revision_;
       if (!live) { d.identitySamples = 0; d.telemetry.dataSeen = false; }

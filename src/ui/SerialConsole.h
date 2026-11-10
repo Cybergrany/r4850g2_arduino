@@ -30,6 +30,7 @@ class SerialConsole {
   uint16_t previousAlertSources_ = 0, pendingAlertSources_ = 0;
   uint32_t lastAlertBroadcast_ = 0, alertInterval_ = console::alertIntervalMs;
   uint16_t controlNotice_ = 0xffff;
+  uint32_t lastStatus_ = 0;
   void execute();
   void resetSession();
   void beginOutput();

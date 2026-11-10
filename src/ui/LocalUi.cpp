@@ -104,7 +104,7 @@ void LocalUi::tick(uint32_t now) {
 #if PSU_ENABLE_TOUCH
     drawTouch();
 #endif
-    display_.invalidate(); lastDraw_=now; dirty_=false;
+    display_.invalidate(dirty_); lastDraw_=now; dirty_=false;
   }
   display_.service(frame_);
   if (!display_.pending()) pageReady_=true;
@@ -192,13 +192,18 @@ void LocalUi::drawTouch() {
 }
 #endif
 bool LocalUi::command(uint8_t n,char** a,Print& out,uint32_t now) {
+  if (n == 3 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui") && !PSU_STRCMP(a[2], "reset")) {
+    display_.resetStatistics(); out.println(F("UI timing maxima reset; pending drawing continues.")); return true;
+  }
   if (n == 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
     const auto s = display_.statistics();
     out.print(F("UI available=")); out.print(available_); out.print(F(" draw-Hz=")); out.print(board::displaySpiHz);
-    out.print(F(" read-max-Hz=")); out.println(board::displayReadMaxSpiHz);
+    out.print(F(" read-Hz<=")); out.println(board::displayReadMaxSpiHz);
     out.print(F("render-max-us=")); out.print(s.renderMaxUs); out.print(F(" SPI-max-us=")); out.print(s.transactionMaxUs);
-    out.print(F(" scene-ms=")); out.print(s.sceneMs); out.print(F(" scene-max-ms=")); out.println(s.sceneMaxMs);
-    out.println(F("750us cooperative budget; one work unit/interrupt can overrun. Compare diag bus.")); return true;
+    out.println();
+    out.print(F("scene-ms(last/max)=")); out.print(s.sceneMs); out.print('/'); out.print(s.sceneMaxMs);
+    out.print(F(" change-ms=")); out.print(s.changeMs); out.print('/'); out.println(s.changeMaxMs);
+    return true;
   }
   if (PSU_STRCMP(a[0], "touch")) return false;
 #if PSU_ENABLE_TOUCH

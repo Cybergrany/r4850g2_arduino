@@ -24,7 +24,7 @@ Ili9341Display::Ili9341Display() {}
 bool Ili9341Display::begin() { available_=true; return true; }
 bool Ili9341Display::canDim() const { return false; }
 void Ili9341Display::dim(bool) {}
-void Ili9341Display::invalidate() { changes_.invalidate(); }
+void Ili9341Display::invalidate(bool) { changes_.invalidate(); }
 void Ili9341Display::service(const UiFrame& frame) {
   appFrame=frame; uint8_t budget=255; uint16_t index; UiCell cell;
   while(changes_.next(frame,previous_,budget,index,cell)) previous_.cell(index,cell);
@@ -141,12 +141,15 @@ void snapshot(const char* name,const UiFrame& frame) {
 }
 struct FakeDisplay : Display {
   UiFrame shown; uint8_t remaining=0; bool dimmed=false;
+  DisplayStats timers;
   bool begin() override { return true; }
-  void invalidate() override { remaining=3; }
+  void invalidate(bool = false) override { remaining=3; }
   bool pending() const override { return remaining!=0; }
   void service(const UiFrame& f) override { shown=f; if(remaining) --remaining; }
   bool canDim() const override { return true; }
   void dim(bool value) override { dimmed=value; }
+  DisplayStats statistics() const override { return timers; }
+  void resetStatistics() override { timers={}; }
 };
 void layoutAndLocalUi() {
   Rig r; r.ready(); UiModel model(r.controller,r.memory); model.tick(clockNow); UiFrame frame;
@@ -323,13 +326,20 @@ void touchRecoveryWorkflow() {
   tap(200,216); tap(240,216); tick(400);
   CHECK(hasText(display.shown,"Saved and verified") && !r.controller.enableControl().enabled());
   snapshot("touch-recovery-saved",display.shown);
-  // The UI's diag extension is bounded, reports tested clocks and explicitly
-  // describes the cooperative budget. Serial status does not change navigation.
+  // The UI's diag extension is bounded and separates event/telemetry timing.
+  // Serial status and resetting counters do not change navigation.
   struct Capture: Print { std::string value; size_t write(uint8_t b) override { value+=char(b); return 1; } } out;
   char diag[]="diag", page[]="ui"; char* args[]={diag,page};
+  display.timers.renderMaxUs=display.timers.transactionMaxUs=UINT32_MAX;
+  display.timers.sceneMs=display.timers.sceneMaxMs=display.timers.changeMs=display.timers.changeMaxMs=UINT32_MAX;
   CHECK(ui.command(2,args,out,clockNow));
-  CHECK(out.value.find("draw-Hz=8000000")!=std::string::npos && out.value.find("cooperative")!=std::string::npos);
-  CHECK(out.value.size()<256);
+  CHECK(out.value.find("draw-Hz=8000000")!=std::string::npos && out.value.find("scene-ms(last/max)")!=std::string::npos);
+  CHECK(out.value.find("change-ms=")!=std::string::npos);
+  CHECK(out.value.size()+std::strlen("phase-us control/storage/serial/ui=4294967295/4294967295/4294967295/4294967295\r\n> ")<=console::outputReserveBytes);
+  char reset[]="reset"; char* resetArgs[]={diag,page,reset};
+  out.value.clear(); CHECK(ui.command(3,resetArgs,out,clockNow));
+  CHECK(out.value.find("pending drawing continues")!=std::string::npos && hasText(display.shown,"Saved and verified"));
+  CHECK(!display.timers.renderMaxUs && !display.timers.changeMs);
 }
 
 void ninthTouchSelection() {
@@ -478,6 +488,16 @@ void applicationScenarios() {
   command("startup stop"); tick(10); command("autoresume on"); tick(200);
   command("diag startup"); tick(150); CHECK(Serial.output.find("LOW fault latched")!=std::string::npos);
   CHECK(Serial.output.find("ERR console output truncated")==std::string::npos);
+  // Exercise diagnostics through the real Application/console hook, including
+  // the phase counters that LocalUi alone cannot report. Reset is read-only
+  // with respect to the existing latched cutoff and enable decision.
+  command("diag ui");
+  CHECK(Serial.output.find("scene-ms(last/max)=")!=std::string::npos);
+  CHECK(Serial.output.find("change-ms=")!=std::string::npos);
+  CHECK(Serial.output.find("phase-us control/storage/serial/ui=")!=std::string::npos);
+  CHECK(Serial.output.find("ERR console output truncated")==std::string::npos);
+  command("diag ui reset"); CHECK(Serial.output.find("UI timing maxima reset")!=std::string::npos);
+  command("diag startup"); tick(150); CHECK(Serial.output.find("LOW fault latched")!=std::string::npos);
 }
 
 }

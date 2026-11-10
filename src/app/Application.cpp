@@ -6,6 +6,15 @@
 #include <stdlib.h>
 
 namespace psu {
+#if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
+namespace {
+void phaseTime(uint32_t& maximum, uint32_t& started) {
+  const uint32_t now = micros(), elapsed = now - started;
+  if (elapsed > maximum) maximum = elapsed;
+  started = now;
+}
+}
+#endif
 Application::Application() : controller_(can_), memory_(eeprom_)
 #if PSU_ENABLE_SERIAL
   , console_(Serial, controller_, memory_)
@@ -63,6 +72,9 @@ void Application::begin() {
 }
 void Application::tick() {
   const uint32_t started = micros();
+#if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
+  uint32_t phaseStarted = started;
+#endif
   // Receive/process CAN before optional producers. Storage has one owner and
   // advances only when EEPROM is ready, including serial-only builds.
 #if PSU_UI_DEBUG
@@ -86,17 +98,29 @@ void Application::tick() {
   const uint32_t fanNow = millis();
   if (fanOutput_.due(fanNow)) fanOutput_.write(controller_.externalFanStatus(fanNow).duty);
 #endif
+#if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
+  phaseTime(phaseMaxUs_[0], phaseStarted);
+#endif
   controller_.serviceProtection(memory_, millis());
   memory_.stepSave();
 #if PSU_ENABLE_DISPLAY
   localUi_.storageTick();
 #endif
   controller_.serviceProtection(memory_, millis());
+#if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
+  phaseTime(phaseMaxUs_[1], phaseStarted);
+#endif
 #if PSU_ENABLE_SERIAL
   console_.tick(millis());
+#if PSU_ENABLE_DISPLAY
+  phaseTime(phaseMaxUs_[2], phaseStarted);
+#endif
 #endif
 #if PSU_ENABLE_DISPLAY
   localUi_.tick(millis());
+#if PSU_ENABLE_SERIAL
+  phaseTime(phaseMaxUs_[3], phaseStarted);
+#endif
 #if PSU_UI_DEBUG
   const auto request = localUi_.takeRequest();
   if (request.kind != ActionKind::None) debugRequest_ = request;
@@ -188,7 +212,17 @@ void Application::debugTick(uint32_t now) {
 bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t now) {
   auto& app=*static_cast<Application*>(context); (void)app; (void)now;
 #if PSU_ENABLE_DISPLAY
-  if (app.localUi_.command(n,a,out,now)) return true;
+  if (app.localUi_.command(n,a,out,now)) {
+    if (n >= 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
+      if (n == 3) memset(app.phaseMaxUs_, 0, sizeof(app.phaseMaxUs_));
+      else {
+        out.print(F("phase-us control/storage/serial/ui="));
+        for (uint8_t i = 0; i < 4; ++i) { if (i) out.print('/'); out.print(app.phaseMaxUs_[i]); }
+        out.println();
+      }
+    }
+    return true;
+  }
 #else
   if (n == 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
     out.println(F("UI disabled in this build")); return true;

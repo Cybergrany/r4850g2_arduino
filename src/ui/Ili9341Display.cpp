@@ -45,8 +45,11 @@ bool Ili9341Display::canDim() const { return board::displayBacklight >= 0 && ui:
 void Ili9341Display::dim(bool dimmed) {
   if (board::displayBacklight >= 0) analogWrite(board::displayBacklight, dimmed ? ui::dimBrightness : ui::fullBrightness);
 }
-void Ili9341Display::invalidate() {
-  changes_.invalidate(); sceneStarted_ = millis();
+void Ili9341Display::invalidate(bool change) {
+  // A newer user action supersedes the old scene. A periodic update during
+  // painting keeps the original timer and cannot erase its input provenance.
+  if (change || !pending()) { sceneStarted_ = millis(); changeScene_ = change; }
+  changes_.invalidate();
 }
 void Ili9341Display::Glyph::prepare(char c) {
   memset(rows, 0, sizeof(rows));
@@ -77,30 +80,36 @@ void Ili9341Display::Glyph::prepare(char c) {
 void Ili9341Display::service(const UiFrame& frame) {
   if (!available_ || !pending()) return;
   const uint32_t started = micros();
-  uint8_t searchBudget = ui::scanCellsPerTick, transfers = 0;
+  uint8_t transfers = 0;
   while (transfers < ui::burstsPerTick(board::displaySpiHz) && uint32_t(micros() - started) < ui::renderBudgetUs) {
     if (scanRow_ == ui::cellHeight) {
-      if (!changes_.next(frame, previous_, searchBudget, activeIndex_, active_)) break;
+      uint8_t searchBudget = ui::scanCellsPerBatch;
+      if (!changes_.next(frame, previous_, searchBudget, activeIndex_, active_)) {
+        if (!changes_.pending()) break;
+        continue; // Recheck the time budget between bounded comparison batches.
+      }
       const auto old = previous_.cell(activeIndex_);
       const uint16_t bg = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
       const uint16_t oldBg = old.style & selectedStyle ? 0x21e5 : 0x10c2;
       // Foreground styles cannot affect an empty cell. Still commit metadata so
       // the next invalidation does not rediscover the same invisible difference.
-      if (old.character == ' ' && active_.character == ' ' && bg == oldBg) {
-        previous_.cell(activeIndex_, active_); continue;
-      }
-      glyph_.prepare(active_.character);
-      Glyph previousGlyph;
-      if (old.character == active_.character) memcpy(previousGlyph.rows, glyph_.rows, sizeof(glyph_.rows));
-      else previousGlyph.prepare(old.character);
-      dirtyRows_ = 0;
-      const uint16_t fg = color(active_.style), oldFg = color(old.style);
-      for (uint8_t y = 0; y < ui::cellHeight; ++y) {
-        const uint16_t a = glyph_.rows[y], b = previousGlyph.rows[y];
-        // Four pixel classes: foreground on both, background on both, and
-        // the two glyph edges. Compare RGB565 values, not style metadata.
-        if ((fg != oldFg && (a & b)) || (bg != oldBg && (~(a | b) & 0x0fff)) ||
-            (fg != oldBg && (a & ~b)) || (bg != oldFg && (b & ~a))) dirtyRows_ |= uint16_t(1U << y);
+      if (old.character == ' ' && active_.character == ' ') {
+        if (bg == oldBg) { previous_.cell(activeIndex_, active_); continue; }
+        dirtyRows_ = 0xffff; // Filled blank: no glyph expansion or pixel raster.
+      } else {
+        glyph_.prepare(active_.character);
+        Glyph previousGlyph;
+        if (old.character == active_.character) memcpy(previousGlyph.rows, glyph_.rows, sizeof(glyph_.rows));
+        else previousGlyph.prepare(old.character);
+        dirtyRows_ = 0;
+        const uint16_t fg = color(active_.style), oldFg = color(old.style);
+        for (uint8_t y = 0; y < ui::cellHeight; ++y) {
+          const uint16_t a = glyph_.rows[y], b = previousGlyph.rows[y];
+          // Four pixel classes: foreground on both, background on both, and
+          // the two glyph edges. Compare RGB565 values, not style metadata.
+          if ((fg != oldFg && (a & b)) || (bg != oldBg && (~(a | b) & 0x0fff)) ||
+              (fg != oldBg && (a & ~b)) || (bg != oldFg && (b & ~a))) dirtyRows_ |= uint16_t(1U << y);
+        }
       }
       scanRow_ = 0;
       // Raster comparison is also a work unit. Do not start an SPI burst if it
@@ -114,18 +123,29 @@ void Ili9341Display::service(const UiFrame& frame) {
         (dirtyRows_ & (1U << (scanRow_ + rows)))) ++rows;
     uint16_t pixels[ui::cellWidth * ui::burstRows(board::displaySpiHz)];
     const uint16_t fg = color(active_.style), bg = active_.style & selectedStyle ? 0x21e5 : 0x10c2;
-    for (uint8_t y = 0; y < rows; ++y) {
-      uint16_t bits = glyph_.rows[scanRow_ + y];
-      for (uint8_t x = 0; x < ui::cellWidth; ++x, bits >>= 1)
-        pixels[y * ui::cellWidth + x] = bits & 1 ? fg : bg;
+    const uint16_t first = active_.character == ' ' ? 0 : glyph_.rows[scanRow_];
+    bool solid = first == 0 || first == 0x0fff;
+    if (active_.character != ' ')
+      for (uint8_t y = 1; solid && y < rows; ++y) solid = glyph_.rows[scanRow_ + y] == first;
+    if (!solid) {
+      for (uint8_t y = 0; y < rows; ++y) {
+        uint16_t bits = glyph_.rows[scanRow_ + y];
+        for (uint8_t x = 0; x < ui::cellWidth; ++x, bits >>= 1)
+          pixels[y * ui::cellWidth + x] = bits & 1 ? fg : bg;
+      }
     }
-    if (uint32_t(micros() - started) >= ui::renderBudgetUs) break;
+    // Finish at least one prepared strip per call. Otherwise an expensive
+    // raster/interrupt before this check could discard it on every pass.
+    // The one bounded strip may overrun; subsequent strips respect the budget.
+    if (uint32_t(micros() - started) >= ui::renderBudgetUs && transfers) break;
     // CAN's registered RX interrupt is masked only inside this bounded burst.
     const uint32_t transaction = micros();
     tft_.startWrite();
     tft_.setAddrWindow(4 + activeIndex_ % ui::columns * ui::cellWidth,
                       activeIndex_ / ui::columns * ui::cellHeight + scanRow_, ui::cellWidth, rows);
-    tft_.writePixels(pixels, ui::cellWidth * rows); tft_.endWrite();
+    if (solid) tft_.writeColor(first ? fg : bg, ui::cellWidth * rows);
+    else tft_.writePixels(pixels, ui::cellWidth * rows);
+    tft_.endWrite();
     const uint32_t transactionUs = micros() - transaction;
     if (transactionUs > stats_.transactionMaxUs) stats_.transactionMaxUs = transactionUs;
     ++transfers; scanRow_ += rows;
@@ -139,6 +159,11 @@ void Ili9341Display::service(const UiFrame& frame) {
   if (!pending()) {
     stats_.sceneMs = millis() - sceneStarted_;
     if (stats_.sceneMs > stats_.sceneMaxMs) stats_.sceneMaxMs = stats_.sceneMs;
+    if (changeScene_) {
+      stats_.changeMs = stats_.sceneMs;
+      if (stats_.changeMs > stats_.changeMaxMs) stats_.changeMaxMs = stats_.changeMs;
+      changeScene_ = false;
+    }
   }
 }
 static_assert(ui::columns * ui::cellWidth + 8 == 320 && ui::rows * ui::cellHeight == 240, "ILI9341 landscape layout");

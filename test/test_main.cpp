@@ -1750,9 +1750,11 @@ void uiLayouts() {
 #include "test_psu_active.inc"
 #include "test_ui_recovery.inc"
 #include "test_nine_units.inc"
+#include "test_route_cache.inc"
 }
 int main() {
   try {
+    routeCacheLifecycle(); idleSerialStatusCadence();
     nineUnitMigration(); ninthProtectionAndControl(); ninthAvailabilityAndRouting(); ninthSerialAndUi();
     decimalFormatting(); uiRecoveryAvailability(); uiRecoveryGuards(); uiRecoverySave(); uiRecoveryResultsAndThermal();
     psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();
@@ -1767,4 +1769,5 @@ int main() {
     uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+  return 0;
 }

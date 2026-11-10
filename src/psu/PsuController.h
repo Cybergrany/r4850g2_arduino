@@ -142,6 +142,12 @@ class PsuController {
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
+  int8_t routeIndex(uint8_t slot, uint32_t now) const;
+  // Cache only identity -> table index, never readiness or permission. A new
+  // timestamp, discovery epoch or configuration edit invalidates these results.
+  mutable int8_t routes_[PSU_MAX_UNITS] = {};
+  mutable UnitMask routesKnown_ = 0;
+  mutable uint32_t routeTime_ = 0, routeRevision_ = 0;
   void thermalTick(uint32_t now);
   void alertTick(uint32_t now);
   void thermalStop(ThermalStop reason);

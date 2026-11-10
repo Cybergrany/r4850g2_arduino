@@ -10,6 +10,8 @@ class Discovery {
   void tick(uint32_t now, uint32_t staleMs);
   const Psu& device(uint8_t i) const { return devices_[i]; }
   Psu* address(uint8_t address);
+  // Index in the bounded observation table; -1 absent, -2 ambiguous identity.
+  int8_t identityIndex(const Identity& id, uint32_t now) const;
   const Psu* identity(const Identity& id, uint32_t now) const;
   uint32_t revision() const { return revision_; }
   uint16_t overflow() const { return overflow_; }

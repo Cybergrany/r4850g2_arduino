@@ -4,6 +4,58 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the parallel
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## UI latency and repeated route lookups (2026-11-10)
+
+The reported nine-slot/two-responder bench run had a historical **44,524 us**
+main-loop maximum, **13,115 ms** scene maximum and **48** software receive drops.
+The next snapshot retained those maxima/drop counts; it did not demonstrate new
+receive loss during that particular highlight move. Its latest 206/216 ms scene
+could be a later telemetry comparison, not the slow navigation scene.
+
+- Repeated identity scans are shared by slot queries at the same timestamp and
+  discovery revision. In the steady host fixture, controller plus idle-console
+  searches drop from **166 + 47 to 9 + 0** with nine configured/two responding,
+  and from **459 + 144 to 9 + 0** with all nine responding. UI composition reuses
+  that snapshot without further searches. A later timestamp can resolve each
+  slot again; identity changes immediately invalidate the cache. These are
+  deterministic search counts, not AVR cycle measurements.
+- Lifecycle tests cover same-millisecond discovery, fresh hot telemetry through
+  a cached route, duplicate identity, rebinding/loading/unbinding, route expiry
+  before the next tick, address negotiation and millis rollover. Thermal OFF
+  remains latched and no positive-current write is introduced. Existing
+  identity/ACK, readiness, thermal and interrupted-storage tests remain enabled.
+- Discovery compares each fresh identity pair once. Unsolicited serial
+  control/availability sampling runs at a 100 ms cadence; commands, ACKs, alerts
+  and protection keep their existing scheduling.
+- The renderer compares cells in eight-cell batches within the 750 us budget,
+  removing the fixed 32-cell limit. An unchanged 390-cell scene needs one call
+  instead of thirteen in the synthetic comparison-cost model. Solid strips use
+  the colour-fill writer and blank fills skip glyph expansion. Transfer sizes,
+  SPI transaction boundaries, filled highlights and the 8 MHz clock are retained.
+- Full group/charger highlight moves are now tested, in addition to text-only
+  selection changes. At 8 MHz a group move still needs **768 transfers** and a
+  charger move **1,040**: filling those backgrounds really changes those pixels.
+  The test completes them in 110/149 calls (86/117 ms of synthetic SPI timing).
+  A Tools selection takes 56 transfers/eight calls. These values exclude real
+  AVR computation, interrupt load and the application work between calls;
+  they do **not** establish the physical latency target.
+- Production-renderer tests at all five clocks verify final pixels, solid and
+  mixed strips, rapid full-highlight reversals, mid-transfer changes, rollover,
+  costly-preparation progress and observable budget overruns. Separate
+  `change-ms` timing survives later telemetry refreshes. `diag ui reset` and
+  control/storage/serial/UI phase maxima are tested through Application/serial.
+- All nineteen Mega profiles, debug isolation and real wheel/fan/cutoff/alert/
+  PSU_ACTIVE adapter regressions pass. Added static RAM is **50 bytes** in
+  display+serial builds; the largest retains **1,032 bytes**. There is no new
+  framebuffer, EEPROM schema change or charging-policy change.
+- Controller/storage/serial tests pass **1,874,218 checks**; touch/simulator
+  integration passes **1,091 checks**, both with snapshot exports. The generated
+  previews retain the existing layout, colours, digits and filled highlights.
+
+The [bench comparison](#ui-redraw-bench-comparison) remains required. Phase
+maxima will locate remaining long work; an SPI maximum includes interrupt work
+that may run as the transaction ends, so it is not a direct wire-time reading.
+
 ## Nine-unit capacity and compact persistence (2026-11-10)
 
 - Default capacity is nine PSUs with eight groups. A shared 16-bit member mask
@@ -53,9 +105,11 @@ See [upgrading from eight slots](GETTING_STARTED.md#adding-psu-9-after-upgrading
   reversals and scene changes at transaction boundaries. They check transfer
   size/count bounds, transaction closure, idle behaviour, microsecond/millisecond
   rollover and observable cooperative-budget overruns.
-- The synthetic three-row button highlight needs **28 transfers at 8 MHz**, versus
+- The synthetic three-row button **text-colour change** needs **28 transfers at 8 MHz**, versus
   **1,248** for the previous renderer redrawing all 78 cells as one-row strips.
-  This is a transfer-count result, not measured Mega latency. Simulated wire timing excludes AVR raster/ISR costs.
+  Both backgrounds remain filled in this case; it does not model moving a
+  group's filled selection background. This is a transfer-count result, not
+  measured Mega latency. Simulated wire timing excludes AVR raster/ISR costs.
 - Controller/UI host suite: **1,108,327 checks** with snapshot exports. Tests
   cover Config/Ack independence, affected-group routing, no-PSU operation,
   returned units, suspended edits, confirmed global retry,
@@ -96,10 +150,11 @@ The overview should return while the missing-member warning remains active.
 Then check click-to-open and hold-to-return navigation. No PSU absence should
 be accepted and no current enabled by acknowledging the notification.
 
-The build matrix and size table below include nine-unit support and the memory savings.
+The build matrix and size table below include nine-unit support and the UI latency fixes.
 
 ```sh
 python3 tools/test_host.py
+python3 tools/test_route_budget.py
 python3 tools/test_touch.py
 python3 tools/test_renderer.py
 python3 tools/check_avr_formats.py
@@ -132,30 +187,30 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6877 | 162490 | 1315 |
-| `mega2560_serial` | 5085 | 103904 | 3107 |
-| `mega2560_display` | 6846 | 153770 | 1346 |
-| `mega2560_local` | 5917 | 120058 | 2275 |
-| `mega2560_minimal` | 4125 | 49480 | 4067 |
-| `mega2560_touch` | 7079 | 172172 | 1113 |
-| `mega2560_touch_wheel` | 7110 | 173682 | 1082 |
-| `mega2560_ui_debug` | 6899 | 165290 | 1293 |
-| `mega2560_touch_debug` | 7101 | 174820 | 1091 |
-| `mega2560_touch_local` | 6119 | 126444 | 2073 |
-| `mega2560_touch_debug_local` | 6141 | 126858 | 2051 |
-| `mega2560_touch_enable` | 7079 | 172482 | 1113 |
-| `mega2560_touch_fan` | 7084 | 172880 | 1108 |
-| `mega2560_serial_fan` | 5090 | 104304 | 3102 |
-| `mega2560_serial_cutoff` | 5086 | 104008 | 3106 |
-| `mega2560_touch_cutoff` | 7085 | 172950 | 1107 |
-| `mega2560_serial_alerts` | 5087 | 104158 | 3105 |
-| `mega2560_touch_alerts` | 7087 | 173192 | 1105 |
-| `mega2560_wheel_alerts` | 6880 | 163194 | 1312 |
+| `mega2560` | 6927 | 164264 | 1265 |
+| `mega2560_serial` | 5108 | 104710 | 3084 |
+| `mega2560_display` | 6896 | 155530 | 1296 |
+| `mega2560_local` | 5947 | 121066 | 2245 |
+| `mega2560_minimal` | 4144 | 50278 | 4048 |
+| `mega2560_touch` | 7129 | 173934 | 1063 |
+| `mega2560_touch_wheel` | 7160 | 175462 | 1032 |
+| `mega2560_ui_debug` | 6949 | 167108 | 1243 |
+| `mega2560_touch_debug` | 7151 | 176516 | 1041 |
+| `mega2560_touch_local` | 6149 | 127596 | 2043 |
+| `mega2560_touch_debug_local` | 6171 | 127984 | 2021 |
+| `mega2560_touch_enable` | 7129 | 174196 | 1063 |
+| `mega2560_touch_fan` | 7134 | 174614 | 1058 |
+| `mega2560_serial_fan` | 5113 | 105102 | 3079 |
+| `mega2560_serial_cutoff` | 5109 | 104798 | 3083 |
+| `mega2560_touch_cutoff` | 7135 | 174766 | 1057 |
+| `mega2560_serial_alerts` | 5110 | 104984 | 3082 |
+| `mega2560_touch_alerts` | 7137 | 175052 | 1055 |
+| `mega2560_wheel_alerts` | 6930 | 165006 | 1262 |
 
-Compared with the eight-slot baseline `f4db131`, the wheel/alert build adds
-**106 bytes** of static RAM and leaves **1312 bytes** free. The largest profile
-uses **7110 bytes**, leaving **1082 bytes** for stack/runtime use. Each profile
-adds at most 119 bytes of static RAM, within the earlier 128-byte growth target.
+Compared with the nine-slot baseline `0b6b839`, the latency fixes add at most
+**50 bytes** of static RAM. The wheel/alert build leaves **1,262 bytes** free;
+the largest profile uses **7,160 bytes**, leaving **1,032 bytes** for stack/runtime
+use. All profiles pass the existing 1 KiB static-headroom requirement.
 
 Static RAM excludes stack/interrupt nesting. No full colour framebuffer is used;
 two text/style scenes occupy 1170 bytes. Worst-case stack and loaded display/CAN
@@ -186,8 +241,10 @@ the EEPROM schema changes as described above.
 Use the same Mega, level shifting, 8 MHz draw clock, PSU count, normal polling and
 serial settings for each run. Record the baseline's highlight latency with a
 video if it predates `diag ui`. The patch's timing counters start at boot; full
-page changes can dominate `scene-max-ms`, so record `scene-ms` while repeating
-an ordinary menu highlight as well as the overall maximum.
+page changes can dominate the maximum. On the patched build let the page finish,
+then `diag ui reset` clears timing maxima without resetting CAN counters. The
+new `change-ms` pair retains the latest/maximum completed nonperiodic change
+through later telemetry refreshes; `scene-ms(last/max)` includes those refreshes.
 
 1. With the usual commissioned setup and CAN traffic running, send:
    ```text
@@ -195,20 +252,25 @@ an ordinary menu highlight as well as the overall maximum.
    raw off
    diag ui
    diag bus
+   diag ui reset
    ```
-2. Turn between Tools menu choices for 30 seconds, including quick reversals.
+   Omit `reset` on older firmware that does not support it.
+2. Move one highlight, let it finish and capture `diag ui` / `diag bus`. Then
+   turn between Tools menu choices for 30 seconds, including quick reversals.
    Check that filled highlights move cleanly. Also exercise group-page changes,
    PSU details, and editing `54.10 V` / fractional current without applying unless
    intended. Use touch release/press and wheel clicks after each navigation.
 3. While repeating highlights, sample `diag ui` and `diag bus`. Record a second
    bus snapshot after the run. Compare **counter increases**, especially
-   `rx-drops`, `hw-overflow-events`, `tx-errors`, `loop-max-us` and command results.
+   `rx-drops`, `hw-overflow-events`, `tx-errors` and command results. Record
+   `loop-max-us` and `phase-us control/storage/serial/ui` to locate slow phases;
+   loop/receive high-water maxima are historical and are not reset by `diag ui reset`.
    Trace drops alone are diagnostic-output congestion, not CAN receive loss.
 4. Repeat the same sequence on the patched firmware. Aim for ordinary menu
    highlight completion **below 100 ms at 8 MHz**. Large filled group tiles and
    full-page transitions move more pixels; measure those separately. A phone
-   video can corroborate input-to-highlight time, which `scene-ms` measures only
-   from composition to completed drawing. Check that telemetry stays fresh and
+   video can corroborate input-to-highlight time; scene/change timings start
+   after composition and end at completed drawing. Check that telemetry stays fresh and
    the established bench apply/stop cycle has no command timeouts.
 5. With PSUs absent, open the warning's Config shortcut: choose Wait and return
    to the same incident; Ack must leave WARNING active and accept no absences.
@@ -220,6 +282,8 @@ an ordinary menu highlight as well as the overall maximum.
 | --- | --- | --- |
 | Ordinary highlight latency, ms | bench measurement | bench measurement |
 | Latest/max completed scene, ms | if available | `diag ui` |
+| Latest/max completed nonperiodic change, ms | video / old scene reading | `change-ms` |
+| Maximum control/storage/serial/UI phase, us | if available | `phase-us` |
 | Maximum render-call / SPI transaction, us | if available | `diag ui` |
 | RX drops / hardware overflows added | `diag bus` delta | `diag bus` delta |
 | TX errors / command timeouts added | bus/status results | bus/status results |

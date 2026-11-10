@@ -179,6 +179,7 @@ the [commissioning guide](docs/GETTING_STARTED.md#serial-command-reference).
 
 ```sh
 python3 tools/test_host.py
+python3 tools/test_route_budget.py
 pio run -e mega2560 -e mega2560_serial -e mega2560_display -e mega2560_local -e mega2560_minimal
 ```
 

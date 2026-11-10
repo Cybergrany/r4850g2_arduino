@@ -11,6 +11,9 @@ constexpr uint32_t inputIdleTimeoutMs = 30000UL;
 constexpr uint8_t inputBytesPerTick = 32;
 constexpr uint8_t outputBytesPerTick = 48, traceSlots = 4;
 constexpr uint16_t outputBufferBytes = 384, outputReserveBytes = 256;
+// Unsolicited status is presentation, not protection. Commands/ACKs remain
+// immediate; avoid recomputing every member's status on every idle loop.
+constexpr uint16_t statusIntervalMs = 100;
 // Periodic current-state summaries; zero disables automatic broadcasts.
 constexpr uint32_t alertIntervalMs = PSU_SERIAL_ALERT_INTERVAL_MS;
 static_assert(alertIntervalMs == 0 || (alertIntervalMs >= 1000 && alertIntervalMs <= 3600000UL &&

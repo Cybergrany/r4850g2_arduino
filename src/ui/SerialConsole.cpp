@@ -527,19 +527,22 @@ void SerialConsole::tick(uint32_t now) {
   // Command/operation/save results come first. Summaries precede background
   // status and trace traffic, so flapping control states cannot starve them.
   if (broadcastAlerts(now)) return;
-  const UnitMask attention = controller_.availabilityAttention(now);
-  availabilityAttentionNotice_ &= attention;
-  if ((attention & ~availabilityAttentionNotice_) && !length_ && view_ == View::None) {
-    availabilityAttentionNotice_ = attention; beginOutput();
-    io_.print(F("STARTUP REVIEW: unavailable or returned slots=")); printMembers(attention);
-    io_.println(F("; diag startup for group/individual choices; no automatic inclusion.")); prompt(); return;
-  }
-  const auto controlState = controller_.controlStatus(now);
-  const uint16_t controlKey = uint16_t(controlState.activity) | uint16_t(controlState.blocker) << 3 |
-      uint16_t(controlState.slot) << 8 | uint16_t(controller_.enableControl().source()) << 12 |
-      uint16_t(controller_.enableControl().enabled()) << 14;
-  if (controlNotice_ != controlKey && !length_ && view_ == View::None) {
-    controlNotice_ = controlKey; beginOutput(); printControl(now); prompt(); return;
+  if (uint32_t(now - lastStatus_) >= console::statusIntervalMs) {
+    lastStatus_ = now;
+    const UnitMask attention = controller_.availabilityAttention(now);
+    availabilityAttentionNotice_ &= attention;
+    if ((attention & ~availabilityAttentionNotice_) && !length_ && view_ == View::None) {
+      availabilityAttentionNotice_ = attention; beginOutput();
+      io_.print(F("STARTUP REVIEW: unavailable or returned slots=")); printMembers(attention);
+      io_.println(F("; diag startup for group/individual choices; no automatic inclusion.")); prompt(); return;
+    }
+    const auto controlState = controller_.controlStatus(now);
+    const uint16_t controlKey = uint16_t(controlState.activity) | uint16_t(controlState.blocker) << 3 |
+        uint16_t(controlState.slot) << 8 | uint16_t(controller_.enableControl().source()) << 12 |
+        uint16_t(controller_.enableControl().enabled()) << 14;
+    if (controlNotice_ != controlKey && !length_ && view_ == View::None) {
+      controlNotice_ = controlKey; beginOutput(); printControl(now); prompt(); return;
+    }
   }
   if (traceDrops_ != reportedTraceDrops_ && uint32_t(now - lastTraceNotice_) >= 1000) {
     reportedTraceDrops_ = traceDrops_; lastTraceNotice_ = now; beginOutput();
@@ -765,7 +768,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
-      case 11: io_.println(F("diag ui: drawing/read clocks, maximum render/SPI duration and completed-scene latency. Compare diag bus under load.")); break;
+      case 11: io_.println(F("diag ui [reset]: clocks, render/SPI/phase maxima, scene/change last/max times. Includes interrupts; compare diag bus under load.")); break;
       default: view_ = View::None; break;
     }
   } else if (view_ == View::Help) {

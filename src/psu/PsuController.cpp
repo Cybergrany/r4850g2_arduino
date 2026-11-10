@@ -9,7 +9,7 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   if (!validConfig(c)) return Result::Invalid;
   const auto retainedStop = config_.thermalStop;
   reconcileSessions(c);
-  config_ = c;
+  config_ = c; routesKnown_ = 0;
   if (retainedStop != ThermalStop::None) {
     config_.thermalStop = retainedStop; config_.autoResume = false; resumePending_ = false;
     if (c.thermalStop != retainedStop || c.autoResume) protectionDirty_ = true;
@@ -41,7 +41,7 @@ Result PsuController::change(const Configuration& next, UnitMask invalidate) {
   c.acceptedAbsent &= UnitMask(~invalidate);
   if (!validConfig(c)) return Result::Invalid;
   reconcileSessions(c);
-  config_ = c; ++revision_; running_ &= UnitMask(~invalidate);
+  config_ = c; routesKnown_ = 0; ++revision_; running_ &= UnitMask(~invalidate);
   excluded_ &= UnitMask(~invalidate); sessionAccepted_ &= UnitMask(~invalidate); sessionRequired_ &= UnitMask(~invalidate);
   currentSynced_ &= UnitMask(~invalidate);
   restorePending_ &= UnitMask(~invalidate); restoreBlocked_ &= UnitMask(~invalidate);
@@ -149,8 +149,21 @@ void PsuController::reconcileSessions(const Configuration& next) {
     }
 }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
+int8_t PsuController::routeIndex(uint8_t slot, uint32_t now) const {
+  if (slot >= count()) return -1;
+  if (routeTime_ != now || routeRevision_ != discovery_.revision()) {
+    routesKnown_ = 0; routeTime_ = now; routeRevision_ = discovery_.revision();
+  }
+  const UnitMask bit = UnitMask(1) << slot;
+  if (!(routesKnown_ & bit)) {
+    routes_[slot] = discovery_.identityIndex(config_.units[slot].identity, now);
+    routesKnown_ |= bit;
+  }
+  return routes_[slot];
+}
 const Psu* PsuController::deviceForSlot(uint8_t slot, uint32_t now) const {
-  return slot < count() ? discovery_.identity(config_.units[slot].identity, now) : nullptr;
+  const int8_t index = routeIndex(slot, now);
+  return index < 0 ? nullptr : &discovery_.device(index);
 }
 Issue PsuController::issue(uint8_t i, uint32_t now) const {
   if (discovery_.negotiating()) return Issue::IdentityPending;

@@ -59,6 +59,9 @@ class Application {
 #if PSU_ENABLE_DISPLAY
   Ili9341Display display_;
   LocalUi localUi_;
+#if PSU_ENABLE_SERIAL
+  uint32_t phaseMaxUs_[4] = {}; // Control/I/O, storage/protection, serial, UI.
+#endif
 #endif
 };
 }

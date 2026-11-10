@@ -12,5 +12,7 @@ constexpr uint8_t columns = 26, rows = 15, cellWidth = 12, cellHeight = 16;
 constexpr uint16_t renderBudgetUs = 750;
 constexpr uint8_t burstRows(uint32_t hz) { return hz >= 8000000UL ? 4 : hz >= 4000000UL ? 2 : 1; }
 constexpr uint8_t burstsPerTick(uint32_t hz) { return hz > 2000000UL ? 8 : 2; }
-constexpr uint8_t scanCellsPerTick = 32;
+// Check elapsed time after each small comparison batch, rather than requiring
+// thirteen whole application loops to compare an unchanged 390-cell scene.
+constexpr uint8_t scanCellsPerBatch = 8;
 } }
