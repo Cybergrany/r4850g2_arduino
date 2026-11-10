@@ -1754,7 +1754,7 @@ void uiLayouts() {
 }
 int main() {
   try {
-    routeCacheLifecycle(); idleSerialStatusCadence();
+    routeCacheLifecycle(); drawingReceiveService(); exactGroupRange(); idleSerialStatusCadence();
     nineUnitMigration(); ninthProtectionAndControl(); ninthAvailabilityAndRouting(); ninthSerialAndUi();
     decimalFormatting(); uiRecoveryAvailability(); uiRecoveryGuards(); uiRecoverySave(); uiRecoveryResultsAndThermal();
     psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();

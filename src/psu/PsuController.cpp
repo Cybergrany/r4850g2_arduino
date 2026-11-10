@@ -9,7 +9,7 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   if (!validConfig(c)) return Result::Invalid;
   const auto retainedStop = config_.thermalStop;
   reconcileSessions(c);
-  config_ = c; routesKnown_ = 0;
+  config_ = c; clearRoutes();
   if (retainedStop != ThermalStop::None) {
     config_.thermalStop = retainedStop; config_.autoResume = false; resumePending_ = false;
     if (c.thermalStop != retainedStop || c.autoResume) protectionDirty_ = true;
@@ -41,7 +41,7 @@ Result PsuController::change(const Configuration& next, UnitMask invalidate) {
   c.acceptedAbsent &= UnitMask(~invalidate);
   if (!validConfig(c)) return Result::Invalid;
   reconcileSessions(c);
-  config_ = c; routesKnown_ = 0; ++revision_; running_ &= UnitMask(~invalidate);
+  config_ = c; clearRoutes(); ++revision_; running_ &= UnitMask(~invalidate);
   excluded_ &= UnitMask(~invalidate); sessionAccepted_ &= UnitMask(~invalidate); sessionRequired_ &= UnitMask(~invalidate);
   currentSynced_ &= UnitMask(~invalidate);
   restorePending_ &= UnitMask(~invalidate); restoreBlocked_ &= UnitMask(~invalidate);
@@ -128,15 +128,16 @@ CurrentCheck PsuController::checkCurrent(uint8_t g, uint16_t total) const {
 }
 uint16_t PsuController::groupCurrentMaximum(uint8_t group) const {
   if (group >= limits::maxGroups || !config_.groups[group].members) return 0;
-  uint16_t low = 0, high = uint16_t(population(config_.groups[group].members)) * limits::maxCurrent;
-  // Allocation is monotonic. Reuse validation rather than approximating a sum
-  // of ratings (which is wrong for equally shared groups with unequal ratings).
-  while (low < high) {
-    const uint16_t mid = low + (uint32_t(high) - low + 1) / 2;
-    if (checkCurrent(group, mid).issue == Issue::None) low = mid;
-    else high = mid - 1;
+  const auto members = config_.groups[group].members;
+  const uint8_t n = population(members); uint8_t rank = 0;
+  uint16_t maximum = uint16_t(n) * limits::maxCurrent;
+  // At total q*n+r, rank k receives q+(k<r). Its exact largest allowed total
+  // is cap*n+k. Take the smallest member bound, including rounding remainders.
+  for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
+    const uint16_t bound = currentMaximum(config_.units[i].ratedCurrent) * n + rank++;
+    if (bound < maximum) maximum = bound;
   }
-  return low;
+  return maximum;
 }
 void PsuController::reconcileSessions(const Configuration& next) {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i)
@@ -149,15 +150,22 @@ void PsuController::reconcileSessions(const Configuration& next) {
     }
 }
 Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
-int8_t PsuController::routeIndex(uint8_t slot, uint32_t now) const {
-  if (slot >= count()) return -1;
-  if (routeTime_ != now || routeRevision_ != discovery_.revision()) {
-    routesKnown_ = 0; routeTime_ = now; routeRevision_ = discovery_.revision();
-  }
+void PsuController::clearRoutes() const {
+  memset(routes_, unknownRoute, sizeof(routes_)); validSources_ = 0;
+}
+void PsuController::validateSource(uint8_t slot, const Psu& d, uint32_t now) const {
   const UnitMask bit = UnitMask(1) << slot;
-  if (!(routesKnown_ & bit)) {
-    routes_[slot] = discovery_.identityIndex(config_.units[slot].identity, now);
-    routesKnown_ |= bit;
+  if (d.fresh(now, staleMs()) && d.verified(now)) validSources_ |= bit;
+  else validSources_ &= UnitMask(~bit);
+}
+int8_t PsuController::resolveRoute(uint8_t slot, uint32_t now) const {
+  if (routeTime_ != now || routeRevision_ != discovery_.revision()) {
+    clearRoutes(); routeTime_ = now; routeRevision_ = discovery_.revision();
+  }
+  if (routes_[slot] == unknownRoute) {
+    routes_[slot] = identified(config_.units[slot].identity) ?
+        discovery_.identityIndex(config_.units[slot].identity, now) : unboundRoute;
+    if (routes_[slot] >= 0) validateSource(slot, discovery_.device(routes_[slot]), now);
   }
   return routes_[slot];
 }
@@ -218,7 +226,7 @@ bool PsuController::metric(uint8_t slot, protocol::Metric m, float& value, uint3
 bool PsuController::freshMetric(uint8_t slot, protocol::Metric m, float& value, uint32_t now) const {
   if (m >= protocol::MetricCount) return false;
   const auto* d = deviceForSlot(slot, now);
-  if (!d || !d->verified(now) || !d->fresh(now, staleMs()) ||
+  if (!d || !(validSources_ & (1U << slot)) ||
       !(d->telemetry.freshMask & d->telemetry.validMask & (1U << m)) || uint32_t(now - d->telemetry.updated[m]) > staleMs()) return false;
   value = d->telemetry.values[m];
   if (m == protocol::CurrentCapacity) value *= config_.units[slot].ratedCurrent / 100.0f;
@@ -361,12 +369,12 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
       }
     }
   discovery_.receive(f, now);
-  controlReceive(f, now);
   int8_t slot = -1;
   for (uint8_t i = 0; i < count(); ++i) {
     const auto* d = deviceForSlot(i, now);
-    if (d && d->address == protocol::address(f.id)) { slot = i; break; }
+    if (d && d->address == protocol::address(f.id)) { slot = i; validateSource(i, *d, now); break; }
   }
+  controlReceive(f, now);
   if (slot >= 0) readinessReceive(slot, f, now);
   if (slot >= 0 && protocol::isCurrentBroadcast(f)) {
     const auto* d = deviceForSlot(slot, now);
@@ -582,6 +590,17 @@ void PsuController::tick(uint32_t now) {
     send(protocol::request(scanAddress_, protocol::infoCommand));
     scanAddress_ = scanAddress_ == 127 ? 0 : scanAddress_ + 1;
   }
+}
+uint8_t PsuController::serviceReceive(uint32_t now) {
+  if (!ready_) return 0;
+  now_ = now;
+  CanFrame frame; uint8_t received = 0;
+  while (received < 4 && transport_.receive(frame)) { receive(frame, now); ++received; }
+  if (received) {
+    discovery_.tick(now, staleMs());
+    thermalTick(now);
+  }
+  return received;
 }
 Result PsuController::requestDescription(uint8_t address) {
   if (!address || address > 127) return Result::Invalid;

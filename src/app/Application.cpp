@@ -118,6 +118,21 @@ void Application::tick() {
 #endif
 #if PSU_ENABLE_DISPLAY
   localUi_.tick(millis());
+  // A foreground page/highlight gets consecutive short slices. Service the RX
+  // queue and thermal protection between them rather than repeating all control,
+  // availability, presentation and serial work for every few pixels.
+  const uint32_t paintStarted = micros();
+  for (uint8_t n = 0; localUi_.priorityDrawing() && n < ui::priorityRenderSlices &&
+      uint32_t(micros() - paintStarted) < ui::priorityRenderUs; ++n) {
+    controller_.serviceReceive(millis());
+#if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
+    chargeAllow_.write(controller_.chargeAllowed());
+#endif
+#if PSU_ACTIVE_PIN >= 0 && !PSU_UI_DEBUG
+    if (!controller_.enableControl().enabled()) psuActive_.write(false);
+#endif
+    localUi_.paint();
+  }
 #if PSU_ENABLE_SERIAL
   phaseTime(phaseMaxUs_[3], phaseStarted);
 #endif

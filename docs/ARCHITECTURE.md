@@ -54,13 +54,14 @@ Address changes, identity changes, stale-to-live transitions and conflicts
 invalidate epochs. Slots retain their config when count shrinks; existing group
 membership must first be edited to permit shrinking.
 
-Repeated slot queries share an identity-to-discovery-index cache for the same
-timestamp and discovery revision. A configuration change clears it immediately;
-another timestamp, identity/address epoch, conflict or negotiation invalidates
-it. Missing and ambiguous results are cached under the same rules. Telemetry,
-freshness, readiness, authorization and queued-write validation are never cached:
-callers read the current device and apply their existing guards. Discovery still
-checks expiry and conflicts every tick, comparing each fresh identity pair once.
+Repeated slot queries share identity-to-discovery indexes and source identity/
+lease validation for the same timestamp and discovery revision. Configuration,
+time or revision changes clear the cache. Every associated incoming frame
+refreshes source validation before ACK/readiness handling, including a source
+becoming fresh again within the same millisecond. Missing, unbound and ambiguous
+results use distinct sentinels. Telemetry values, per-field freshness, readiness,
+authorization and queued-write permission are still checked from current state.
+Discovery checks expiry/conflicts each tick, comparing each fresh identity pair once.
 
 `Deployment.h` is the installation definition file. Its unique ID prevents
 EEPROM from a previous installation authorizing control after firmware is moved.
@@ -285,6 +286,28 @@ retains a full new pass.
 The production rasterizer is tested against an independent pixel image and
 recorded SPI boundaries at five clocks. Missing display ID disables local
 controls while serial/CAN remain available. The boot clear runs before CAN RX.
+
+Foreground navigation, initial pages and notifications can use an additional
+**8 ms cooperative drawing window**, capped at twelve extra service calls.
+Between every slice, `PsuController::serviceReceive` processes at most four
+queued frames, expires discovery state and runs temperature protection when
+frames arrived. It sends no requests or settings; normal `tick` retains command
+scheduling and its deadlines. ACKs, identity changes and readiness observations
+use the usual receive handlers. CHG_ALLOW and an OFF PSU_ACTIVE request reach
+GPIOs during this window. RX interrupts remain enabled between the normal short
+SPI transactions; no CAN frames are deliberately discarded.
+
+The time limit is checked between bounded work units, so RX/protection work or
+interrupts can overrun it. This is a rendering-priority window, not a CAN blackout
+or hard real-time guarantee. Periodic telemetry keeps one render service per
+main loop, and composition waits for an existing periodic paint to finish.
+The UI phase maximum includes the CAN/protection work performed during drawing.
+
+Text composition fills contiguous character/style ranges, preserving nibble
+neighbours and truncation. The group-current maximum is calculated exactly from
+each member's ceiling and allocation rank (`ceiling * member_count + rank`),
+avoiding a binary search on every configuration-screen composition. It retains
+the same allocation rounding and limits used by `checkCurrent`.
 
 Nonperiodic invalidations (input, navigation, alerts/results) retain separate
 completed-change timing so a later telemetry-only comparison cannot overwrite

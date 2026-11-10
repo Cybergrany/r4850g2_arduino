@@ -185,7 +185,8 @@ pio run -e mega2560 -e mega2560_serial -e mega2560_display -e mega2560_local -e 
 
 Host tests run the production code with simulated CAN, serial, and EEPROM under
 AddressSanitizer/UndefinedBehaviorSanitizer. See [validation](docs/VALIDATION.md)
-for coverage, build sizes, and remaining physical bench checks. No physical
+for coverage, build sizes, the optional `tools/test_avr_render.py` complete-redraw
+AVR timing regression, and remaining physical bench checks. No physical
 multi-PSU validation or upload is implied by these tests.
 
 Based on [haklein's Arduino firmware](https://github.com/haklein/r4850g2_arduino)

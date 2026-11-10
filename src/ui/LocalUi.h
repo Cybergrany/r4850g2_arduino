@@ -17,6 +17,8 @@ class LocalUi {
       { (void)bytes; }
   void begin();
   void tick(uint32_t now);
+  void paint();
+  bool priorityDrawing() const { return available_ && !pageReady_ && display_.pending(); }
   void storageTick();
   bool command(uint8_t count, char** args, Print& output, uint32_t now);
   UiAction takeRequest() { const auto r=request_; request_={}; return r; }

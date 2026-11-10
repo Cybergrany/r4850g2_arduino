@@ -40,6 +40,9 @@ class PsuController {
   explicit PsuController(CanTransport& transport);
   bool begin();
   void tick(uint32_t now);
+  // Bounded RX/protection service between drawing slices. No new setting or
+  // read requests are dispatched; the normal tick owns command scheduling.
+  uint8_t serviceReceive(uint32_t now);
   const Configuration& configuration() const { return config_; }
   Result configure(const Configuration& config, bool resumeSaved = false);
   Result setCount(uint8_t count);
@@ -123,7 +126,11 @@ class PsuController {
   void localStatus(bool display, bool calibration, bool saveFailed = false);
   uint8_t count() const { return config_.count; }
   uint16_t pollInterval() const { return config_.pollMs; }
-  uint32_t staleMs() const { return uint32_t(config_.pollMs) * 3 < limits::minimumStaleMs ? limits::minimumStaleMs : uint32_t(config_.pollMs) * 3; }
+  uint32_t staleMs() const {
+    static_assert(limits::maxPollMs <= UINT16_MAX / 3, "Telemetry timeout must fit");
+    const uint16_t age = config_.pollMs * uint16_t(3);
+    return age < limits::minimumStaleMs ? limits::minimumStaleMs : age;
+  }
   uint16_t txFailures() const { return txFailures_; }
   uint8_t droppedFrames() const { return transport_.droppedFrames(); }
   uint8_t receiveHighWater() const { return transport_.receiveHighWater(); }
@@ -142,11 +149,23 @@ class PsuController {
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
-  int8_t routeIndex(uint8_t slot, uint32_t now) const;
-  // Cache only identity -> table index, never readiness or permission. A new
-  // timestamp, discovery epoch or configuration edit invalidates these results.
+  static constexpr int8_t unknownRoute = -4, unboundRoute = -3;
+  // Keep the common lookup small: no variable-bit loop or out-of-line register
+  // save on each metric/status query. Resolving and validation stay in one path.
+  inline __attribute__((always_inline)) int8_t routeIndex(uint8_t slot, uint32_t now) const {
+    if (slot >= count()) return -1;
+    if (routeTime_ == now && routeRevision_ == discovery_.revision() && routes_[slot] != unknownRoute)
+      return routes_[slot];
+    return resolveRoute(slot, now);
+  }
+  int8_t resolveRoute(uint8_t slot, uint32_t now) const;
+  void validateSource(uint8_t slot, const Psu& device, uint32_t now) const;
+  void clearRoutes() const;
+  // Source identity/lease validation only, never readiness, telemetry values or
+  // permission. Time/revision/config changes clear it; RX refreshes its source
+  // before ACK/readiness processing, including another frame in the same ms.
   mutable int8_t routes_[PSU_MAX_UNITS] = {};
-  mutable UnitMask routesKnown_ = 0;
+  mutable UnitMask validSources_ = 0;
   mutable uint32_t routeTime_ = 0, routeRevision_ = 0;
   void thermalTick(uint32_t now);
   void alertTick(uint32_t now);

@@ -230,6 +230,19 @@ Input still composes immediately and live readings refresh every 500 ms.
 Touch targets on new pages arm only after
 drawing finishes. Initialization and its full clear happen before CAN reception.
 
+User navigation/highlight changes receive consecutive drawing slices in an
+additional **8 ms cooperative window**, with at most twelve extra slices per
+main loop. Initial pages and notifications use the same path. The controller
+processes up to four incoming CAN frames and temperature protection between
+slices, including command acknowledgements. It does not deliberately drop CAN
+traffic or send new settings from the renderer. The normal controller pass
+retains command scheduling; GPIO OFF/cutoff requests are serviced during drawing.
+The window can overrun by a receive/protection work unit or interrupt.
+
+Routine metric updates keep the normal single-slice pipeline. A periodic redraw
+finishes before another telemetry composition starts, avoiding an endless
+restart when a slow pass exceeds the 500 ms refresh interval.
+
 Use `diag ui` to inspect:
 
 - `render-max-us` / `SPI-max-us`: maximum render-call / transaction duration.
@@ -237,7 +250,8 @@ Use `diag ui` to inspect:
 - `change-ms`: latest/maximum completed nonperiodic change (input, navigation,
   alerts or results). Periodic telemetry refreshes do not overwrite this pair.
 - `phase-us control/storage/serial/ui`: maximum duration of each main-loop
-  phase: control/I/O, storage/protection, serial, and UI composition/drawing.
+  phase: control/I/O, storage/protection, serial, and UI composition/drawing
+  (including CAN/protection service between foreground drawing slices).
 
 All durations include interrupts. Scene/change timing starts after composition
 and includes time between render calls, not the earlier physical input delay.

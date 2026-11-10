@@ -1,4 +1,4 @@
-// Cache routing only; every caller still observes current telemetry, identity
+// Cache routing/source validation only; callers still observe current telemetry, identity
 // qualification, configuration, duplicate routes and lease expiry.
 void routeCacheLifecycle() {
   for (const uint32_t start : {100U, 0xffffff00U}) {
@@ -53,6 +53,61 @@ void routeCacheLifecycle() {
     CHECK(c.configuration().thermalStop == ThermalStop::Temperature && !c.enableControl().enabled());
     for (const auto& f : bus.writes())
       CHECK(f.data[1] != protocol::OnlineCurrent || !protocol::readBigEndian(f.data + 4));
+  }
+}
+
+void drawingReceiveService() {
+  // An expired source can become fresh again within the same timestamp without
+  // changing identity/epoch. Its cache must refresh before processing ACKs.
+  FakeCan bus; PsuController c(bus); CHECK(c.configure(installation(1)) == Result::Ok && c.begin());
+  for (uint32_t now : {100U, 300U}) { bus.incoming.push_back(info(1, identity(1))); c.tick(now); }
+  float value;
+  const uint32_t now = 300 + c.staleMs() + 1;
+  CHECK(!c.freshMetric(0, protocol::InputTemperature, value, now));
+  bus.incoming.push_back(data(1, 0x80, 25 * 1024));
+  const auto before = bus.sent.size();
+  CHECK(c.serviceReceive(now) == 1 && bus.sent.size() == before);
+  CHECK(c.freshMetric(0, protocol::InputTemperature, value, now) && value == 25);
+  CHECK(!c.freshMetric(0, protocol::OutputTemperature, value, now));
+  bus.incoming.push_back(data(1, 0x80, 26 * 1024));
+  CHECK(c.serviceReceive(300 + limits::identityLeaseMs + 1) == 1);
+  CHECK(!c.freshMetric(0, protocol::InputTemperature, value, 300 + limits::identityLeaseMs + 1));
+
+  auto cfg = installation(1); cfg.groups[0].current = 2000;
+  Rig r(cfg); r.temperature = 30; r.apply(); r.step(1000);
+  CHECK(r.c.setCurrent(0, 3000) == Result::Ok);
+  CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent, 0, r.now), false, r.now) == Result::Ok);
+  for (uint16_t n=0; n<200 && r.c.report().units[0].state!=CommandState::Waiting; ++n) r.step(10, false);
+  CHECK(r.c.report().units[0].state == CommandState::Waiting);
+  const auto request = r.can.writes().back(); CHECK(request.data[1] == protocol::OnlineCurrent);
+  r.can.incoming.clear();
+  r.can.incoming.push_back(ack(request)); r.can.incoming.push_back(data(1, 0x80, 71 * 1024));
+  const auto sends = r.can.sent.size();
+  CHECK(r.c.serviceReceive(++r.now) == 2 && r.can.sent.size() == sends);
+  CHECK(r.c.report().succeeded == 1 && r.c.report().units[0].state == CommandState::Success);
+  CHECK(r.c.thermalStatus().level == ThermalLevel::Error && r.c.effectiveCurrent(0) == 900);
+  CHECK(!r.c.currentSynchronized(0)); // Old higher ACK cannot confirm the reduction.
+  for (uint8_t n=0; n<5; ++n) r.can.incoming.push_back(data(1, 0x7f, 76 * 1024));
+  CHECK(r.c.serviceReceive(++r.now) == 4 && r.can.incoming.size() == 1);
+  CHECK(!r.c.enableControl().enabled() && r.c.configuration().thermalStop == ThermalStop::Temperature);
+  CHECK(r.can.sent.size() == sends); // The normal scheduler retains write ownership.
+  CHECK(r.c.serviceReceive(r.now) == 1 && r.c.serviceReceive(r.now) == 0);
+  r.step(3000); CHECK(r.current[0] == 0);
+}
+
+void exactGroupRange() {
+  // Check the fast bound against the independent allocation/validation path,
+  // including sparse memberships and every rank for the limiting PSU.
+  for (uint8_t n=1; n<=PSU_MAX_UNITS; ++n) {
+    auto cfg = installation(PSU_MAX_UNITS); cfg.groups[0].members=0; cfg.groups[0].current=0;
+    for (uint8_t k=0; k<n; ++k) cfg.groups[0].members |= 1U << ((2*k)%PSU_MAX_UNITS);
+    for (uint8_t slot=0; slot<PSU_MAX_UNITS; ++slot) if (cfg.groups[0].members & (1U<<slot)) {
+      auto mixed=cfg; mixed.units[slot].ratedCurrent=1001;
+      FakeCan can; PsuController c(can); CHECK(c.configure(mixed)==Result::Ok);
+      const auto maximum=c.groupCurrentMaximum(0);
+      CHECK(maximum && c.checkCurrent(0,maximum).issue==Issue::None);
+      CHECK(c.checkCurrent(0,maximum+1).issue==Issue::Capacity);
+    }
   }
 }
 

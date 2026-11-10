@@ -10,6 +10,10 @@ constexpr uint8_t columns = 26, rows = 15, cellWidth = 12, cellHeight = 16;
 // Short SPI transactions, with a cooperative time budget between work units.
 // The 500 kHz fallback retains one row/burst and at most two bursts/call.
 constexpr uint16_t renderBudgetUs = 750;
+// Foreground navigation can use consecutive slices, with CAN RX/protection
+// serviced between each. Periodic metric updates retain one slice per loop.
+constexpr uint16_t priorityRenderUs = 8000;
+constexpr uint8_t priorityRenderSlices = 12;
 constexpr uint8_t burstRows(uint32_t hz) { return hz >= 8000000UL ? 4 : hz >= 4000000UL ? 2 : 1; }
 constexpr uint8_t burstsPerTick(uint32_t hz) { return hz > 2000000UL ? 8 : 2; }
 // Check elapsed time after each small comparison batch, rather than requiring

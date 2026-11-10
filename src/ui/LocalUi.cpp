@@ -99,13 +99,17 @@ void LocalUi::tick(uint32_t now) {
   if (oldNotice!=model_.notice()) dirty_=true;
   // Finish a new page before enabling touch. Periodic telemetry cannot keep
   // restarting its scan and leave the page permanently unarmed.
-  if (dirty_ || (pageReady_ && uint32_t(now-lastDraw_)>=ui::refreshMs)) {
+  if (dirty_ || (pageReady_ && !display_.pending() && uint32_t(now-lastDraw_)>=ui::refreshMs)) {
     UiView::compose(frame_,model_,controller_,now);
 #if PSU_ENABLE_TOUCH
     drawTouch();
 #endif
     display_.invalidate(dirty_); lastDraw_=now; dirty_=false;
   }
+  paint();
+}
+void LocalUi::paint() {
+  if (!available_) return;
   display_.service(frame_);
   if (!display_.pending()) pageReady_=true;
 }

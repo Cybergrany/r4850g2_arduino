@@ -4,6 +4,65 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the parallel
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Foreground redraw scheduling (2026-11-10)
+
+The next nine-responder bench log confirms a **17,854 ms** completed redraw,
+control/UI phase maxima of **37,292 / 30,496 us**, and software receive drops
+rising **121 -> 217**. Optimizing individual strips and counting fewer searches
+was insufficient: each small drawing slice still waited through a full control
+pass. The new path gives foreground changes consecutive slices while servicing
+CAN RX and temperature protection between them. There is no deliberate RX loss.
+
+An AVR instruction-level regression executes the production controller, UI
+composition and renderer on an emulated Mega at 16 MHz with nominal 8 MHz SPI
+wire delays. Both modes use the same current controller code and nine simulated
+PSUs; the comparison isolates scheduling, rather than comparing desktop CPUs:
+
+| Complete redraw | One drawing slice per main loop | Priority window |
+| --- | ---: | ---: |
+| Group overview highlight | 3033.1 ms | 415.0 ms |
+| Charger list highlight | 3805.8 ms | 552.0 ms |
+| Tools highlight | 297.8 ms | 50.0 ms |
+| Group overview to charger page | 4136.9 ms | 602.5 ms |
+
+These include AVR computation and Timer0 interrupts. They exclude physical
+CAN/display/encoder/serial interrupt costs and do not establish hardware latency
+or zero receive loss. The existing host renderer independently compares final
+pixels and transaction boundaries at all supported clocks. The optional AVR
+test requires the existing PlatformIO packages plus `g++` and `libsimavr-dev`:
+
+```sh
+python3 tools/test_avr_render.py
+# Extracted development/runtime packages can be used without system installation:
+python3 tools/test_avr_render.py --simavr-prefix /path/to/extracted/usr
+```
+
+The regression requires each priority redraw to take less than one third of its
+one-slice counterpart, Tools under 100 ms, and the other complete redraws under
+900 ms in that model. Host tests additionally check the actual Application's
+8 ms/twelve-extra-slice ceilings, rollover, single-slice periodic updates,
+completion before telemetry recomposition, same-millisecond source freshness,
+pending ACK processing, stale-limit ACK rejection, hot input/output sensors,
+bounded receive batches, thermal OFF and normal scheduler ownership of writes.
+Controller/storage/serial tests pass **1,874,450 checks**; touch/simulator tests
+pass **1,112 checks**, both with snapshot exports. Generated UI previews are
+unchanged. Production-renderer tests pass at all five clocks; wheel, GPIO,
+route-cache and AVR-format checks also pass.
+
+The supporting source cache reuses identity/lease validation without caching
+temperature values, field freshness or write permissions. Text/style composition
+uses contiguous fills, and configuration ranges use an exact member/rank bound
+instead of repeated binary-search validation. All nineteen builds and debug
+isolation pass. **Static RAM is unchanged** from `8cae35c`; the largest build
+still leaves **1,032 bytes**. Layout, colours, 8 MHz SPI, EEPROM and the operator's
+authorized current allocations retain their existing semantics.
+
+On hardware, repeat the [bench comparison](#ui-redraw-bench-comparison) with all
+nine PSUs and capture `change-ms`, phase maxima and receive-drop deltas. Include
+navigation during an apply/ACK wait and OFF, then ordinary telemetry with no
+input. A priority window is cooperative and is not an eight-millisecond CAN
+blackout: interrupts and receive processing continue between slices.
+
 ## UI latency and repeated route lookups (2026-11-10)
 
 The reported nine-slot/two-responder bench run had a historical **44,524 us**
@@ -150,7 +209,7 @@ The overview should return while the missing-member warning remains active.
 Then check click-to-open and hold-to-return navigation. No PSU absence should
 be accepted and no current enabled by acknowledging the notification.
 
-The build matrix and size table below include nine-unit support and the UI latency fixes.
+The build matrix and size table below include nine-unit support and priority redraws.
 
 ```sh
 python3 tools/test_host.py
@@ -187,28 +246,27 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6927 | 164264 | 1265 |
-| `mega2560_serial` | 5108 | 104710 | 3084 |
-| `mega2560_display` | 6896 | 155530 | 1296 |
-| `mega2560_local` | 5947 | 121066 | 2245 |
-| `mega2560_minimal` | 4144 | 50278 | 4048 |
-| `mega2560_touch` | 7129 | 173934 | 1063 |
-| `mega2560_touch_wheel` | 7160 | 175462 | 1032 |
-| `mega2560_ui_debug` | 6949 | 167108 | 1243 |
-| `mega2560_touch_debug` | 7151 | 176516 | 1041 |
-| `mega2560_touch_local` | 6149 | 127596 | 2043 |
-| `mega2560_touch_debug_local` | 6171 | 127984 | 2021 |
-| `mega2560_touch_enable` | 7129 | 174196 | 1063 |
-| `mega2560_touch_fan` | 7134 | 174614 | 1058 |
-| `mega2560_serial_fan` | 5113 | 105102 | 3079 |
-| `mega2560_serial_cutoff` | 5109 | 104798 | 3083 |
-| `mega2560_touch_cutoff` | 7135 | 174766 | 1057 |
-| `mega2560_serial_alerts` | 5110 | 104984 | 3082 |
-| `mega2560_touch_alerts` | 7137 | 175052 | 1055 |
-| `mega2560_wheel_alerts` | 6930 | 165006 | 1262 |
+| `mega2560` | 6927 | 165606 | 1265 |
+| `mega2560_serial` | 5108 | 104796 | 3084 |
+| `mega2560_display` | 6896 | 156572 | 1296 |
+| `mega2560_local` | 5947 | 121310 | 2245 |
+| `mega2560_minimal` | 4144 | 50402 | 4048 |
+| `mega2560_touch` | 7129 | 174404 | 1063 |
+| `mega2560_touch_wheel` | 7160 | 175840 | 1032 |
+| `mega2560_ui_debug` | 6949 | 168324 | 1243 |
+| `mega2560_touch_debug` | 7151 | 177298 | 1041 |
+| `mega2560_touch_local` | 6149 | 127644 | 2043 |
+| `mega2560_touch_debug_local` | 6171 | 128050 | 2021 |
+| `mega2560_touch_enable` | 7129 | 174736 | 1063 |
+| `mega2560_touch_fan` | 7134 | 175382 | 1058 |
+| `mega2560_serial_fan` | 5113 | 105186 | 3079 |
+| `mega2560_serial_cutoff` | 5109 | 104884 | 3083 |
+| `mega2560_touch_cutoff` | 7135 | 175546 | 1057 |
+| `mega2560_serial_alerts` | 5110 | 105070 | 3082 |
+| `mega2560_touch_alerts` | 7137 | 175464 | 1055 |
+| `mega2560_wheel_alerts` | 6930 | 165876 | 1262 |
 
-Compared with the nine-slot baseline `0b6b839`, the latency fixes add at most
-**50 bytes** of static RAM. The wheel/alert build leaves **1,262 bytes** free;
+Compared with `8cae35c`, priority redraws add **no static RAM**. The wheel/alert build leaves **1,262 bytes** free;
 the largest profile uses **7,160 bytes**, leaving **1,032 bytes** for stack/runtime
 use. All profiles pass the existing 1 KiB static-headroom requirement.
 

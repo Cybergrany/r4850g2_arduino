@@ -15,6 +15,8 @@ uint32_t clockNow=100;
 TouchSample input={};
 UiInput wheel={};
 UiFrame appFrame;
+uint8_t appDrawCells=255, appPaintDelay=0;
+uint16_t appPaintCalls=0;
 }
 uint32_t millis() { return clockNow; }
 uint32_t micros() { return clockNow*1000; }
@@ -26,7 +28,8 @@ bool Ili9341Display::canDim() const { return false; }
 void Ili9341Display::dim(bool) {}
 void Ili9341Display::invalidate(bool) { changes_.invalidate(); }
 void Ili9341Display::service(const UiFrame& frame) {
-  appFrame=frame; uint8_t budget=255; uint16_t index; UiCell cell;
+  ++appPaintCalls; clockNow+=appPaintDelay;
+  appFrame=frame; uint8_t budget=appDrawCells; uint16_t index; UiCell cell;
   while(changes_.next(frame,previous_,budget,index,cell)) previous_.cell(index,cell);
 }
 void Xpt2046Input::begin() {}
@@ -151,6 +154,28 @@ struct FakeDisplay : Display {
   DisplayStats statistics() const override { return timers; }
   void resetStatistics() override { timers={}; }
 };
+void drawingPriority() {
+  Rig r; r.ready(); r.controller.alerts().acknowledgeAll();
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; wheel={}; ui.begin();
+  ui.tick(clockNow); CHECK(ui.priorityDrawing());
+  ui.paint(); ui.paint(); CHECK(!display.pending() && !ui.priorityDrawing());
+  clockNow+=ui::refreshMs; ui.tick(clockNow);
+  CHECK(display.remaining==2 && !ui.priorityDrawing()); // Metrics retain one slice.
+  clockNow+=ui::refreshMs; ui.tick(clockNow);
+  CHECK(display.remaining==1); // A slow telemetry pass cannot keep restarting.
+  ui.paint(); wheel={1,false,false}; ui.tick(++clockNow);
+  CHECK(ui.priorityDrawing()); ui.paint(); ui.paint(); CHECK(!ui.priorityDrawing());
+
+  // Exercise the actual Application loop with deliberately incomplete drawing.
+  // One regular slice plus the fixed ceiling, or the elapsed-time limit.
+  clockNow=0xfffffff0U; Serial.input.clear(); Serial.output.clear();
+  appDrawCells=1; appPaintCalls=0;
+  Application app; app.begin(); app.tick(); CHECK(appPaintCalls==1+ui::priorityRenderSlices);
+  appPaintCalls=0; appPaintDelay=1; app.tick();
+  CHECK(appPaintCalls==1+ui::priorityRenderUs/1000);
+  appDrawCells=255; appPaintDelay=0;
+}
 void layoutAndLocalUi() {
   Rig r; r.ready(); UiModel model(r.controller,r.memory); model.tick(clockNow); UiFrame frame;
   UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-groups",frame);
@@ -501,6 +526,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

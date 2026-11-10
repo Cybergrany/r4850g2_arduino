@@ -37,12 +37,20 @@ void UiFrame::put(uint8_t row, uint8_t col, uint8_t width, const char* value, bo
   uint8_t n = 0; while (n < width && read(value + n, flash)) ++n;
   const bool cut = n == width && read(value + n, flash);
   const uint8_t pad = right && !cut ? width - n : 0;
-  for (uint8_t i = 0; i < width; ++i) {
-    char c = i >= pad && i < n + pad ? read(value + i - pad, flash) : ' ';
-    if (cut && i == width - 1) c = '~';
+  const uint16_t start = uint16_t(row) * ui::columns + col;
+  memset(characters_ + start, ' ', width);
+  for (uint8_t i = 0; i < n; ++i) {
+    char c = read(value + i, flash);
     if (c < 32 || c > 126) c = '?';
-    cell(uint16_t(row) * ui::columns + col + i, {c, style});
+    characters_[start + pad + i] = c;
   }
+  if (cut && width) characters_[start + width - 1] = '~';
+  // Style nibbles are contiguous. Fill pairs once instead of doing per-cell
+  // index arithmetic and read/modify/write for every blank in a filled panel.
+  uint16_t first = start; uint8_t left = width; style &= 15;
+  if (left && (first & 1)) { styles_[first / 2] = (styles_[first / 2] & 15) | (style << 4); ++first; --left; }
+  memset(styles_ + first / 2, style | (style << 4), left / 2);
+  if (left & 1) styles_[(first + left - 1) / 2] = (styles_[(first + left - 1) / 2] & 0xf0) | style;
 }
 void UiFrame::text(uint8_t r, uint8_t c, uint8_t w, const char* s, uint8_t style, bool right) { put(r, c, w, s, false, style, right); }
 void UiFrame::text(uint8_t r, uint8_t c, uint8_t w, FlashText s, uint8_t style, bool right) { put(r, c, w, s.data, true, style, right); }
