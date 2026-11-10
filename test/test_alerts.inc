@@ -153,7 +153,7 @@ void thermalQueuedChanges() {
   starting.step(10000); CHECK(starting.current[0]<=600 && starting.c.unitControl(0).fault==CommandState::Idle);
 }
 void alertUiAndSerial() {
-  // A startup missing-members popup has one wheel action. Acknowledge returns
+  // A startup missing-members popup defaults to Acknowledge. It returns
   // to the overview without accepting absences, enabling output or saving.
   Rig bench; FakeEeprom benchBytes; MemoryManager benchMemory(benchBytes);
   CHECK(bench.c.setAutoResume(false)==Result::Ok);
@@ -163,7 +163,6 @@ void alertUiAndSerial() {
   const auto revision=bench.c.configurationRevision();
   const auto accepted=bench.c.acceptedAbsences();
   benchUi.notifications(bench.now); CHECK(benchUi.page()==UiPage::AlertDetail);
-  benchUi.input({1,false,false},++bench.now);
   CHECK(benchUi.page()==UiPage::AlertDetail && benchUi.alertSelection()==0);
   benchUi.input({0,true,false},++bench.now);
   CHECK(benchUi.page()==UiPage::Groups && bench.c.alerts().at(AlertManager::Startup).acknowledged);

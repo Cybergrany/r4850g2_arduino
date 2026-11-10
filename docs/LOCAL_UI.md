@@ -13,10 +13,12 @@ the encoder only controls settings when an enabled display initializes.
 
 ## Wiring and first boot
 
-The display now runs at **500 kHz SPI** (`board::displaySpiHz` in
+The display now runs at **8 MHz SPI** (`board::displaySpiHz` in
 `src/config/BoardConfig.h`). Use `mega2560_wheel_alerts` for the current screen,
 wheel and serial setup with touch disabled, CHG_ALLOW D27, WARNING D28, ERROR D29
-and PSU_ACTIVE D30. `mega2560` is also touch-disabled, without those optional
+and PSU_ACTIVE D30, with ENABLE_IN on D26. Connect its latching switch to GND;
+see [switch semantics](CONTROL.md#optional-enable_in-switch).
+`mega2560` is also touch-disabled, without those optional
 outputs. Explicit touch profiles remain available.
 
 Use a module with **5 V compatible logic inputs**, or appropriate level shifting.
@@ -199,20 +201,82 @@ Backlight dimming is optional. Configure a suitable PWM control pin to enable
 the default 60-second idle timeout. The first wheel interaction wakes the screen
 and is consumed. Dimming is suppressed during local apply/save operations.
 
-`UiModel` owns input/navigation/operation state, `UiView` owns layout, and
-`Display` is the replaceable hardware interface. `Ili9341Display` draws changed
-cells through short SPI transactions (12 pixels at most; two transactions per
-tick). At 500 kHz, each burst takes up to 560 microseconds of wire time including
-address/command bytes, plus software overhead. It uses character/style caches and one glyph raster, not a full pixel
-framebuffer. Initialization and its full clear happen before CAN reception starts.
-The boot clear needs at least 2.46 seconds for pixel transfer at this clock;
-page changes are also slower than at the former 8 MHz setting. Exercise page
-changes while checking `diag bus` for receive drops/hardware overflows on the bench.
-Each new scene schedules a bounded comparison pass (32 cells per tick); an
-unchanged, completed scene causes no further scans. A new renderer must implement
-`Display::invalidate()`, `service()` and `pending()`. New-page touch targets
-are armed only after pending drawing completes. Application advances EEPROM saves
-for both UI and serial, even when the display is absent; the UI observes results.
+`UiModel` owns navigation and operation state, `UiView` owns layout, and
+`Display` is the replaceable hardware interface. The classic font, colours,
+filled selection backgrounds, text size and layout are retained. Configuration
+values show two decimal places; the fullscreen editor shows one, matching its
+0.1 V / 0.5 A increments. The shared formatter generates fractional digits
+directly because AVR-libc does not support variable-width printf conversions.
+
+`Ili9341Display` compares visible pixels. A foreground change on an empty cell
+costs no SPI transfer; unchanged glyph rows are also skipped. At 8 MHz it sends
+up to four adjacent changed rows (48 pixels) per transaction. At 4 MHz the limit
+is two rows; at lower clocks, one row. A service call checks a **750 us cooperative
+budget** between work units, with a ceiling of eight transfers above 2 MHz and
+two at 2 MHz or below. At 500 kHz the conservative one-row/two-transfer limit
+remains. Pixel preparation happens before opening SPI, and every transaction
+ends before another strip, so CAN reception can run between them. The budget
+can overrun by a work unit or interrupt; it is not a hard real-time guarantee.
+
+There is no pixel framebuffer or extra scene buffer. Cells are recorded as
+painted only after all necessary strips complete; changing a scene mid-glyph
+schedules a complete new comparison pass. Each call compares at most 32 cells;
+completed scenes require no idle scanning. Input still composes immediately and
+live readings refresh every 500 ms. Touch targets on new pages arm only after
+drawing finishes. Initialization and its full clear happen before CAN reception.
+
+Use `diag ui` to inspect drawing/read clocks, maximum render-call duration,
+maximum SPI-transaction duration, and latest/maximum completed-scene time since
+boot. Pair it with `diag bus` while scrolling. The drawing clock remains 8 MHz
+and display reads remain capped at 1 MHz. `PSU_DISPLAY_SPI_HZ` permits the slower
+supported clocks for testing; it does not alter CAN speed. See the
+[loaded bench comparison](VALIDATION.md#ui-redraw-bench-comparison).
+
+Application advances EEPROM saves for UI and serial even when the display is
+absent. The UI observes the matching completion token and verification result.
+
+## Recovery from notifications and results
+
+The unavailable-members notification has **Acknowledge** and **Config** side by
+side. The wheel initially selects Acknowledge. Turning to Config and clicking,
+or tapping Config, opens the affected group's availability page. Choose
+**Continue without group**, **Wait for group**, or **Choose individuals**. Returned
+units offer **Include group** / **Keep excluded**. Existing settling checks,
+review, confirmation and optional remembered absence permissions still apply.
+
+Opening Config does not acknowledge the incident, accept an absence or enable
+current. Back/Wait returns to that incident; Acknowledge then returns to the
+original screen. An interrupted editor retains its value unless configuration
+changes invalidate it. Recovery uses one return bookmark; following a further
+blocked-operation shortcut keeps that same original return point.
+
+| Incident/result | Shortcut |
+| --- | --- |
+| Missing, excluded, returned or unstable members | Config → affected group's availability |
+| Active dropout | Config for missing CAN/AC; Details for a responding control fault |
+| Setting/fan fault, reconciliation or unconfirmed stop | Details → PSU diagnostics → Retry ALL |
+| CAN initialization or latched cutoff | Diagnostics → bus/control → Retry ALL |
+| Receive loss, discovery capacity, identity conflict | Diagnostics → bus counts, ages, counters and identity |
+| Temperature warning/error | Temps → input/output readings, current factor and hot timer |
+| Thermal shutdown / missing temperature | Temps, plus separate guarded Resume / Retry sensors |
+| Failed save / earlier snapshot saved | Review save → current RAM drafts/profile → Save settings |
+| Missing calibration / calibration save failure | Calibrate → existing workflow |
+| Missing voltage profile / apply blocked by OFF | Settings / Enable |
+| Unbound units, no group, wrong deployment, unavailable display | Specific help; commissioning and binding stay in serial |
+
+Retry, Save, Enable and sensor retry open a review with **Cancel initially
+selected**. Retry explicitly affects **all PSUs**: reconciliation starts at zero
+and may restore the authorized profile if enable is ON. Enable does not apply
+staged edits. Thermal resume still requires cooling and verified persistence.
+Save stores the reviewed RAM configuration without applying it; success appears
+only after the asynchronous journal writer verifies its record. Newer drafts are
+reported as unsaved. Busy operations retain ownership and show progress.
+
+Reviews expire after 15 seconds. Configuration, discovery/identity, availability,
+operation or incident changes invalidate them. An obsolete review returns to
+its details with **Changed; review again**. Fresh touch/wheel input is required
+after navigation. Alerts continue accumulating in the list during recovery;
+protective actions and GPIO states remain independent of navigation and Ack.
 
 Regenerate the preview from real layout tests after installing the display libraries:
 

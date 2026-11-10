@@ -159,6 +159,12 @@ and wheel gestures already underway cannot acknowledge a new popup. Calibration
 defers automatic popups. Display-only builds return to the overview after ten
 seconds without acknowledging the incident.
 
+Details also offer a condition-specific recovery shortcut: **Config**, **Details**,
+**Diagnostics**, **Temps**, **Review save**, **Calibrate**, **Settings** or **Enable**.
+Acknowledge remains the default wheel selection. Recovery navigation does not
+acknowledge or authorize anything; decisions require their separate review.
+See [recovery controls](LOCAL_UI.md#recovery-from-notifications-and-results).
+
 ## Catalogue
 
 | Severity | Conditions |

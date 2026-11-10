@@ -1721,9 +1721,11 @@ void uiLayouts() {
 #include "test_alerts.inc"
 #include "test_serial_alerts.inc"
 #include "test_psu_active.inc"
+#include "test_ui_recovery.inc"
 }
 int main() {
   try {
+    decimalFormatting(); uiRecoveryAvailability(); uiRecoveryGuards(); uiRecoverySave(); uiRecoveryResultsAndThermal();
     psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();
     serialAlertCadence(); serialAlertStorm();
     alertEpisodes(); thermalLimitsAndSensors(); thermalTimingAndAbsence(); thermalPersistence(); thermalQueuedChanges(); thermalAckRacesAndMigration(); alertUiAndSerial(); alertSerialCommands(); activeIdentityAlert();

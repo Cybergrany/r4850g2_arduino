@@ -3,14 +3,15 @@
 #include "../storage/MemoryManager.h"
 #include "../config/UiConfig.h"
 #include "UiAction.h"
+#include "UiRecovery.h"
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
 enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios,
-  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail };
+  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail, Recovery, RecoveryConfirm };
 enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
   None, Changed, Busy, Blocked, Applying, Saving, Saved, PartialSaved,
-  ApplyFailed, SaveFailed, SavedOlder, Cancelled
+  ApplyFailed, SaveFailed, SavedOlder, Cancelled, ConfigSaved
 };
 class UiModel {
  public:
@@ -65,7 +66,41 @@ class UiModel {
   StorageResult storageResult() const { return storageResult_; }
   uint8_t succeeded() const { return succeeded_; }
   uint8_t failed() const { return failed_; }
+  RecoveryLink recoveryLink() const;
+  bool recovering() const { return recovery_.active; }
+  RecoveryKind recoveryKind() const { return recovery_.kind; }
+  AlertCode recoveryCause() const { return recovery_.incident.code; }
+  uint8_t recoverySlot() const { return recovery_.slot; }
+  uint8_t recoverySelection() const { return recovery_.selection; }
+  RecoveryCommand recoveryCommand() const { return recovery_.command; }
+  RecoveryCommand availableRecoveryCommand() const;
+  Result recoveryResult() const { return recovery_.result; }
+  bool recoverySaving() const { return recovery_.saveToken != 0; }
+  bool recoverySaved() const { return recovery_.saved; }
  private:
+  void openRecovery(uint32_t now, RecoveryLink link = {RecoveryKind::None, PSU_MAX_UNITS});
+  bool recoveryAction(UiAction action, uint32_t now);
+  void returnFromRecovery();
+  void reviewRecovery(RecoveryCommand command, uint32_t now);
+  bool recoveryFresh(uint32_t now) const;
+  void recoveryTick(uint32_t now);
+  struct Recovery {
+    uint32_t revision = 0, topology = 0, availability = 0, since = 0, report = 0;
+    uint32_t editRevision = 0, operation = 0;
+    uint16_t edit = 0, saveToken = 0;
+    AlertState incident;
+    UiPage page = UiPage::Groups, reviewPage = UiPage::Recovery;
+    UiField field = UiField::Current;
+    UiNotice notice = UiNotice::None;
+    Issue blocker = Issue::None;
+    int8_t group = -1;
+    uint8_t unit = 0, overlay = 0, alertSelection = 0, slot = 0, selection = 0;
+    RecoveryKind kind = RecoveryKind::None;
+    RecoveryCommand command = RecoveryCommand::None;
+    Result result = Result::Ok;
+    bool active = false, editing = false, saved = false;
+  } recovery_;
+  uint32_t uiNow_ = 0;
   bool alertAction(UiAction action, uint32_t now);
   uint32_t alertSince_ = 0;
   AlertState displayedAlert_;

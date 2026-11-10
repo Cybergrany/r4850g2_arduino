@@ -13,7 +13,7 @@ void UiModel::notifications(uint32_t now) {
 #endif
     return;
   }
-  if (page_ == UiPage::Calibration) return;
+  if (page_ == UiPage::Calibration || recovering()) return;
   const uint16_t id = c_.alerts().notification(now);
   const int8_t source = c_.alerts().find(id);
   if (source < 0) return;
@@ -41,12 +41,13 @@ bool UiModel::alertAction(UiAction a, uint32_t now) {
   // Never let a stale button acknowledge/resume the incident replacing it.
   const auto current = c_.alerts().at(displayedAlert_.source);
   if (current.id != displayedAlert_.id) {
-    if (a.kind == ActionKind::Acknowledge || a.kind == ActionKind::Resume || a.kind == ActionKind::RetrySensors) {
+    if (a.kind == ActionKind::Acknowledge || a.kind == ActionKind::Resume || a.kind == ActionKind::RetrySensors || a.kind == ActionKind::Recover) {
       displayedAlert_ = current; alertSince_ = now; alertSelection_ = 0;
     }
     return true;
   }
   if (a.kind == ActionKind::Acknowledge) { c_.alerts().acknowledge(displayedAlert_.id); dismissAlert(); }
+  if (a.kind == ActionKind::Recover) openRecovery(now);
   if (a.kind == ActionKind::Resume && displayedAlert_.code == AlertCode::ThermalStop)
     alertResult_ = c_.setAutoResume(true); // Clear-save is asynchronous. Detail shows its status.
   if (a.kind == ActionKind::RetrySensors && displayedAlert_.code == AlertCode::TemperatureSensor && displayedAlert_.source < c_.count())

@@ -24,7 +24,7 @@ Ili9341Display::Ili9341Display() {}
 bool Ili9341Display::begin() { available_=true; return true; }
 bool Ili9341Display::canDim() const { return false; }
 void Ili9341Display::dim(bool) {}
-void Ili9341Display::Glyph::drawPixel(int16_t,int16_t,uint16_t) {}
+void Ili9341Display::invalidate() { changes_.invalidate(); }
 void Ili9341Display::service(const UiFrame& frame) {
   appFrame=frame; uint8_t budget=255; uint16_t index; UiCell cell;
   while(changes_.next(frame,previous_,budget,index,cell)) previous_.cell(index,cell);
@@ -263,14 +263,14 @@ void thermalTouchWorkflow() {
   CHECK(ui.editing() && r.controller.thermalStatus().percent==30);
   CHECK(!r.controller.alerts().at(AlertManager::Thermal).acknowledged && hasText(display.shown,"Acknowledge"));
   snapshot("touch-alert-temperature",display.shown);
-  tap(150,216); CHECK(ui.editing() && r.controller.alerts().at(AlertManager::Thermal).acknowledged);
+  tap(75,216); CHECK(ui.editing() && r.controller.alerts().at(AlertManager::Thermal).acknowledged);
   CHECK(r.controller.alerts().error());
   r.can.temperatures(76,30); tick(350);
   CHECK(ui.editing() && !r.controller.enableControl().enabled());
   Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok && saved.thermalStop==ThermalStop::Temperature);
   snapshot("touch-alert-shutdown",display.shown);
   tap(150,180); CHECK(!r.controller.enableControl().enabled()); // Resume is separate and still hot.
-  tap(150,216); CHECK(ui.editing());
+  tap(75,216); CHECK(ui.editing());
   r.can.temperatures(30,30); tick(200);
   CHECK(r.controller.setAutoResume(true)==Result::Ok && !r.controller.enableControl().enabled());
   tick(500); CHECK(r.controller.enableControl().enabled() && r.controller.configuration().thermalStop==ThermalStop::None);
@@ -289,6 +289,47 @@ void thermalTouchWorkflow() {
   while(cal.saving()) cal.step();
   tick(400);
   CHECK(r.memory.load(saved)==StorageResult::Ok && saved.thermalStop!=ThermalStop::None);
+}
+
+void touchRecoveryWorkflow() {
+  Rig r; r.ready(); CHECK(r.controller.setAutoResume(false)==Result::Ok);
+  for(unsigned i=0;i<600;++i) r.step();
+  CHECK(r.memory.save(r.controller.configuration())==StorageResult::Ok);
+  CalibrationStore calibration(r.bytes,r.memory); CHECK(calibration.start(knownCalibration())==StorageResult::Ok);
+  while(calibration.saving()) calibration.step();
+  r.can.sourcePower(7,false); for(unsigned i=0;i<1000;++i) r.step();
+  r.controller.alerts().acknowledgeAll();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; ui.begin();
+  auto tick=[&](unsigned n) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
+  auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(15); };
+  tick(20); r.controller.alerts().reset(AlertManager::Startup);
+  r.controller.alerts().set(AlertManager::Startup,AlertCode::Missing,clockNow); tick(30);
+  CHECK(hasText(display.shown,"Acknowledge") && hasText(display.shown,"Config"));
+  snapshot("touch-recovery-missing",display.shown);
+  const auto id=r.controller.alerts().at(AlertManager::Startup).id;
+  tap(240,216); CHECK(hasText(display.shown,"Continue without group"));
+  CHECK(!r.controller.alerts().at(AlertManager::Startup).acknowledged && !r.controller.acceptedAbsences());
+  snapshot("touch-recovery-availability",display.shown);
+  tap(150,145); CHECK(hasText(display.shown,"Acknowledge")); // Wait: back to same incident.
+  CHECK(r.controller.alerts().at(AlertManager::Startup).id==id);
+  tap(60,216); CHECK(r.controller.alerts().at(AlertManager::Startup).acknowledged);
+  // A failed journal write has an independent reviewed-save recovery path.
+  r.controller.storageStatus(StorageResult::WriteFailed); tick(1600);
+  CHECK(hasText(display.shown,"Review save")); tap(240,216);
+  CHECK(hasText(display.shown,"REVIEW RAM BEFORE SAVE")); tap(200,216);
+  CHECK(hasText(display.shown,"REVIEW RECOVERY"));
+  snapshot("touch-recovery-save-confirm",display.shown);
+  tap(60,216); CHECK(!r.memory.saving() && hasText(display.shown,"REVIEW RAM BEFORE SAVE"));
+  tap(200,216); tap(240,216); tick(400);
+  CHECK(hasText(display.shown,"Saved and verified") && !r.controller.enableControl().enabled());
+  snapshot("touch-recovery-saved",display.shown);
+  // The UI's diag extension is bounded, reports tested clocks and explicitly
+  // describes the cooperative budget. Serial status does not change navigation.
+  struct Capture: Print { std::string value; size_t write(uint8_t b) override { value+=char(b); return 1; } } out;
+  char diag[]="diag", page[]="ui"; char* args[]={diag,page};
+  CHECK(ui.command(2,args,out,clockNow));
+  CHECK(out.value.find("draw-Hz=8000000")!=std::string::npos && out.value.find("cooperative")!=std::string::npos);
+  CHECK(out.value.size()<256);
 }
 
 void applicationScenarios() {
@@ -402,6 +443,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

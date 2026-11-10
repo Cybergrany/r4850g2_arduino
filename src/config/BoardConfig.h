@@ -1,5 +1,8 @@
 #pragma once
 #include <stdint.h>
+#ifndef PSU_DISPLAY_SPI_HZ
+#define PSU_DISPLAY_SPI_HZ 8000000UL
+#endif
 
 namespace psu { namespace board {
 // Existing Nano/Mega wiring and MCP2515 crystal. Change these here, not in logic.
@@ -18,7 +21,7 @@ constexpr uint8_t encoderStepsPerNotch = 4;
 constexpr uint8_t displayChipSelect = 22, displayDataCommand = 23;
 constexpr int8_t displayReset = 24;
 constexpr int8_t displayBacklight = -1; // Optional PWM logic input, e.g. pin 6; not a bare LED load.
-constexpr uint32_t displaySpiHz = 8000000UL; // Tested clock with shifter
+constexpr uint32_t displaySpiHz = PSU_DISPLAY_SPI_HZ; // Tested default with shifter; lower clocks supported.
 constexpr uint32_t displayReadMaxSpiHz = 1000000UL; // Reads have stricter timing; never exceed the draw clock.
 constexpr uint8_t displayRotation = 3; // 1 or 3: landscape.
 constexpr bool displayVerifyId = true; // Connect TFT SDO/MISO; opt out only for a verified write-only module.

@@ -38,7 +38,7 @@ See [serial connection behaviour](docs/SERIAL.md).
 | Environment | Screen | Wheel | Serial |
 | --- | --- | --- | --- |
 | `mega2560` (default) | ILI9341 dashboard/config | Navigate/edit | Yes |
-| `mega2560_wheel_alerts` | 500 kHz display, touch disabled; D27–D30 outputs | Navigate/edit | Yes |
+| `mega2560_wheel_alerts` | 8 MHz display, touch disabled; D26 enable, D27–D30 outputs | Navigate/edit | Yes |
 | `mega2560_serial` | No | No | Yes |
 | `mega2560_display` | Group overview, automatic paging | No | Yes |
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
@@ -66,21 +66,21 @@ at least one PSU is permitted a positive current limit. Inspect it using
 `diag control`. See [status output behavior and wiring](docs/CONTROL.md#optional-psu_active-output).
 
 For the current display/wheel wiring, use `mega2560_wheel_alerts`: screen at
-**500 kHz SPI**, touch disabled, serial and wheel enabled, plus CHG_ALLOW D27,
-WARNING D28, ERROR D29 and PSU_ACTIVE D30:
+**8 MHz SPI**, touch disabled, serial and wheel enabled, plus CHG_ALLOW D27,
+WARNING D28, ERROR D29, PSU_ACTIVE D30 and the ENABLE_IN switch on D26:
 
 ```sh
 pio run -e mega2560_wheel_alerts
 pio run -e mega2560_wheel_alerts -t upload --upload-port COM15
 ```
 
-The ordinary `mega2560` profile also disables touch and uses 500 kHz, with optional
+The ordinary `mega2560` profile also disables touch and uses 8 MHz, with optional
 outputs disabled. Touch remains an explicit choice in the `*_touch*` profiles.
 When leaving the panel's touch controller unused, hold T_CS HIGH on its 3.3 V
 side so it cannot interfere with shared SPI. See [display wiring](docs/LOCAL_UI.md).
 
 For a blank screen, the [standalone ILI9341 bench sketch](examples/ili9341_bench/README.md)
-uses the same pins and 500 kHz clock, cycles test patterns and reports display ID
+uses the same pins and 8 MHz clock, cycles test patterns and reports display ID
 over serial without loading the charger application or changing EEPROM.
 
 For an unresponsive wheel, the [standalone wheel serial test](examples/wheel_bench/README.md)

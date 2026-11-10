@@ -70,7 +70,13 @@ void formatValue(char* out, uint8_t size, float value, const char* unit, uint8_t
       const uint32_t rounded = uint32_t(magnitude * divisor + 0.5f);
       char number[24];
       int n = PSU_SNPRINTF(number, sizeof(number), "%s%lu", negative && rounded ? "-" : "", (unsigned long)(rounded / divisor));
-      if (precision) n += PSU_SNPRINTF(number + n, sizeof(number) - n, ".%0*u", precision, unsigned(rounded % divisor));
+      // AVR-libc aborts printf on '*' widths/precisions. Generate the at-most
+      // two fractional digits directly, including leading/trailing zeroes.
+      if (precision) {
+        number[n++] = '.';
+        if (precision == 2) number[n++] = char('0' + rounded / 10 % 10);
+        number[n++] = char('0' + rounded % 10);
+      }
       if (scale) number[n++] = prefixes[scale];
       number[n] = 0;
       if (n + strlen(unit) < size) { strcpy(out, number); strcat(out, unit); return; }

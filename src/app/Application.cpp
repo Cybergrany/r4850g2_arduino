@@ -186,6 +186,10 @@ bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t n
   auto& app=*static_cast<Application*>(context); (void)app; (void)now;
 #if PSU_ENABLE_DISPLAY
   if (app.localUi_.command(n,a,out,now)) return true;
+#else
+  if (n == 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
+    out.println(F("UI disabled in this build")); return true;
+  }
 #endif
   if (PSU_STRCMP(a[0], "ui-debug")) return false;
 #if PSU_UI_DEBUG
