@@ -87,8 +87,8 @@ not an import command.
 Production calibration is independent of PSU/group/deployment configuration.
 Two 40-byte records occupy EEPROM addresses **216–255** and **472–511**, the
 unused tails of the existing slots. Version, CRC, sequence, panel profile and
-rotation validate the records. The charger record is schema 4 and at most
-216 bytes; old charger records remain readable. Compile-time bounds prevent
+rotation validate the records. The charger record is schema 5, 211 bytes at nine
+PSU slots, within the existing 216-byte reservation; old charger records remain readable. Compile-time bounds prevent
 future overlap. Both writers share one readiness-aware byte-write scheduler.
 This still uses only the first **512 EEPROM bytes**.
 
@@ -145,9 +145,10 @@ with its MIT notice retained in `Xpt2046Input.cpp`.
 
 ## Simulation scenarios
 
-Debug startup seeds eight bound units across four groups (3/2/2/1 members).
+Debug startup seeds nine bound units across four groups (3/2/2/2 members).
 It performs normal simulated identity checks and restores the fixture's
-operating settings before introducing a scenario. Reconciliation now includes
+operating settings, including output-readiness qualification, before introducing
+a scenario. Reconciliation includes
 zero-current, fan, voltage and wake checks; allow tens of seconds for
 this priming; `ui-debug status` reports it. No physical CAN, EEPROM, CHG_ALLOW or
 fan PWM adapter is used, even if those pins are configured. A simulated permit

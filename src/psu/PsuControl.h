@@ -22,6 +22,8 @@ struct ReadinessStatus {
   bool pending = false, acknowledged = false;
 };
 struct UnitControl {
+  UnitControl() : zeroConfirmed(false), awakeConfirmed(false), standbyConfirmed(false),
+      cooling(false), fanFailed(false), postReady(false), reconciled(false) {}
   uint32_t since = 0, coolSince = 0;
   uint32_t outputSince = 0;
   uint32_t readySince = 0, readyLast = 0;
@@ -34,9 +36,11 @@ struct UnitControl {
   FanReason fanReason = FanReason::Startup;
   CommandState last = CommandState::Idle, fault = CommandState::Idle;
   uint8_t lastRegister = 0, faultRegister = 0, attempts = 0;
-  bool zeroConfirmed = false, awakeConfirmed = false, standbyConfirmed = false;
-  bool cooling = false, fanFailed = false;
-  bool postReady = false; // Second zero/V/fan pass after power-stage readiness.
-  bool reconciled = false;
+  // Cooperative controller state only; never shared with an ISR. Packing these
+  // seven flags saves six bytes per PSU without changing their lifetime.
+  bool zeroConfirmed : 1, awakeConfirmed : 1, standbyConfirmed : 1;
+  bool cooling : 1, fanFailed : 1;
+  bool postReady : 1; // Second zero/V/fan pass after power-stage readiness.
+  bool reconciled : 1;
 };
 }

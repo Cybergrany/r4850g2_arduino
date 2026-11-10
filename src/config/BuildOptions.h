@@ -23,8 +23,8 @@
 #error "Touch requires PSU_ENABLE_DISPLAY"
 #endif
 #ifndef PSU_MAX_UNITS
-#define PSU_MAX_UNITS 8
+#define PSU_MAX_UNITS 9
 #endif
 
-// Static allocation only. Eight units also fit the 512-byte EEPROM journal.
-static_assert(PSU_MAX_UNITS >= 1 && PSU_MAX_UNITS <= 8, "Support 1..8 PSU slots");
+// Static allocation only; schema 5 packs nine slots into the 512-byte journal.
+static_assert(PSU_MAX_UNITS >= 1 && PSU_MAX_UNITS <= 9, "Support 1..9 PSU slots");

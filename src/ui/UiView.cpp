@@ -86,7 +86,7 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   else line(f, row, UI_TEXT("OK"), background | Good);
 }
 void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
-  const uint8_t mask = membersMask(c.count());
+  const UnitMask mask = membersMask(c.count());
   reading(f, 0, 0, 6, summarize(c, mask, protocol::OutputVoltage, Aggregate::Mean, now), "V");
   reading(f, 0, 7, 7, summarize(c, mask, protocol::OutputCurrent, Aggregate::Sum, now), "A");
   reading(f, 0, 15, 7, summarize(c, mask, protocol::OutputPower, Aggregate::Sum, now), "W", Text, 0);
@@ -218,7 +218,7 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
 void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
-  const auto& cfg = c.configuration(); const uint8_t mask = cfg.groups[m.group()].members;
+  const auto& cfg = c.configuration(); const UnitMask mask = cfg.groups[m.group()].members;
   f.text(1, 0, 8, cfg.groups[m.group()].name, Accent); f.text(1, 9, 17, UI_TEXT("CONFIG"), Accent);
   line(f, 3, UI_TEXT("BUS VOLTAGE - ALL GROUPS"), m.field() == UiField::Voltage ? selectedStyle | Accent : Accent);
   line(f, 7, UI_TEXT("GROUP TOTAL CURRENT"), m.field() == UiField::Current ? selectedStyle | Accent : Accent);

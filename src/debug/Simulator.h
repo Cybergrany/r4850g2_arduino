@@ -36,8 +36,8 @@ class SimulatedCan : public CanTransport {
   void reset();
   void scenario(DebugScenario value);
   void permit(bool allowed);
-  void sourcePower(uint8_t mask, bool on);
-  void batteryPower(uint8_t mask, bool on);
+  void sourcePower(UnitMask mask, bool on);
+  void batteryPower(UnitMask mask, bool on);
   void temperatures(int16_t output, int16_t input) { outputTemperature_ = output; inputTemperature_ = input; }
   DebugScenario scenario() const { return scenario_; }
  private:
@@ -53,9 +53,9 @@ class SimulatedCan : public CanTransport {
   uint32_t lastCycle_ = 0;
   uint8_t slot_ = 0, field_ = 0, budget_ = 0;
   bool pending_ = false, cycling_ = false;
-  uint8_t standby_ = 0, fanMax_ = 0, wakeSeen_ = 0;
+  UnitMask standby_ = 0, fanMax_ = 0, wakeSeen_ = 0;
   DebugScenario scenario_ = DebugScenario::Healthy;
-  uint8_t sources_ = 0xff, batteries_ = 0xff;
+  UnitMask sources_ = allUnitsMask, batteries_ = allUnitsMask;
   bool permit_ = true;
   uint32_t now_ = 0, scenarioSince_ = 0, changedSource_ = 0;
   uint32_t readyAt_[PSU_MAX_UNITS] = {};

@@ -30,7 +30,7 @@ Issue PsuController::routingIssue(uint8_t i, uint32_t now) const {
 }
 void PsuController::cancelJob() {
   if (busy()) {
-    const uint8_t unfinished = report_.recipients & uint8_t(~report_.succeeded);
+    const UnitMask unfinished = report_.recipients & UnitMask(~report_.succeeded);
     report_.failed |= unfinished;
     for (uint8_t i = 0; i < count(); ++i) if (unfinished & (1U << i)) report_.units[i].state = CommandState::Changed;
     report_.active = false;
@@ -115,7 +115,7 @@ void PsuController::clearFanOverride(uint8_t i) {
   // Do not inherit a manually forced AUTO through the policy's deadband.
   u.fanRequested = FanMode::Max; u.fanReason = FanReason::Startup; u.cooling = false;
 }
-Result PsuController::setFanOverride(uint8_t mask, FanOverride mode, uint32_t now) {
+Result PsuController::setFanOverride(UnitMask mask, FanOverride mode, uint32_t now) {
   if (!mask || (mask & ~membersMask(count())) ||
       (mode != FanOverride::Policy && mode != FanOverride::Auto && mode != FanOverride::Max)) return Result::Invalid;
   if (busy()) return Result::Busy;
@@ -194,7 +194,7 @@ void PsuController::currentSent(uint8_t i, uint16_t raw, uint32_t now) {
   if (raw) {
     energized_ |= 1U << i;
     if (!(acknowledgedMask_ & (1U << i)) || acknowledgedCurrent_[i] != raw) {
-      currentSynced_ &= uint8_t(~(1U << i)); u.readyFrames = 0;
+      currentSynced_ &= UnitMask(~(1U << i)); u.readyFrames = 0;
     }
     if (u.outputDemand != OutputDemand::Active && u.outputDemand != OutputDemand::Starting) {
       u.outputDemand = OutputDemand::Starting; u.outputSince = now;
@@ -202,7 +202,7 @@ void PsuController::currentSent(uint8_t i, uint16_t raw, uint32_t now) {
       // edited. Retries, staged edits and brief readiness edges cannot extend it.
       static_assert(uint32_t(limits::maxPollMs) * 3 <= UINT16_MAX, "Readiness window exceeds storage");
       u.outputWindowMs = uint32_t(config_.pollMs) * 3 > control::startupReadyMs ? uint32_t(config_.pollMs) * 3 : control::startupReadyMs;
-      u.readyFrames = 0; currentSynced_ &= uint8_t(~(1U << i));
+      u.readyFrames = 0; currentSynced_ &= UnitMask(~(1U << i));
     }
     u.zeroConfirmed = false;
   } else if (u.outputDemand != OutputDemand::Zero) {
@@ -213,7 +213,7 @@ void PsuController::currentSent(uint8_t i, uint16_t raw, uint32_t now) {
 void PsuController::currentAccepted(uint8_t i, uint16_t raw) {
   acknowledgedCurrent_[i] = raw; acknowledgedMask_ |= 1U << i;
   if (raw == effectiveRaw(i)) currentSynced_ |= 1U << i;
-  else currentSynced_ &= uint8_t(~(1U << i));
+  else currentSynced_ &= UnitMask(~(1U << i));
   if (!raw) control_[i].outputDemand = OutputDemand::Zero;
 }
 void PsuController::controlPhase(uint8_t slot, ControlPhase phase, uint32_t now) {
@@ -299,7 +299,7 @@ ExternalFanStatus PsuController::externalFanStatus(uint32_t now) const {
   if (!maximum) { s.duty = externalFanCurve(s.maximumTemperature); s.reason = FanReason::Cool; }
   return s;
 }
-bool PsuController::controlsOnline(uint8_t mask) const {
+bool PsuController::controlsOnline(UnitMask mask) const {
   for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i))
     if ((excluded_ & (1U << i)) || control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) return false;
   return true;
@@ -342,11 +342,11 @@ bool PsuController::releaseAllowed(uint32_t now) const {
 bool PsuController::psuActive(uint32_t now) const {
   if (!ready_ || !enable_.enabled() || !powerAvailable() || !config_.operating.voltageAuthorized) return false;
   for (uint8_t i = 0; i < count(); ++i) {
-    const uint8_t bit = uint8_t(1U << i);
+    const UnitMask bit = UnitMask(1U << i);
     // Online means this unit has crossed the installation-wide release barrier.
     // Do not reapply that barrier here: healthy units may continue when a peer
     // drops out. A pending ACK or thermal reduction does not revoke permission.
-    if (!(participants() & config_.operating.voltageMask & voltageSynced_ & uint8_t(~restoreBlocked_) & bit) ||
+    if (!(participants() & config_.operating.voltageMask & voltageSynced_ & UnitMask(~restoreBlocked_) & bit) ||
         control_[i].phase != ControlPhase::Online || !control_[i].awakeConfirmed ||
         !effectiveRaw(i) || issue(i, now) != Issue::None) continue;
     return true;
@@ -375,7 +375,7 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
     starting |= u.phase == ControlPhase::Online && (config_.operating.currentMask & (1U << i)) &&
         config_.operating.current[i] && !(currentSynced_ & (1U << i)) &&
         ((busy() && report_.operation != Operation::Offline && (report_.recipients & (1U << i))) ||
-         (restorePending_ & uint8_t(~restoreBlocked_) & (1U << i)));
+         (restorePending_ & UnitMask(~restoreBlocked_) & (1U << i)));
     if (s.blocker == Issue::None && (route != Issue::None || u.fault != CommandState::Idle)) {
       s.blocker = route != Issue::None ? route : Issue::ControlFault; s.slot = i;
     }
@@ -446,7 +446,7 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
   if (controlRegister_ == protocol::Standby) {
     controlPhase(controlSlot_, controlValue_ ? ControlPhase::VerifyStandby : ControlPhase::Starting, now);
     u.zeroConfirmed = u.awakeConfirmed = u.standbyConfirmed = false;
-    currentSynced_ &= uint8_t(~(1U << controlSlot_));
+    currentSynced_ &= UnitMask(~(1U << controlSlot_));
   } else if (controlRegister_ == protocol::FanMode) {
     u.fanAcknowledged = controlValue_ ? FanMode::Max : FanMode::Auto;
     if (u.phase == ControlPhase::Fan) controlPhase(controlSlot_, ControlPhase::Voltage, now);
@@ -455,7 +455,7 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
       voltageSynced_ |= 1U << controlSlot_;
     controlPhase(controlSlot_, u.postReady && u.awakeConfirmed ? ControlPhase::Starting : ControlPhase::Prepared, now);
   } else if (controlRegister_ == protocol::OnlineCurrent) {
-    u.zeroConfirmed = false; currentSynced_ &= uint8_t(~(1U << controlSlot_));
+    u.zeroConfirmed = false; currentSynced_ &= UnitMask(~(1U << controlSlot_));
     controlPhase(controlSlot_, ControlPhase::Stopping, now);
   }
 }
@@ -478,14 +478,14 @@ void PsuController::controlTick(uint32_t now) {
     if (observedEpoch_[i] != epoch) {
       const CommandState latched = startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
       const uint8_t faultReg = u.faultRegister;
-      u = {}; acknowledgedMask_ &= uint8_t(~(1U << i)); voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
+      u = {}; acknowledgedMask_ &= UnitMask(~(1U << i)); voltageSynced_ &= UnitMask(~(1U << i)); currentSynced_ &= UnitMask(~(1U << i));
       if (latched != CommandState::Idle) {
         u.fault = latched; u.faultRegister = faultReg;
         // Stop proof belongs to the old route. On a verified return, try the
         // bounded fallback again without ever waking/restoring a timed-out PSU.
         u.phase = epoch && powerAvailable() ? ControlPhase::EmergencyStandby : ControlPhase::Fault;
         restoreBlocked_ |= 1U << i;
-      } else restoreBlocked_ &= uint8_t(~(1U << i));
+      } else restoreBlocked_ &= UnitMask(~(1U << i));
       if (running_ & (1U << i)) restorePending_ |= 1U << i;
       observedEpoch_[i] = epoch;
       if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
@@ -523,7 +523,7 @@ void PsuController::controlTick(uint32_t now) {
       preserveCooling(next, u, controlActive_ && controlWaiting_ && controlSlot_ == i && controlRegister_ == protocol::FanMode);
       u = next; controlPhase(i, ControlPhase::Zero, now);
       if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
-      voltageSynced_ &= uint8_t(~(1U << i)); currentSynced_ &= uint8_t(~(1U << i));
+      voltageSynced_ &= UnitMask(~(1U << i)); currentSynced_ &= UnitMask(~(1U << i));
       restorePending_ |= running_ & (1U << i);
     }
     if (u.phase == ControlPhase::Stopping || u.phase == ControlPhase::Starting || u.phase == ControlPhase::VerifyStandby) {
@@ -633,7 +633,7 @@ void PsuController::controlTick(uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) if (control_[i].phase == ControlPhase::Prepared && wakeAllowed(i, now)) {
     controlPhase(i, ControlPhase::Wake, now); controlCommand(i, protocol::Standby, 0, now); return;
   }
-  if (releaseAllowed(now)) for (uint8_t i = 0; i < count(); ++i) if ((participants() & uint8_t(~sensorFaults_) & (1U << i)) && control_[i].phase == ControlPhase::Held) {
+  if (releaseAllowed(now)) for (uint8_t i = 0; i < count(); ++i) if ((participants() & UnitMask(~sensorFaults_) & (1U << i)) && control_[i].phase == ControlPhase::Held) {
     // Still physically at the accepted zero limit until an actual current write.
     controlPhase(i, ControlPhase::Online, now);
   }

@@ -34,17 +34,17 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   memset(observedEpoch_, 0, sizeof(observedEpoch_));
   return Result::Ok;
 }
-Result PsuController::change(const Configuration& next, uint8_t invalidate) {
+Result PsuController::change(const Configuration& next, UnitMask invalidate) {
   if (busy() || availabilitySaving()) return Result::Busy;
   Configuration c = next;
-  c.operating.currentMask &= uint8_t(~invalidate);
-  c.acceptedAbsent &= uint8_t(~invalidate);
+  c.operating.currentMask &= UnitMask(~invalidate);
+  c.acceptedAbsent &= UnitMask(~invalidate);
   if (!validConfig(c)) return Result::Invalid;
   reconcileSessions(c);
-  config_ = c; ++revision_; running_ &= uint8_t(~invalidate);
-  excluded_ &= uint8_t(~invalidate); sessionAccepted_ &= uint8_t(~invalidate); sessionRequired_ &= uint8_t(~invalidate);
-  currentSynced_ &= uint8_t(~invalidate);
-  restorePending_ &= uint8_t(~invalidate); restoreBlocked_ &= uint8_t(~invalidate);
+  config_ = c; ++revision_; running_ &= UnitMask(~invalidate);
+  excluded_ &= UnitMask(~invalidate); sessionAccepted_ &= UnitMask(~invalidate); sessionRequired_ &= UnitMask(~invalidate);
+  currentSynced_ &= UnitMask(~invalidate);
+  restorePending_ &= UnitMask(~invalidate); restoreBlocked_ &= UnitMask(~invalidate);
   return Result::Ok;
 }
 Result PsuController::setCount(uint8_t n) {
@@ -54,7 +54,7 @@ Result PsuController::setCount(uint8_t n) {
   c.operating.currentMask &= membersMask(n);
   c.operating.voltageMask &= membersMask(n);
   const bool changed = n != count();
-  const auto result = change(c, uint8_t(membersMask(config_.count) ^ membersMask(n)));
+  const auto result = change(c, UnitMask(membersMask(config_.count) ^ membersMask(n)));
   if (result == Result::Ok && changed) voltageCommissioned_ = false;
   return result;
 }
@@ -63,14 +63,14 @@ int8_t PsuController::groupIndex(const char* name) const {
     if (config_.groups[i].name[0] && sameName(name, config_.groups[i].name)) return i;
   return -1;
 }
-Result PsuController::setGroup(const char* name, uint8_t mask) {
+Result PsuController::setGroup(const char* name, UnitMask mask) {
   if (!groupName(name) || !mask || (mask & ~membersMask(count()))) return Result::Invalid;
   int8_t index = groupIndex(name);
   if (index < 0) for (uint8_t i = 0; i < limits::maxGroups; ++i)
     if (!config_.groups[i].name[0]) { index = i; break; }
   if (index < 0) return Result::Invalid;
   auto c = config_; auto& g = c.groups[index];
-  const uint8_t changed = g.members == mask ? 0 : g.members | mask;
+  const UnitMask changed = g.members == mask ? 0 : g.members | mask;
   memset(g.name, 0, sizeof(g.name)); strcpy(g.name, name); g.members = mask;
   // Preserve the requested totals; membership changes invalidate authorization.
   // A new explicit apply previews the new shares; no live writes happen here.
@@ -78,7 +78,7 @@ Result PsuController::setGroup(const char* name, uint8_t mask) {
 }
 Result PsuController::removeGroup(uint8_t g) {
   if (g >= limits::maxGroups || !config_.groups[g].name[0]) return Result::Invalid;
-  auto c = config_; uint8_t mask = c.groups[g].members; c.groups[g] = {};
+  auto c = config_; UnitMask mask = c.groups[g].members; c.groups[g] = {};
   return change(c, mask);
 }
 Result PsuController::bind(uint8_t slot, const Identity& id, uint16_t rating, uint32_t now) {
@@ -86,10 +86,10 @@ Result PsuController::bind(uint8_t slot, const Identity& id, uint16_t rating, ui
   const Psu* d = discovery_.identity(id, now);
   if (!d || !d->verified(now) || !d->live) return Result::Blocked;
   auto c = config_; c.units[slot] = {id, rating};
-  c.operating.voltageMask &= uint8_t(~(1U << slot));
-  const auto r = change(c, uint8_t(1U << slot));
+  c.operating.voltageMask &= UnitMask(~(1U << slot));
+  const auto r = change(c, UnitMask(1U << slot));
   if (r == Result::Ok) {
-    voltageSynced_ &= uint8_t(~(1U << slot)); observedEpoch_[slot] = 0;
+    voltageSynced_ &= UnitMask(~(1U << slot)); observedEpoch_[slot] = 0;
     voltageCommissioned_ = false;
     report_.units[slot] = {};
   }
@@ -98,10 +98,10 @@ Result PsuController::bind(uint8_t slot, const Identity& id, uint16_t rating, ui
 Result PsuController::unbind(uint8_t slot) {
   if (slot >= PSU_MAX_UNITS) return Result::Invalid;
   auto c = config_; c.units[slot].identity = {};
-  c.operating.voltageMask &= uint8_t(~(1U << slot));
-  const auto result = change(c, uint8_t(1U << slot));
+  c.operating.voltageMask &= UnitMask(~(1U << slot));
+  const auto result = change(c, UnitMask(1U << slot));
   if (result == Result::Ok) {
-    voltageSynced_ &= uint8_t(~(1U << slot)); observedEpoch_[slot] = 0;
+    voltageSynced_ &= UnitMask(~(1U << slot)); observedEpoch_[slot] = 0;
     report_.units[slot] = {};
     if (slot < count()) voltageCommissioned_ = false;
   }
@@ -142,9 +142,9 @@ void PsuController::reconcileSessions(const Configuration& next) {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i)
     if (next.deploymentId != config_.deploymentId || i >= next.count ||
         !sameIdentity(next.units[i].identity, config_.units[i].identity)) {
-      sessionAh_[i] = 0; sessionSeen_ &= uint8_t(~(1U << i));
+      sessionAh_[i] = 0; sessionSeen_ &= UnitMask(~(1U << i));
       clearFanOverride(i); alerts_.reset(i);
-      const uint8_t keep = uint8_t(~(1U << i));
+      const UnitMask keep = UnitMask(~(1U << i));
       hotContributors_ &= keep; sensorFaults_ &= keep; thermalIgnored_ &= keep; energized_ &= keep; activeLost_ &= keep; identityLost_ &= keep;
     }
 }
@@ -281,20 +281,20 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
     voltageSynced_ = 0; running_ |= fresh.recipients;
   }
   if (p.operation == Operation::All || p.operation == Operation::GroupCurrent) {
-    const uint8_t authorized = p.partial ? fresh.recipients : fresh.members;
-    currentSynced_ &= uint8_t(~authorized);
+    const UnitMask authorized = p.partial ? fresh.recipients : fresh.members;
+    currentSynced_ &= UnitMask(~authorized);
     for (uint8_t i = 0; i < count(); ++i) if (authorized & (1U << i)) config_.operating.current[i] = fresh.current[i];
     config_.operating.currentMask |= authorized; running_ |= authorized;
   }
   for (uint8_t i = 0; i < count(); ++i) if (fresh.recipients & (1U << i)) observedEpoch_[i] = fresh.epochs[i];
-  ++revision_; restoreBlocked_ &= uint8_t(~fresh.recipients); restorePending_ &= uint8_t(~fresh.recipients);
+  ++revision_; restoreBlocked_ &= UnitMask(~fresh.recipients); restorePending_ &= UnitMask(~fresh.recipients);
   beginReport(p.operation, fresh.members, fresh.recipients, fresh.missing | fresh.excluded);
   if (!fresh.recipients) report_.active = false;
   jobStarted_ = false;
   pending_ = fresh.recipients; waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
   return Result::Ok;
 }
-void PsuController::beginReport(Operation op, uint8_t requested, uint8_t recipients, uint8_t skipped) {
+void PsuController::beginReport(Operation op, UnitMask requested, UnitMask recipients, UnitMask skipped) {
   report_.sequence = ++reportSequence_;
   report_.active = true; report_.operation = op;
   report_.requested = requested; report_.recipients = recipients; report_.skipped = skipped;
@@ -329,7 +329,7 @@ void PsuController::serviceTransmit(uint32_t now) {
   if (txPurpose_ == TxPurpose::Control && controlActive_) controlComplete(CommandState::TransportError, now);
 }
 void PsuController::advance(bool success) {
-  const uint8_t bit = uint8_t(1U << jobSlot_);
+  const UnitMask bit = UnitMask(1U << jobSlot_);
   if (!success) {
     report_.failed |= bit; restoreBlocked_ |= bit;
     if (thermalLevel_ != ThermalLevel::Normal && report_.units[jobSlot_].reg == protocol::OnlineCurrent)
@@ -337,7 +337,7 @@ void PsuController::advance(bool success) {
   }
   else if (secondPhase_ || job_.operation == Operation::GroupCurrent || job_.operation == Operation::Voltage ||
       (job_.operation == Operation::Restore && !(config_.operating.currentMask & bit))) report_.succeeded |= bit;
-  pending_ &= uint8_t(~bit); waiting_ = verifying_ = identityChecked_ = false;
+  pending_ &= UnitMask(~bit); waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::receive(const CanFrame& f, uint32_t now) {
   if (protocol::isReply(f) && protocol::command(f.id)==protocol::infoCommand && f.data[0]==0 && f.data[1]==2)
@@ -396,10 +396,10 @@ void PsuController::runJob(uint32_t now) {
     if (jobStarted_) {
       for (uint8_t i = 0; i < count(); ++i) if (job_.recipients & (1U << i)) {
         if (control_[i].phase != ControlPhase::Online || control_[i].fault != CommandState::Idle) {
-          report_.failed |= 1U << i; report_.succeeded &= uint8_t(~(1U << i)); report_.units[i].state = CommandState::Changed;
+          report_.failed |= 1U << i; report_.succeeded &= UnitMask(~(1U << i)); report_.units[i].state = CommandState::Changed;
         }
       }
-      const uint8_t incomplete = report_.recipients & uint8_t(~(report_.failed | report_.succeeded));
+      const UnitMask incomplete = report_.recipients & UnitMask(~(report_.failed | report_.succeeded));
       report_.skipped |= incomplete;
       for (uint8_t i = 0; i < count(); ++i) if (incomplete & (1U << i)) report_.units[i].state = CommandState::Incomplete;
       report_.active = false; pending_ = 0; waiting_ = verifying_ = identityChecked_ = false; return;
@@ -432,7 +432,7 @@ void PsuController::runJob(uint32_t now) {
         const auto* d = deviceForSlot(i, now);
         if (!d || d->epoch != job_.epochs[i] || issue(i, now) != Issue::None) {
           report_.units[i].state = CommandState::Changed;
-          report_.failed |= 1U << i; report_.succeeded &= uint8_t(~(1U << i));
+          report_.failed |= 1U << i; report_.succeeded &= UnitMask(~(1U << i));
           restoreBlocked_ |= 1U << i;
         }
       }
@@ -443,7 +443,7 @@ void PsuController::runJob(uint32_t now) {
     }
     if (!pending_) {
       report_.active = false;
-      const uint8_t incomplete = job_.recipients & uint8_t(~(report_.failed | report_.succeeded));
+      const UnitMask incomplete = job_.recipients & UnitMask(~(report_.failed | report_.succeeded));
       report_.skipped |= incomplete;
       for (uint8_t i = 0; i < count(); ++i) if (incomplete & (1U << i)) report_.units[i].state = CommandState::Incomplete;
       return;
@@ -484,15 +484,15 @@ void PsuController::runJob(uint32_t now) {
 }
 void PsuController::restore(uint32_t now) {
   if (!enable_.enabled() || !powerAvailable() || busy() || availabilitySaving() || !restorePending_ ||
-      !participants() || !controlsOnline(requiredMembers() & uint8_t(~sensorFaults_))) return;
+      !participants() || !controlsOnline(requiredMembers() & UnitMask(~sensorFaults_))) return;
   // Binding/adopting or adding slots never authorizes voltage by itself. Keep
   // the pending installation observable until an explicit complete voltage apply.
   if (config_.operating.voltageMask != membersMask(count())) return;
   // Global voltage is verified across the complete installation before restore.
-  for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & uint8_t(~sensorFaults_) & (1U << i)) && issue(i, now) != Issue::None) return;
-  uint8_t recipients = restorePending_ & participants() & uint8_t(~(restoreBlocked_ | sensorFaults_));
+  for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & UnitMask(~sensorFaults_) & (1U << i)) && issue(i, now) != Issue::None) return;
+  UnitMask recipients = restorePending_ & participants() & UnitMask(~(restoreBlocked_ | sensorFaults_));
   for (uint8_t i = 0; i < count(); ++i)
-    if (control_[i].outputDemand == OutputDemand::Starting) recipients &= uint8_t(~(1U << i));
+    if (control_[i].outputDemand == OutputDemand::Starting) recipients &= UnitMask(~(1U << i));
   if (!recipients) return;
   // Restore the authorized profile, never staged edits. Voltage is acknowledged
   // by every returning recipient before any authorized current is restored.
@@ -503,7 +503,7 @@ void PsuController::restore(uint32_t now) {
     job_.addresses[i] = d->address; job_.epochs[i] = d->epoch;
     job_.current[i] = config_.operating.current[i];
   }
-  pending_ = recipients; restorePending_ &= uint8_t(~recipients);
+  pending_ = recipients; restorePending_ &= UnitMask(~recipients);
   beginReport(Operation::Restore, recipients, recipients);
   jobStarted_ = false;
   waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
@@ -553,7 +553,7 @@ void PsuController::tick(uint32_t now) {
   }
   if (requestedPoll_) {
     for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (requestedPoll_ & (1U << i)) {
-      requestedPoll_ &= uint8_t(~(1U << i));
+      requestedPoll_ &= UnitMask(~(1U << i));
       const auto* d = deviceForSlot(i, now);
       if (!d || !d->fresh(now, staleMs())) {
         if (readFailures_ != UINT16_MAX) ++readFailures_;
@@ -576,7 +576,7 @@ Result PsuController::requestDescription(uint8_t address) {
   if (requestedDescription_) return Result::Busy;
   requestedDescription_ = address; return Result::Ok;
 }
-Result PsuController::requestPoll(uint8_t mask, uint32_t now) {
+Result PsuController::requestPoll(UnitMask mask, uint32_t now) {
   if (!mask || (mask & ~membersMask(count()))) return Result::Invalid;
   if (!ready_) return Result::TransportError;
   if (requestedPoll_) return Result::Busy;

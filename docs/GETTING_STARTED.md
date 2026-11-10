@@ -471,15 +471,43 @@ explicit online/offline operations. After serial commissioning, the
 current through the same backend. A successful local apply also saves controller
 EEPROM; serial `apply` and `save` remain separate operations.
 
-EEPROM schema 4 uses two 256-byte journal slots, with a 216-byte record at eight
-PSUs. The remainder of Mega EEPROM is untouched. A save commits last with CRC
+EEPROM schema 5 uses two 256-byte journal slots, with a **211-byte record for
+nine PSUs and eight groups**. The rest of Mega EEPROM is untouched. Touch
+calibration keeps addresses 216–255 and 472–511. A save commits last with CRC
 verification; interrupted saves preserve the previous complete record.
 
-Schema 2 loads with no accepted-absence exceptions. Schema 3 uses reserved byte
-28 for remembered identity-bound exceptions; touch calibration retains its two
-40-byte journal tails. Schema 4 additionally packs a thermal-stop marker in byte 27. Schema 2/3 load
-without a thermal stop. Older firmware may load an older record with auto-resume
-ON; export and recommission deliberately before downgrading.
+Existing parallel-controller schemas 2–4 load automatically, retaining the active
+count, bindings, ratings, group names/memberships, drafts, authorized profile and
+saved enable preference. Schema-3/4 absence permissions and schema-4 thermal stops
+are retained. Schema 2 has no absence permissions; schemas 2/3 have no thermal
+stop. Boot/load does not rewrite old records; the next verified save writes schema 5.
+
+### Adding PSU 9 after upgrading an eight-slot controller
+
+It is fine to commission and save the first eight on the older firmware. Keep a
+copy of `config` and the physical identity labels. For a controlled upgrade,
+request `autoresume off`, verify zero-current hold, `save`, and wait for `EEPROM OK`
+before flashing. Keep ENABLE_IN OFF during commissioning. **Do not run `defaults`
+after upgrading**: the saved eight-slot configuration is loaded automatically.
+Check `config` and `diag bus` against your labels, then:
+
+```text
+count 9
+discover
+diag bus
+```
+
+Wait for the new identity to be verified by two fresh INFO replies, then run
+`bind 9 <NEW_12_HEX_ID> <RATED_AMPS>` and add slot 9 to the appropriate group, for
+example `group set GROUP3 7-9`. Review the group's total current: changing its membership
+changes the staged per-unit split and invalidates affected current authorization.
+Check `diag group GROUP3` and `preview all`; complete the usual enable/apply checks
+before expecting output. The new unit has no inherited authorization. `save` and
+wait for `EEPROM OK` to retain the expanded configuration.
+
+Older firmware cannot read schema 5 and may load a stale older journal with
+auto-resume ON. Export, inhibit charging and recommission deliberately before
+downgrading. An EEPROM reset is not needed for this upgrade.
 
 Schema 1 records are never rewritten just by boot/load:
 
@@ -510,7 +538,7 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `discover`, `diag bus` | Read-only sweep and responder/address/identity diagnostics |
 | `diag group NAME`, `diag psu N` | Group/member readiness, freshness, requested/authorized settings, failures |
 | `config`, `groups` | Deployment, global drafts, operating voltage, groups, bindings, ratings |
-| `count N` | Set configured slot count, 1–8; cannot shrink through existing membership |
+| `count N` | Set configured slot count, 1–9; cannot shrink through existing membership |
 | `bind N ID RATING`, `adopt N ID RATING` | Explicit identity binding/replacement; rating in amps |
 | `unbind N` | Release an active or retained inactive binding; no physical output-disable command |
 | `group set NAME MEMBERS`, `group delete NAME` | Define disjoint source-group membership |

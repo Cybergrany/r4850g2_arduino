@@ -51,7 +51,7 @@ bool UiModel::alertAction(UiAction a, uint32_t now) {
   if (a.kind == ActionKind::Resume && displayedAlert_.code == AlertCode::ThermalStop)
     alertResult_ = c_.setAutoResume(true); // Clear-save is asynchronous. Detail shows its status.
   if (a.kind == ActionKind::RetrySensors && displayedAlert_.code == AlertCode::TemperatureSensor && displayedAlert_.source < c_.count())
-    alertResult_ = c_.retryTemperature(uint8_t(1U << displayedAlert_.source), now);
+    alertResult_ = c_.retryTemperature(UnitMask(1U << displayedAlert_.source), now);
   return true;
 }
 }

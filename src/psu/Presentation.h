@@ -9,10 +9,10 @@ struct Reading {
   bool partial() const { return observed < expected; }
 };
 // Presentation helpers are shared backend policy, independent of graphics/input.
-Reading summarize(const PsuController& c, uint8_t mask, protocol::Metric metric,
+Reading summarize(const PsuController& c, UnitMask mask, protocol::Metric metric,
                   Aggregate aggregate, uint32_t now);
-Reading sessionTotal(const PsuController& c, uint8_t mask);
-bool pendingSettings(const PsuController& c, uint8_t mask);
+Reading sessionTotal(const PsuController& c, UnitMask mask);
+bool pendingSettings(const PsuController& c, UnitMask mask);
 bool commandFailed(CommandState state);
 bool commandActive(CommandState state);
 }

@@ -41,7 +41,7 @@ bool identity(const char* text, Identity& id) {
   }
   return identified(id);
 }
-bool selection(const char* s, uint8_t count, uint8_t& mask) {
+bool selection(const char* s, uint8_t count, UnitMask& mask) {
   if (!PSU_STRCMP(s, "all")) { mask = membersMask(count); return true; }
   mask = 0;
   while (*s) {
@@ -132,7 +132,7 @@ void SerialConsole::storageReply(StorageResult r) {
 void SerialConsole::printIdentity(const Identity& id) {
   for (auto b : id.bytes) { if (b < 16) io_.print('0'); io_.print(b, HEX); }
 }
-void SerialConsole::printMembers(uint8_t m) {
+void SerialConsole::printMembers(UnitMask m) {
   if (!m) { io_.print('-'); return; }
   bool first = true;
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (m & (1U << i)) {
@@ -140,7 +140,7 @@ void SerialConsole::printMembers(uint8_t m) {
     first = false; io_.print(i + 1);
   }
 }
-void SerialConsole::startView(View view, uint8_t mask) {
+void SerialConsole::startView(View view, UnitMask mask) {
   cancelAlertBroadcast(); view_ = view; row_ = field_ = 0; viewMask_ = mask;
 }
 void SerialConsole::execute() {
@@ -152,7 +152,7 @@ void SerialConsole::execute() {
   cancelAlertBroadcast();
   view_ = View::None;
   if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
-  uint16_t n = 0, value = 0; uint8_t mask = 0;
+  uint16_t n = 0, value = 0; UnitMask mask = 0;
   if (memory_.saving() && (!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") ||
       !PSU_STRCMP(args[0], "defaults") || !PSU_STRCMP(args[0], "legacy") || !PSU_STRCMP(args[0], "apply") ||
       !PSU_STRCMP(args[0], "offline") || !PSU_STRCMP(args[0], "confirm"))) {
@@ -186,7 +186,7 @@ void SerialConsole::execute() {
     reply(Result::Invalid); return;
   }
   if (!PSU_STRCMP(args[0], "thermal") && argc == 3 && !PSU_STRCMP(args[1], "retry")) {
-    uint8_t mask = 0;
+    UnitMask mask = 0;
     const int8_t group = controller_.groupIndex(args[2]);
     if (group >= 0) mask = controller_.configuration().groups[group].members;
     else if (!selection(args[2], controller_.count(), mask)) { reply(Result::Invalid); return; }
@@ -527,7 +527,7 @@ void SerialConsole::tick(uint32_t now) {
   // Command/operation/save results come first. Summaries precede background
   // status and trace traffic, so flapping control states cannot starve them.
   if (broadcastAlerts(now)) return;
-  const uint8_t attention = controller_.availabilityAttention(now);
+  const UnitMask attention = controller_.availabilityAttention(now);
   availabilityAttentionNotice_ &= attention;
   if ((attention & ~availabilityAttentionNotice_) && !length_ && view_ == View::None) {
     availabilityAttentionNotice_ = attention; beginOutput();
@@ -771,7 +771,7 @@ void SerialConsole::outputRow(uint32_t now) {
   } else if (view_ == View::Help) {
     switch (row_++) {
       case 0: io_.println(F("Parallel: one global voltage; named source groups; current is TOTAL group A.")); break;
-      case 1: io_.println(F("count <1..8>; group set <NAME> <1,2 or 1-2>; group delete <NAME>")); break;
+      case 1: io_.print(F("count <1..")); io_.print(PSU_MAX_UNITS); io_.println(F(">; group set <NAME> <1,2 or 1-2>; group delete <NAME>")); break;
       case 2: io_.println(F("discover; diag bus; diag group <NAME>; diag psu <slot>")); break;
       case 3: io_.println(F("bind <slot> <12-hex identity> <rated-A>; adopt replaces; unbind <slot> releases identity")); break;
       case 4: io_.println(F("set voltage <V>; set offline-voltage <V> (global only)")); break;

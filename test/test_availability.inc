@@ -160,7 +160,7 @@ void availabilityDecisionsAndStorage() {
           (value.acceptedAbsent==2 && value.groups[0].current==4400));
   }
   // Schema 2 migrates without an absence exception; reserved bits stay validated.
-  journal.bytes=baseline; journal.bytes[1]=2; journal.bytes[28]=0; recordCrc(journal.bytes.data(),216);
+  journal.bytes=parallelRecord(old,2).bytes;
   CHECK(journalMemory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0);
   journal.bytes[28]=1; recordCrc(journal.bytes.data(),216);
   CHECK(journalMemory.load(loaded)!=StorageResult::Ok);

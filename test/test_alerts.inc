@@ -216,15 +216,14 @@ void thermalAckRacesAndMigration() {
   const auto writes=identityWait.can.writes();
   for(size_t i=before;i<writes.size();++i) if(writes[i].data[1]==protocol::OnlineCurrent)
     CHECK(protocol::readBigEndian(writes[i].data+4)<=protocol::encodeCurrent(600,5000));
-  // Schema 2 and 3 migrate with no thermal latch; a schema-4 stop keeps size and tails.
+  // Historical schemas 2 and 3 load without a thermal latch; protection writes schema 5.
   for(uint8_t schema=2;schema<=3;++schema) {
-    FakeEeprom bytes; MemoryManager memory(bytes); auto cfg=authorized();
-    CHECK(memory.save(cfg)==StorageResult::Ok); bytes.bytes[1]=schema; recordCrc(bytes.bytes.data(),MemoryManager::recordSize);
+    auto cfg=authorized(); FakeEeprom bytes=parallelRecord(cfg,schema); MemoryManager memory(bytes);
     Configuration loaded; CHECK(memory.load(loaded)==StorageResult::Ok && loaded.thermalStop==ThermalStop::None && loaded.autoResume);
     CHECK(memory.startProtectionSave(ThermalStop::Temperature)==StorageResult::Ok);
     while(memory.saving()) memory.stepSave();
     CHECK(memory.load(loaded)==StorageResult::Ok && loaded.thermalStop==ThermalStop::Temperature && !loaded.autoResume);
-    CHECK(bytes.bytes[257]==4 && MemoryManager::recordSize==216);
+    CHECK(bytes.bytes[257]==5 && MemoryManager::recordSize<=216);
   }
   // Calibration/normal save gate: stop wins after the old snapshot finishes.
   Rig saving; FakeEeprom bytes; MemoryManager memory(bytes);

@@ -3,6 +3,8 @@
 #include "BuildOptions.h"
 
 namespace psu {
+using UnitMask = uint16_t;
+constexpr UnitMask allUnitsMask = (UnitMask(1) << PSU_MAX_UNITS) - 1;
 namespace limits {
 constexpr uint16_t minVoltage = 4150, maxVoltage = 5850, minOfflineVoltage = 4800;
 constexpr uint16_t maxCurrent = 6000, defaultRatedCurrent = 5000;
@@ -13,7 +15,7 @@ constexpr uint32_t minimumStaleMs = 5000;
 constexpr uint32_t identityLeaseMs = 15000, confirmationMs = 15000;
 constexpr uint16_t discoveryGapMs = 100, identityRefreshMs = 3000;
 // A telemetry request yields a burst of about 14 replies at 125 kbit/s.
-// Space read requests while giving eight units enough slots for DATA and INFO.
+// Space read requests while giving nine units enough slots for DATA and INFO.
 constexpr uint16_t readRequestGapMs = 25;
 }
 struct Identity { uint8_t bytes[6]; };
@@ -22,14 +24,14 @@ bool sameIdentity(const Identity& a, const Identity& b);
 struct UnitConfig { Identity identity; uint16_t ratedCurrent; };
 struct GroupConfig {
   char name[limits::groupNameLength + 1];
-  uint8_t members; // Stable, global controller slots. Groups never overlap.
+  UnitMask members; // Stable, global controller slots. Groups never overlap.
   uint16_t current, offlineCurrent; // TOTAL group centiamps, split on staging.
 };
 // Separate from drafts: only an explicitly queued online apply authorizes these.
 struct OperatingProfile {
   uint16_t voltage;
   uint16_t current[PSU_MAX_UNITS];
-  uint8_t currentMask, voltageMask;
+  UnitMask currentMask, voltageMask;
   bool voltageAuthorized;
 };
 enum class ThermalStop : uint8_t { None, Temperature, Duration };
@@ -38,8 +40,8 @@ struct Configuration {
   uint16_t voltage, offlineVoltage, pollMs;
   uint8_t count;
   bool autoResume;
-  ThermalStop thermalStop = ThermalStop::None; // Schema 4: packed with autoResume, no record growth.
-  uint8_t acceptedAbsent = 0; // Schema 3: bound identities permitted to be absent.
+  ThermalStop thermalStop = ThermalStop::None; // Packed with autoResume since schema 4.
+  UnitMask acceptedAbsent = 0; // Bound identities permitted to be absent.
   UnitConfig units[PSU_MAX_UNITS];
   GroupConfig groups[limits::maxGroups];
   OperatingProfile operating;
@@ -48,8 +50,8 @@ Configuration defaultConfiguration();
 bool validConfig(const Configuration& config);
 bool groupName(const char* name);
 bool sameName(const char* a, const char* b);
-uint8_t membersMask(uint8_t count);
-uint8_t population(uint8_t mask);
+UnitMask membersMask(uint8_t count);
+uint8_t population(UnitMask mask);
 int8_t groupFor(const Configuration& config, uint8_t slot);
 // Deterministic rounding: the first remainder members receive one extra centiamp.
 uint16_t allocation(const GroupConfig& group, uint8_t slot, bool offline = false);

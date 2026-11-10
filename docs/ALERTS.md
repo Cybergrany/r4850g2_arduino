@@ -183,10 +183,11 @@ A nonzero Huawei status word alone is not an error; raw words remain in diagnost
 
 ## Persistence, migration and limits
 
-Schema **4** retains the **216-byte** charger record, two 256-byte journal slots,
+Schema **5** packs nine PSUs into a **211-byte** charger record, with two 256-byte journal slots,
 512-byte budget and calibration records at **216–255 / 472–511**. Byte 27 packs
 auto-resume in bit 0 and the thermal stop reason in bits 1–2. A latched record
-cannot also authorize auto-resume. Schema 2/3 records load with no thermal latch;
+cannot also authorize auto-resume. Schema 4 retains its thermal latch during migration;
+schema 2/3 records load with no thermal latch;
 schema-1 migration/review behaviour remains unchanged. Boot does not rewrite old
 records merely to upgrade their version.
 
@@ -204,7 +205,7 @@ ordinary `save` afterward if that ON preference should survive another boot.
 As with the existing journal, power loss during an unfinished write can recover
 the previous complete record. Do not treat `saving=1` as durable protection.
 
-Older firmware cannot enforce schema-4 thermal stops. It may select an older
+Firmware predating schema 5 cannot read the new records. It may select an older
 journal containing auto-resume ON or see no valid record. Export, inhibit charging
 and recommission deliberately before downgrading; downgrading is not a stop-reset
 procedure.

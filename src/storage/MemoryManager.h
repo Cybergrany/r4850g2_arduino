@@ -15,7 +15,10 @@ struct LegacyConfiguration { uint8_t count; bool applyOnBoot; uint16_t pollMs; L
 class MemoryManager {
  public:
   static constexpr uint16_t budget = 512, slotSize = 256;
-  static constexpr uint16_t recordSize = 16 + 13 + 13 * limits::maxGroups + 8 * PSU_MAX_UNITS + 3 + 2 * PSU_MAX_UNITS;
+  // Schema 5: 36-byte header/settings, 10 bytes/group, 10 bytes/unit, then
+  // one 4-bit group index per unit. Eight case-sensitive characters use six
+  // bytes; the allowed alphabet (A-Z, a-z, 0-9, _, NUL) fits exactly in 6 bits.
+  static constexpr uint16_t recordSize = 36 + 10 * limits::maxGroups + 10 * PSU_MAX_UNITS + (PSU_MAX_UNITS + 1) / 2;
   explicit MemoryManager(ByteStorage& storage) : storage_(storage) {}
   StorageResult load(Configuration& config) const;
   StorageResult save(const Configuration& config);

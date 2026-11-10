@@ -52,7 +52,7 @@ Result PsuController::requestEnable(bool on, EnableSource source) {
   if (on) startup_.commissioning = false;
   const bool was = enable_.enabled(); enable_.request(on, source); enableChanged(was); return Result::Ok;
 }
-Result PsuController::retryTemperature(uint8_t mask, uint32_t now) {
+Result PsuController::retryTemperature(UnitMask mask, uint32_t now) {
   if (!mask || (mask & ~membersMask(count()))) return Result::Invalid;
   if (busy() || controlActive_) return Result::Busy;
   mask &= sensorFaults_; // A sensor retry cannot clear another command failure.
@@ -61,22 +61,22 @@ Result PsuController::retryTemperature(uint8_t mask, uint32_t now) {
     if (!temperatures(i, t, now) || routingIssue(i, now) != Issue::None ||
         control_[i].fault != CommandState::Idle || !control_[i].zeroConfirmed) return Result::Blocked;
   }
-  sensorFaults_ &= uint8_t(~mask); restoreBlocked_ &= uint8_t(~mask); restorePending_ |= running_ & mask;
+  sensorFaults_ &= UnitMask(~mask); restoreBlocked_ &= UnitMask(~mask); restorePending_ |= running_ & mask;
   return Result::Ok;
 }
 void PsuController::thermalTick(uint32_t now) {
   const auto previous = thermalLevel_;
-  const uint8_t previousValid = validTemperatures_;
+  const UnitMask previousValid = validTemperatures_;
   bool hot = false, belowError = true, allCool = true, monitored = false;
   highestTemperature_ = control::minimumTemperature; validTemperatures_ = 0;
   for (uint8_t i = 0; i < count(); ++i) {
     if (!identified(config_.units[i].identity)) continue;
-    const uint8_t bit = uint8_t(1U << i); float temperature;
+    const UnitMask bit = UnitMask(1U << i); float temperature;
     const auto route = routingIssue(i, now); const auto* d = deviceForSlot(i, now);
     const bool absent = route == Issue::Missing || (d && d->acState(now, staleMs()) == AcState::Absent);
     // A return revokes the incident-specific waiver; remembered permissions
     // never clear a new hot contribution.
-    if (!absent && route == Issue::None) thermalIgnored_ &= uint8_t(~bit);
+    if (!absent && route == Issue::None) thermalIgnored_ &= UnitMask(~bit);
     if (absent && (thermalIgnored_ & bit)) continue;
     // Any trustworthy hot reading acts immediately, even if its partner is
     // absent. Both readings are still required to permit current or prove cool.
@@ -87,14 +87,14 @@ void PsuController::thermalTick(uint32_t now) {
       if (!freshMetric(i, metric, value, now) || !isfinite(value) || value < control::minimumTemperature || value > control::maximumTemperature) { complete = false; continue; }
       if (value > temperature) temperature = value;
       if (value > highestTemperature_) highestTemperature_ = value;
-      if (value >= alerts::warningC) { hotContributors_ |= bit; thermalIgnored_ &= uint8_t(~bit);
+      if (value >= alerts::warningC) { hotContributors_ |= bit; thermalIgnored_ &= UnitMask(~bit);
         if (thermalLevel_ == ThermalLevel::Normal) thermalLevel_ = ThermalLevel::Warning; }
       if (value >= alerts::errorC) { hot = true; thermalLevel_ = ThermalLevel::Error; }
       if (value > alerts::stopC) thermalStop(ThermalStop::Temperature);
     }
     if (complete) {
       validTemperatures_ |= bit;
-      if (temperature < alerts::clearC) hotContributors_ &= uint8_t(~bit);
+      if (temperature < alerts::clearC) hotContributors_ &= UnitMask(~bit);
       if (!(thermalIgnored_ & bit)) {
         monitored = true; allCool &= temperature < alerts::clearC;
         belowError &= temperature < alerts::errorC;
@@ -112,7 +112,7 @@ void PsuController::thermalTick(uint32_t now) {
       }
       if ((energized_ & bit) && route == Issue::None && !absent && d->epoch == observedEpoch_[i] && liveLoss &&
           (u.outputDemand == OutputDemand::Starting || u.outputDemand == OutputDemand::Active) && !(sensorFaults_ & bit)) {
-        sensorFaults_ |= bit; restoreBlocked_ |= bit; currentSynced_ &= uint8_t(~bit);
+        sensorFaults_ |= bit; restoreBlocked_ |= bit; currentSynced_ &= UnitMask(~bit);
         if (controlActive_ && controlSlot_ == i) controlActive_ = controlWaiting_ = controlVerified_ = false;
         u.zeroConfirmed = false; u.attempts = 0; controlPhase(i, ControlPhase::Zero, now);
       }
@@ -122,9 +122,9 @@ void PsuController::thermalTick(uint32_t now) {
         (u.outputDemand == OutputDemand::Active && !readinessAcceptable(i, now)))) activeLost_ |= bit;
     if ((u.outputDemand == OutputDemand::Active || (u.reconciled && u.zeroConfirmed && u.awakeConfirmed)) &&
         u.fault == CommandState::Idle && route == Issue::None && !absent && (validTemperatures_ & bit) && readinessAcceptable(i, now)) {
-      activeLost_ &= uint8_t(~bit); identityLost_ &= uint8_t(~bit);
+      activeLost_ &= UnitMask(~bit); identityLost_ &= UnitMask(~bit);
     }
-    if (u.zeroConfirmed || u.standbyConfirmed) energized_ &= uint8_t(~bit);
+    if (u.zeroConfirmed || u.standbyConfirmed) energized_ &= UnitMask(~bit);
   }
   const uint32_t elapsed = uint32_t(now - thermalLast_); thermalLast_ = now;
   if (hot && hotPrevious_) {
@@ -139,7 +139,7 @@ void PsuController::thermalTick(uint32_t now) {
   if (previous != thermalLevel_ || previousValid != validTemperatures_) {
     for (uint8_t i = 0; i < count(); ++i)
       if (!(acknowledgedMask_ & (1U << i)) || acknowledgedCurrent_[i] != effectiveRaw(i)) {
-        currentSynced_ &= uint8_t(~(1U << i)); control_[i].readyFrames = 0;
+        currentSynced_ &= UnitMask(~(1U << i)); control_[i].readyFrames = 0;
       }
   }
 }
@@ -147,7 +147,7 @@ void PsuController::thermalTick(uint32_t now) {
 // wait; their ACK never synchronizes a superseded target. Unsent jobs yield.
 bool PsuController::correctCurrent(uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) {
-    const auto& u = control_[i]; const uint8_t bit = uint8_t(1U << i);
+    const auto& u = control_[i]; const UnitMask bit = UnitMask(1U << i);
     if (u.phase != ControlPhase::Online || u.fault != CommandState::Idle || !(acknowledgedMask_ & bit) ||
         !(voltageSynced_ & bit) || routingIssue(i, now) != Issue::None || !(config_.operating.currentMask & bit)) continue;
     const uint16_t target = effectiveRaw(i);

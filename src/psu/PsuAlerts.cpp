@@ -22,9 +22,9 @@ void PsuController::alertTick(uint32_t now) {
   alerts_.set(AlertManager::Startup, config_.deploymentId != deployment::id ? AlertCode::Deployment :
       startup_.permit == PermitState::Fault ? AlertCode::Cutoff :
       (enable_.enabled() && status.blocker == Issue::NoProfile) || (!startup_.configurationReady && startup_.permit == PermitState::Inhibited) ? AlertCode::Commissioning : AlertCode::None, now);
-  const uint8_t attention = availabilityAttention(now);
+  const UnitMask attention = availabilityAttention(now);
   for (uint8_t i = 0; i < count(); ++i) {
-    const uint8_t bit = uint8_t(1U << i); const auto& u = control_[i]; const auto route = routingIssue(i, now);
+    const UnitMask bit = UnitMask(1U << i); const auto& u = control_[i]; const auto route = routingIssue(i, now);
     const int8_t group = groupFor(config_, i); const auto reason = availabilityReason(i, now);
     AlertCode code = AlertCode::None;
     if ((activeLost_ & bit) && ((identityLost_ & bit) || route == Issue::Conflict || route == Issue::IdentityPending)) code = AlertCode::Identity;

@@ -25,7 +25,7 @@ The MCP2515/arduino-CAN adapter currently serves one physical CAN interface.
 ## Persistent model versus observed hardware
 
 There is one parallel DC bus, one online voltage, one offline voltage, and up to
-eight disjoint named source groups. Group configuration contains membership,
+nine configured PSU slots and eight disjoint named source groups. Group configuration contains membership,
 online total current, and offline total current. A member is a stable controller
 slot with a six-byte identity binding and an explicit rated current.
 
@@ -45,8 +45,9 @@ replacement or newly added slot inheriting reboot permission from an old profile
 Until all configured identities are explicitly authorized for that voltage,
 automatic restoration waits for a complete manual voltage/all apply.
 
-`Discovery` holds `PSU_MAX_UNITS + 4` physical `Psu` observations, including
-unbound devices. A `Psu` contains runtime address, reported identity, identity
+`Discovery` holds twelve physical `Psu` observations at the default nine-slot
+capacity, including three spare entries for unbound devices/address changes.
+Builds below eight slots retain their earlier capacity plus four spare entries. A `Psu` contains runtime address, reported identity, identity
 samples/lease, observation epoch, telemetry, raw alarm bits, and freshness.
 Addresses and telemetry are never persisted. Lookups by identity reject ambiguity.
 Address changes, identity changes, stale-to-live transitions and conflicts
@@ -148,7 +149,7 @@ to progress before the next request. Known devices get round-robin due INFO/DATA
 requests; idle addresses are probed at most every 100 ms using remaining slots.
 Due periodic reads take priority over manual reads, so repeated `poll all`
 commands cannot starve identity leases or other members' telemetry.
-This accommodates eight one-second DATA schedules plus three-second identity
+This accommodates nine one-second DATA schedules plus three-second identity
 refreshes. During applies the sweep pauses, but identity/telemetry refresh
 continues. Poll intervals remain targets under actual bus load/faults.
 Manual polls queue a mask and resolve one recipient per slot, rather than
@@ -315,34 +316,44 @@ the paced identity/ACK worker. Refreshes do not overwrite user operation reports
 or repeat persistent defaults/fan writes. AC-loss transitions and negotiation
 invalidate stale routing/setting proofs. [Operator sequence and limits](STARTUP.md).
 
-## EEPROM schema 4 and migration
+## EEPROM schema 5 and migration
 
-`ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Serial `save`, a successful local apply/save, an explicit remembered availability decision, and automatic thermal protection write charger records; touch
-calibration has separate records in the reserved tails. Two 256-byte journal slots reserve bytes 0–511;
-integer encoding is explicit little-endian and independent of struct padding.
-At eight-slot capacity the record is **216 bytes**, whether one or eight slots
-are active. Telemetry, observations, sessions, pending jobs and ACK history are
-not persisted.
+`ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Serial
+`save`, a successful local apply/save, remembered availability decisions and
+thermal protection write charger records. Two 256-byte journal slots occupy
+bytes 0–511; calibration retains its separate 40-byte records at 216 and 472.
+The default nine-slot record is **211 bytes**, with eight groups, regardless of
+how many slots are active. Integer encoding is explicit little-endian, independent
+of struct padding. Telemetry, sessions, pending jobs and ACK history are not saved.
 
-| Relative offset (8-slot build) | Contents |
+| Relative offset (9-slot build) | Contents |
 | --- | --- |
 | 0 | Commit marker `A5`, written last |
-| 1 | Schema `4` (schemas 2 and 3 remain readable) |
+| 1 | Schema `5` |
 | 2–3 | Record length |
 | 4–7 | Generation, wrap-aware comparison |
 | 8–9 | CRC-16/CCITT-FALSE excluding bytes 0, 8, 9 |
 | 10–13 | Magic `R48C` |
 | 14 | Operating voltage authorization flag |
-| 15 | Per-slot voltage authorization mask |
+| 15 | Encoded unit capacity (9 in supplied builds) |
 | 16–19 | Deployment ID |
 | 20–23 | Draft online/offline voltage |
-| 24–26 | Poll interval and count |
-| 27 | Bit 0 auto-resume; bits 1–2 thermal-stop reason (0 none, 1 temperature, 2 duration) |
-| 28 | Accepted-absence mask, bound to the stored slot identities/membership |
-| 29–132 | Eight groups: 8 name bytes, membership mask, online/offline totals |
-| 133–196 | Eight slots: 6 identity bytes, rated current |
-| 197–199 | Authorized voltage and current-valid mask |
-| 200–215 | Eight authorized per-slot currents |
+| 24–26 | Poll interval and active slot count |
+| 27 | Bit 0 auto-resume; bits 1–2 thermal-stop reason |
+| 28–29 | Accepted-absence mask |
+| 30–31 | Per-slot voltage authorization mask |
+| 32–33 | Per-slot current authorization mask |
+| 34–35 | Authorized voltage |
+| 36–115 | Eight groups: 6 packed name bytes, 2-byte online and offline totals |
+| 116–205 | Nine units: 6 identity bytes, 2-byte rating and authorized current |
+| 206–210 | One 4-bit group index per unit, low nibble first; 0 unassigned, 1–8 group |
+
+Names retain their eight-character limit and letter case. Each character occupies
+six bits: NUL=0, A–Z=1–26, a–z=27–52, 0–9=53–62, underscore=63. Four characters
+form a little-endian 24-bit word; two words encode a name. The last membership
+byte's unused high nibble is zero. Group membership is reconstructed into the
+shared 16-bit `UnitMask`, as are all authorization, availability, result and
+thermal selections. Slot 9 is bit 8; counts and CAN addresses remain bytes.
 
 Save invalidates the older destination slot, writes payload/checksum, commits
 last, then verifies. Load validates CRC, schema and semantic configuration,
@@ -351,19 +362,26 @@ except that WrongDeployment deliberately returns an inspectable, gated profile.
 No fallback case silently erases EEPROM. Runtime saves are incremental and
 disallowed by the serial UI during an apply.
 
-Schemas 2/3 load with no thermal stop. Schema 2 loads with no accepted-absence exceptions. Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
-unauthorized GROUP1 in RAM, with auto-resume off. Incompatible per-unit drafts
+Schemas 2–4 remain readable. Their capacity is derived from the historical
+record length (1–8 slots), not the new build capacity. Bindings, ratings, case-sensitive
+names, drafts, authorized profiles and enable preferences are retained. Schema 2
+has no absence permissions; schemas 2/3 have no thermal-stop marker. Schema 4
+retains both. Newly available capacity is unbound and unauthorized; load keeps
+the old active slot count. Boot/load alone do not rewrite a record. The first
+schema-5 save writes the other slot, so an interrupted migration still recovers
+the complete older record and leaves calibration intact.
+
+Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
+unauthorized GROUP1 in RAM with auto-resume off. Incompatible per-unit drafts
 return LegacyNeedsReview unchanged and remain available through `legacy()`.
-The first schema-4 save writes the other journal slot; interrupted migration
-saves still recover the old record. A later save may overwrite that legacy
-backup, so export it if it is needed. All supplied builds use the same capacity;
-changing `PSU_MAX_UNITS` changes the record length and requires manual export/
-recommissioning. This firmware does not reinterpret a different-size layout.
+All supplied builds use nine slots. Reduced-capacity builds can read records
+whose encoded capacity fits; they reject larger layouts rather than truncate
+identities or permissions. Export before deliberately reducing capacity.
 
-Downgrading to firmware that only reads schema 2/3 can select an older journal
-record or find no valid record; it cannot enforce the thermal stop and the old record may enable auto-resume.
-Export configuration and recommission deliberately before downgrading.
-
+Older firmware cannot read schema 5: downgrading may select a stale schema-4
+journal record (possibly with auto-resume ON) or find no valid record. Export,
+inhibit charging and recommission deliberately before a downgrade. It is not a
+thermal-stop reset procedure.
 
 ## Touch and simulation boundaries
 
@@ -381,7 +399,7 @@ samples a fixed SPI burst in the main loop. `TouchConfig.h` owns wiring/timings.
 `MemoryManager::auxiliaryBusy` gates the one shared byte writer; application
 services both storage jobs, but at most one is active. Charger records occupy
 at most the first 216 bytes of each 256-byte slot; calibration owns the last 40.
-The charger schema is version 4 with the same 216-byte footprint. Calibration has its own version/CRC,
+The charger schema is version 5 with a 211-byte footprint at nine slots. Calibration has its own version/CRC,
 sequence, hardware profile and rotation, independent of deployment identity.
 
 With `PSU_UI_DEBUG`, Application instantiates `SimulatedCan` and `RamStorage`.

@@ -25,7 +25,7 @@ class UiModel {
   uint8_t toolSelection() const { return toolSelection_; }
   uint8_t scenarioSelection() const { return scenarioSelection_; }
   uint8_t availabilitySelection() const { return availabilitySelection_; }
-  uint8_t availabilitySelected() const { return availabilitySelected_; }
+  UnitMask availabilitySelected() const { return availabilitySelected_; }
   AvailabilityAction availabilityAction() const { return availabilityAction_; }
   const AvailabilityPlan& availabilityPlan() const { return availabilityPlan_; }
   Result availabilityResult() const { return availabilityResult_; }
@@ -64,8 +64,8 @@ class UiModel {
   uint8_t unitAt(uint8_t rank) const;
   const ApplyPlan& plan() const { return plan_; }
   StorageResult storageResult() const { return storageResult_; }
-  uint8_t succeeded() const { return succeeded_; }
-  uint8_t failed() const { return failed_; }
+  UnitMask succeeded() const { return succeeded_; }
+  UnitMask failed() const { return failed_; }
   RecoveryLink recoveryLink() const;
   bool recovering() const { return recovery_.active; }
   RecoveryKind recoveryKind() const { return recovery_.kind; }
@@ -111,7 +111,7 @@ class UiModel {
   void queue(uint32_t now, bool confirmed);
   void result(UiNotice notice, Issue issue = Issue::None);
   void selectAvailability(uint32_t now);
-  void reviewAvailability(uint8_t mask, uint32_t now);
+  void reviewAvailability(UnitMask mask, uint32_t now);
   void confirmAvailability(uint32_t now);
   uint16_t draft() const;
   PsuController& c_;
@@ -124,7 +124,7 @@ class UiModel {
   StorageResult storageResult_ = StorageResult::Ok;
   int8_t group_ = -1;
   uint8_t unit_ = 0;
-  uint8_t succeeded_ = 0, failed_ = 0;
+  UnitMask succeeded_ = 0, failed_ = 0;
   uint16_t edit_ = 0, saveToken_ = 0;
   uint32_t editRevision_ = 0, operationSequence_ = 0, operationRevision_ = 0;
   bool editing_ = false, confirmYes_ = false;
@@ -132,7 +132,8 @@ class UiModel {
   UiAction request_;
   AvailabilityPlan availabilityPlan_;
   AvailabilityAction availabilityAction_ = AvailabilityAction::Accept;
-  uint8_t availabilitySelected_ = 0, availabilitySelection_ = 0;
+  UnitMask availabilitySelected_ = 0;
+  uint8_t availabilitySelection_ = 0;
   uint32_t availabilitySequence_ = 0;
   Result availabilityResult_ = Result::Ok;
   bool availabilityWorking_ = false, availabilityRemembered_ = false;

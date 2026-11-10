@@ -8,8 +8,8 @@ bool identified(const Identity& id) {
   return any && all != 0xff;
 }
 bool sameIdentity(const Identity& a, const Identity& b) { return !memcmp(a.bytes, b.bytes, 6); }
-uint8_t membersMask(uint8_t n) { return n <= PSU_MAX_UNITS ? uint8_t((1U << n) - 1) : 0; }
-uint8_t population(uint8_t m) { uint8_t n = 0; while (m) { n += m & 1; m >>= 1; } return n; }
+UnitMask membersMask(uint8_t n) { return n <= PSU_MAX_UNITS ? UnitMask((1U << n) - 1) : 0; }
+uint8_t population(UnitMask m) { uint8_t n = 0; while (m) { n += m & 1; m >>= 1; } return n; }
 namespace { char upper(char c) { return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c; } }
 bool sameName(const char* a, const char* b) {
   for (uint8_t i = 0; i <= limits::groupNameLength; ++i) {
@@ -37,7 +37,7 @@ bool allowedCurrent(uint16_t c, uint16_t r) {
 }
 uint16_t allocation(const GroupConfig& g, uint8_t slot, bool offline) {
   if (slot >= PSU_MAX_UNITS || !(g.members & (1U << slot))) return 0;
-  const uint8_t n = population(g.members), rank = population(g.members & uint8_t((1U << slot) - 1));
+  const uint8_t n = population(g.members), rank = population(g.members & UnitMask((1U << slot) - 1));
   const uint16_t total = offline ? g.offlineCurrent : g.current;
   return total / n + (rank < total % n);
 }
@@ -70,7 +70,7 @@ bool validConfig(const Configuration& c) {
   if (c.operating.voltageAuthorized && (c.operating.voltage < limits::minVoltage ||
       c.operating.voltage > limits::maxVoltage)) return false;
   if ((c.operating.currentMask || c.operating.voltageMask) && !c.operating.voltageAuthorized) return false;
-  uint8_t assigned = 0;
+  UnitMask assigned = 0;
   for (uint8_t i = 0; i < limits::maxGroups; ++i) {
     const auto& g = c.groups[i];
     if (!g.name[0]) {

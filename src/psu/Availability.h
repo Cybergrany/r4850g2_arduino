@@ -13,7 +13,7 @@ struct StartupStatus {
 };
 struct AvailabilityPlan {
   AvailabilityAction action = AvailabilityAction::Accept;
-  uint8_t requested = 0, selected = 0, participants = 0;
+  UnitMask requested = 0, selected = 0, participants = 0;
   Issue blocker = Issue::None;
   bool remember = false;
   uint32_t configurationRevision = 0, topologyRevision = 0, availabilityRevision = 0, created = 0;

@@ -74,19 +74,19 @@ void SimulatedCan::reset() {
   pending_ = cycling_ = false; slot_ = field_ = budget_ = 0; lastCycle_ = 0;
   standby_ = fanMax_ = wakeSeen_ = 0;
   scenario_ = DebugScenario::Healthy; outputTemperature_ = inputTemperature_ = INT16_MIN;
-  sources_ = batteries_ = 0xff; permit_ = true; now_ = scenarioSince_ = changedSource_ = 0;
+  sources_ = batteries_ = allUnitsMask; permit_ = true; now_ = scenarioSince_ = changedSource_ = 0;
   memset(readyAt_, 0, sizeof(readyAt_));
 }
-void SimulatedCan::sourcePower(uint8_t mask, bool on) {
-  const uint8_t changed = on ? mask & uint8_t(~sources_) : mask & sources_;
-  if (on) sources_ |= mask; else sources_ &= uint8_t(~mask);
+void SimulatedCan::sourcePower(UnitMask mask, bool on) {
+  const UnitMask changed = on ? mask & UnitMask(~sources_) : mask & sources_;
+  if (on) sources_ |= mask; else sources_ &= UnitMask(~mask);
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (changed & (1U << i)) {
     current_[i] = 0; voltage_[i] = 5400; // Commissioned offline baseline; live settings reset on AC loss.
     readyAt_[i] = now_ + 8000;
   }
 }
-void SimulatedCan::batteryPower(uint8_t mask, bool on) {
-  if (on) batteries_ |= mask; else batteries_ &= uint8_t(~mask);
+void SimulatedCan::batteryPower(UnitMask mask, bool on) {
+  if (on) batteries_ |= mask; else batteries_ &= UnitMask(~mask);
 }
 void SimulatedCan::permit(bool allowed) {
   if (permit_ == allowed) return;
@@ -99,10 +99,10 @@ void SimulatedCan::permit(bool allowed) {
 void SimulatedCan::scenario(DebugScenario value) {
   scenario_ = value; scenarioSince_ = changedSource_ = now_;
   if (value == DebugScenario::WakeCurrent) wakeSeen_ = 0;
-  if (value == DebugScenario::BatteryCan) sourcePower(0xff, false);
+  if (value == DebugScenario::BatteryCan) sourcePower(allUnitsMask, false);
   if (value == DebugScenario::ColdStart || value == DebugScenario::SlowStartup) {
-    if (value == DebugScenario::ColdStart) batteryPower(0xff, false);
-    sourcePower(0xff, false); sourcePower(0xff, true);
+    if (value == DebugScenario::ColdStart) batteryPower(allUnitsMask, false);
+    sourcePower(allUnitsMask, false); sourcePower(allUnitsMask, true);
   }
   if (value == DebugScenario::SourceAbsent || value == DebugScenario::SourceReturn ||
       value == DebugScenario::PartialReturn || value == DebugScenario::UnstableSource) sourcePower(0x18, false);
@@ -175,10 +175,10 @@ bool SimulatedCan::send(const CanFrame& f) {
       if (f.data[1] == protocol::OnlineCurrent) current_[a - 1] = uint32_t(value) * 5000 / 1024;
       if (f.data[1] == protocol::Standby) {
         if (f.data[3]) standby_ |= 1U << (a - 1);
-        else { standby_ &= uint8_t(~(1U << (a - 1))); wakeSeen_ |= 1U << (a - 1); }
+        else { standby_ &= UnitMask(~(1U << (a - 1))); wakeSeen_ |= 1U << (a - 1); }
       }
       if (f.data[1] == protocol::FanMode) {
-        if (f.data[3]) fanMax_ |= 1U << (a - 1); else fanMax_ &= uint8_t(~(1U << (a - 1)));
+        if (f.data[3]) fanMax_ |= 1U << (a - 1); else fanMax_ &= UnitMask(~(1U << (a - 1)));
       }
     }
   } else if (cmd == protocol::descriptionCommand) {

@@ -28,7 +28,7 @@ uint8_t UiModel::unitAt(uint8_t rank) const {
   return 0;
 }
 uint8_t UiModel::unitRank() const {
-  return group_ < 0 ? 0 : population(c_.configuration().groups[group_].members & uint8_t((1U << unit_) - 1));
+  return group_ < 0 ? 0 : population(c_.configuration().groups[group_].members & UnitMask((1U << unit_) - 1));
 }
 uint16_t UiModel::draft() const {
   return field_ == UiField::Voltage ? c_.configuration().voltage : c_.configuration().groups[group_].current;
@@ -242,7 +242,7 @@ void UiModel::resetNavigation() {
 void UiModel::selectAvailability(uint32_t now) {
   availabilitySelected_ = 0; availabilitySelection_ = 0; unit_ = unitAt(0);
   if (group_ < 0) return;
-  const uint8_t members = c_.configuration().groups[group_].members;
+  const UnitMask members = c_.configuration().groups[group_].members;
   for (uint8_t i = 0; i < c_.count(); ++i) if (members & (1U << i)) {
     const auto reason = c_.availabilityReason(i, now);
     if ((availabilityAction_ == AvailabilityAction::Accept && (reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc)) ||
@@ -250,7 +250,7 @@ void UiModel::selectAvailability(uint32_t now) {
         (availabilityAction_ == AvailabilityAction::Require && (c_.acceptedAbsences() & (1U << i)))) availabilitySelected_ |= 1U << i;
   }
 }
-void UiModel::reviewAvailability(uint8_t mask, uint32_t now) {
+void UiModel::reviewAvailability(UnitMask mask, uint32_t now) {
   availabilityPlan_ = c_.previewAvailability(availabilityAction_, mask, false, now);
   availabilitySelection_ = 0; page_ = UiPage::AvailabilityConfirm;
 }

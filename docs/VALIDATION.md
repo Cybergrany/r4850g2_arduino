@@ -1,8 +1,45 @@
 # Validation
 
-Target: Arduino Mega 2560, eight-slot capacity. Validation covers the parallel
+Target: Arduino Mega 2560, nine-slot capacity. Validation covers the parallel
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
+
+## Nine-unit capacity and compact persistence (2026-11-10)
+
+- Default capacity is nine PSUs with eight groups. A shared 16-bit member mask
+  covers control, authorization, ACK/results, availability, thermal state, serial,
+  wheel/touch navigation and debug simulation. PSU 9 is exercised independently
+  and alongside slots 1–8; zeroing/clearing a lower slot cannot truncate bit 8.
+- Schema 5 uses 211 bytes per journal record. Tests load independently encoded
+  schemas 2–4, preserve the original eight-slot count/profile/absence policy and
+  thermal stop, then interrupt every byte of the first nine-slot save. The old
+  or new complete record survives; both touch calibration tails remain intact.
+  Name packing covers every allowed character, including letter case and NUL.
+  CRC-valid malformed capacities, memberships and authorization bits are rejected.
+- Ninth-unit tests cover rejected group writes, address changes/stale plans,
+  all-unit thermal limiting, sensor loss/retry, durable thermal shutdown with
+  unsaved drafts, dropout acknowledgement versus explicit absence acceptance,
+  returned-member inclusion, sole-producer PSU_ACTIVE and OFF for all nine.
+- All-unit DATA/INFO scheduling and manual-poll fairness tests now run with nine
+  devices. Touch hit targets select PSU 9, toggle its individual availability
+  checkbox and review/confirm only its absence. Wheel navigation reaches the
+  ninth member on page five. Simulated fault injection waits for output readiness
+  qualification after the final ACK before changing the scenario.
+- The full nineteen-profile matrix and debug-isolation checks pass. The wheel
+  build grows by 106 bytes; all profiles retain at least 1 KiB static headroom.
+  The savings retain the twelve-entry discovery table (three spare entries at
+  nine slots), pack seven cooperative control flags per PSU into one byte and
+  reduce the saved-record buffer by five bytes. No CAN receive buffer was cut.
+- Host/controller/storage tests pass **1,882,032 checks** with snapshot exports;
+  touch/simulator tests pass **1,081 checks**. Production-renderer, real
+  ClickEncoder and fan/cutoff/alert/PSU_ACTIVE GPIO regressions also pass.
+  [Generated previews](ui-preview.html) include the ninth member's fifth page,
+  touch details and individual absence review.
+- `tools/check_memory.py` checks RAM including `.noinit` and flash in every Mega
+  ELF. It rejects missing builds and static headroom below 1024 bytes. This does
+  not measure stack high-water usage or establish real nine-PSU bus performance.
+
+See [upgrading from eight slots](GETTING_STARTED.md#adding-psu-9-after-upgrading-an-eight-slot-controller).
 
 ## UI formatting and recovery (2026-11-09)
 
@@ -59,7 +96,7 @@ The overview should return while the missing-member warning remains active.
 Then check click-to-open and hold-to-return navigation. No PSU absence should
 be accepted and no current enabled by acknowledging the notification.
 
-The build matrix and size table below include the UI formatting/recovery patch.
+The build matrix and size table below include nine-unit support and the memory savings.
 
 ```sh
 python3 tools/test_host.py
@@ -79,6 +116,7 @@ PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run \
   -e mega2560_serial_cutoff -e mega2560_touch_cutoff \
   -e mega2560_serial_alerts -e mega2560_touch_alerts -j 4
 python3 tools/check_debug_build.py
+python3 tools/check_memory.py
 git diff --check
 ```
 
@@ -94,40 +132,37 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6771 | 158550 | 1421 |
-| `mega2560_serial` | 4997 | 100220 | 3195 |
-| `mega2560_display` | 6740 | 149764 | 1452 |
-| `mega2560_local` | 5828 | 115892 | 2364 |
-| `mega2560_minimal` | 4054 | 46320 | 4138 |
-| `mega2560_touch` | 6973 | 168100 | 1219 |
-| `mega2560_touch_wheel` | 7004 | 169730 | 1188 |
-| `mega2560_ui_debug` | 6780 | 161124 | 1412 |
-| `mega2560_touch_debug` | 6982 | 170670 | 1210 |
-| `mega2560_touch_local` | 6030 | 122322 | 2162 |
-| `mega2560_touch_debug_local` | 6039 | 122570 | 2153 |
-| `mega2560_touch_enable` | 6973 | 168410 | 1219 |
-| `mega2560_touch_fan` | 6978 | 168832 | 1214 |
-| `mega2560_serial_fan` | 5002 | 100640 | 3190 |
-| `mega2560_serial_cutoff` | 4998 | 100292 | 3194 |
-| `mega2560_touch_cutoff` | 6979 | 168882 | 1213 |
-| `mega2560_serial_alerts` | 4999 | 100454 | 3193 |
-| `mega2560_touch_alerts` | 6981 | 169134 | 1211 |
-| `mega2560_wheel_alerts` | 6774 | 159226 | 1418 |
+| `mega2560` | 6877 | 162490 | 1315 |
+| `mega2560_serial` | 5085 | 103904 | 3107 |
+| `mega2560_display` | 6846 | 153770 | 1346 |
+| `mega2560_local` | 5917 | 120058 | 2275 |
+| `mega2560_minimal` | 4125 | 49480 | 4067 |
+| `mega2560_touch` | 7079 | 172172 | 1113 |
+| `mega2560_touch_wheel` | 7110 | 173682 | 1082 |
+| `mega2560_ui_debug` | 6899 | 165290 | 1293 |
+| `mega2560_touch_debug` | 7101 | 174820 | 1091 |
+| `mega2560_touch_local` | 6119 | 126444 | 2073 |
+| `mega2560_touch_debug_local` | 6141 | 126858 | 2051 |
+| `mega2560_touch_enable` | 7079 | 172482 | 1113 |
+| `mega2560_touch_fan` | 7084 | 172880 | 1108 |
+| `mega2560_serial_fan` | 5090 | 104304 | 3102 |
+| `mega2560_serial_cutoff` | 5086 | 104008 | 3106 |
+| `mega2560_touch_cutoff` | 7085 | 172950 | 1107 |
+| `mega2560_serial_alerts` | 5087 | 104158 | 3105 |
+| `mega2560_touch_alerts` | 7087 | 173192 | 1105 |
+| `mega2560_wheel_alerts` | 6880 | 163194 | 1312 |
 
-Compared with the immediately preceding commit `f26cd5c`, display profiles add
-**36 bytes** of total static RAM; headless profiles do not grow. This meets the
-128-byte growth target. The largest profile uses **7004 bytes**, leaving **1188
-bytes** (more than 1 KiB) for the stack and runtime state. The wheel/alert bench
-profile leaves **1418 bytes**. Replacing the GFX-derived scratch glyph with a
-small direct classic-font raster offsets most of the recovery bookmark and
-render-statistics state. No scene buffer was added.
+Compared with the eight-slot baseline `f4db131`, the wheel/alert build adds
+**106 bytes** of static RAM and leaves **1312 bytes** free. The largest profile
+uses **7110 bytes**, leaving **1082 bytes** for stack/runtime use. Each profile
+adds at most 119 bytes of static RAM, within the earlier 128-byte growth target.
 
 Static RAM excludes stack/interrupt nesting. No full colour framebuffer is used;
 two text/style scenes occupy 1170 bytes. Worst-case stack and loaded display/CAN
 timing still require a hardware check. EEPROM remains within 512 bytes: two
-256-byte slots with **216-byte schema-4 records**. Calibration still uses the
-40-byte tails at 216 and 472. Schemas 2/3 remain readable; older firmware cannot
-enforce schema-4 thermal stops. Review the [migration/downgrade limits](ALERTS.md#persistence-migration-and-limits).
+256-byte slots with **211-byte schema-5 records**. Calibration still uses the
+40-byte tails at 216 and 472. Schemas 2–4 remain readable with their profiles
+intact. Review the [migration/downgrade limits](ALERTS.md#persistence-migration-and-limits).
 
 All three debug ELFs passed `avr-nm` checks: simulated CAN and RAM adapters are
 present; physical CAN/MCP2515, EEPROM, cutoff, fan PWM, alert and PSU_ACTIVE GPIO symbols are absent. Their
@@ -142,8 +177,9 @@ at 2 MHz/one row, 140 us; at 1 MHz, 280 us; at 500 kHz, 560 us. SPI is released
 between strips. A 750 us budget is checked between bounded work units; a work
 unit or interrupt can overrun it. `diag ui` exposes actual observed maxima.
 These wire calculations and synthetic tests do not prove hardware timing.
-Keep unused T_CS HIGH at 3.3 V if its SPI lines remain connected. CAN bitrate and
-scheduling, EEPROM schema and the 1 MHz display read cap are unchanged.
+Keep unused T_CS HIGH at 3.3 V if its SPI lines remain connected. CAN bitrate,
+scheduling and the 1 MHz display read cap are unchanged by the capacity increase;
+the EEPROM schema changes as described above.
 
 ## UI redraw bench comparison
 
@@ -229,7 +265,7 @@ Meaningful scenarios include:
   address relocation, unbound devices, registry capacity, and ready/not-ready.
 - Disjoint group membership, equal shares and rounding, configured capacity
   rejection without clamping, and staged-versus-authorized voltage/current.
-- Two- and eight-unit applies; global voltage before current; explicit offline
+- Two- and nine-unit applies; global voltage before current; explicit offline
   defaults; per-write identity probe timeout and replacement detection.
 - Wrong register/address/value ACKs, rejection, transport failure, timeout,
   partial physical success, loss between voltage ACKs and current phase, recovery
@@ -245,7 +281,7 @@ Meaningful scenarios include:
 - Every EEPROM update interruption on initial and third save, and first schema-2
   migration save; fallback from corrupted latest record; readback failure;
   wrong deployment; invalid config; too-small storage; all accesses within 512 bytes.
-- All eight groups/identities/ratings, draft and operating values round-trip;
+- All eight groups and nine identities/ratings, draft and operating values round-trip;
   uniform legacy migration with identity/auto-resume disabled; mixed legacy
   preservation and inspection without silent rewriting.
 - Serial group commissioning and commands; decoded diagnostics; malformed
@@ -324,7 +360,7 @@ electrical SPI transactions or physical display response.
   stale ACKs cannot synchronize newer targets, reductions retain the readiness
   deadline, OFF wins, and rejected reductions take the bounded fault fallback.
 - Interrupted protection writes at every byte, schema-2/3 migration, retained
-  216-byte records/calibration tails, normal-save/calibration contention, failed
+  211-byte records/calibration tails, normal-save/calibration contention, failed
   persistence, held-ON boot switches, load retention and OFF/reheating overtaking
   a pending resume save. Automatic persistence preserves unsaved drafts.
 - Deduplication, 30-second popup pacing, 60-second rearming, repeated severity
@@ -427,7 +463,7 @@ preemption and rapid ON/OFF edges. Normal runtime OFF/ON sends no standby frame;
 an OFF during initial wake still completes fresh awake/zero observations. Boot
 OR and latest-wins/debounced switch coverage includes millis wrap and a serial
 command during initial debounce. EEPROM interruption and calibration-tail
-coverage are retained through the schema-4 migration.
+coverage are retained through schema-5 migration.
 
 Fault injection covers missing/readdressed units and identity lease expiry;
 rejected zero/MAX/wake/fallback; bounded missing ACKs and late ACKs; missing fresh
@@ -562,7 +598,7 @@ The production-controller regressions now cover:
   unconfirmed. Failed stopping keeps the original cause. ON cannot clear it;
   explicit reconcile restores the authorized profile, not newer drafts.
 - Two PSUs qualify independently without exclusions or redistribution; an
-  already-qualified group remains configurable. The eight-unit job and simulator
+  already-qualified group remains configurable. The nine-unit job and simulator
   complete; startup timers also work across `millis()` wrap.
 - Serial and the PSU detail UI distinguish acceptance, verification and measured
   output. Progress remains intact through a throttled UART; the group card shows
@@ -573,3 +609,26 @@ the intended test limits, inspect `diag control` / `diag psu 1` for qualificatio
 followed by `current-state=active`, and independently check delivered voltage and
 current. Transient ready pulses must not produce repeated zero/wake sequences.
 Then request OFF and confirm zero hold. The fan policy was not changed.
+
+## Nine-PSU commissioning bench check
+
+1. On the old build, export `config`, request `autoresume off`, verify zero-current
+   hold, `save`, and wait for `EEPROM OK`. Keep the enable switch OFF. Upgrade
+   without `defaults`; compare the eight bindings, groups and profile with the export.
+2. Set `count 9`, discover and bind the new identity, then add it to its intended
+   source group. Check `diag bus`, `diag group NAME` and `diag psu 9`; all nine
+   identities should be verified, unambiguous and broadcasting. Save and reboot
+   while OFF; confirm slot 9, memberships and touch calibration survive.
+3. Review `preview all`, explicitly enable and apply a suitable low-current
+   profile to the intended loads. Check ACKs and effective/acknowledged limits
+   for PSU 9. Meter the actual output; a software ACK is not physical proof.
+4. Request `autoresume off`. Confirm zero-current hold for every reachable PSU,
+   especially slot 9, and PSU_ACTIVE LOW. With appropriate isolation, remove
+   the ninth source, check its alert, and verify Acknowledge does not accept it.
+   Review/confirm only slot 9's absence; the remaining allocations must not grow.
+5. Restore that source. Verify identity reconciliation at zero and the explicit
+   inclusion review. Check group totals, device details and touch/wheel paging.
+6. Scroll while running `diag ui` and `diag bus` under all-nine traffic. Receive
+   loss/overflow, command timeout and read-failure counters should not grow.
+   Confirm telemetry/identity freshness and observe actual display response.
+   Software tests do not replace this physical bus/load check.

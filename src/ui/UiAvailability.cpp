@@ -18,7 +18,7 @@ void line(UiFrame& f, uint8_t row, FlashText t, uint8_t color = Text) { f.text(r
 }
 void drawAvailability(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   char text[27];
-  const uint8_t members = m.group() < 0 ? 0 : c.configuration().groups[m.group()].members;
+  const UnitMask members = m.group() < 0 ? 0 : c.configuration().groups[m.group()].members;
   if (m.page() == UiPage::Availability || m.page() == UiPage::AvailabilityUnits) {
     if (m.group() >= 0) f.text(1, 0, 26, c.configuration().groups[m.group()].name, Accent);
     else line(f, 1, UI_TEXT("STARTUP / AVAILABILITY"), Accent);

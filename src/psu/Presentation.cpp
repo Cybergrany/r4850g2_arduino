@@ -1,6 +1,6 @@
 #include "Presentation.h"
 namespace psu {
-Reading summarize(const PsuController& c, uint8_t mask, protocol::Metric metric,
+Reading summarize(const PsuController& c, UnitMask mask, protocol::Metric metric,
                   Aggregate aggregate, uint32_t now) {
   mask &= membersMask(c.count());
   Reading r = {0, 0, population(mask)};
@@ -14,7 +14,7 @@ Reading summarize(const PsuController& c, uint8_t mask, protocol::Metric metric,
   if (aggregate == Aggregate::Mean && r.observed) r.value /= r.observed;
   return r;
 }
-Reading sessionTotal(const PsuController& c, uint8_t mask) {
+Reading sessionTotal(const PsuController& c, UnitMask mask) {
   mask &= membersMask(c.count());
   Reading r = {0, 0, population(mask)};
   for (uint8_t i = 0; i < c.count(); ++i) if (mask & (1U << i)) {
@@ -23,7 +23,7 @@ Reading sessionTotal(const PsuController& c, uint8_t mask) {
   }
   return r;
 }
-bool pendingSettings(const PsuController& c, uint8_t mask) {
+bool pendingSettings(const PsuController& c, UnitMask mask) {
   const auto& cfg = c.configuration();
   if (!cfg.operating.voltageAuthorized || cfg.voltage != cfg.operating.voltage) return true;
   for (uint8_t i = 0; i < c.count(); ++i) if (mask & (1U << i)) {

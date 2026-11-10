@@ -332,13 +332,46 @@ void touchRecoveryWorkflow() {
   CHECK(out.value.size()<256);
 }
 
+void ninthTouchSelection() {
+  Rig r; r.ready(); UiModel model(r.controller,r.memory); model.tick(clockNow);
+  model.action({ActionKind::OpenGroup,3},clockNow);
+  CHECK(model.group()==3 && model.unitCount()==2);
+  UiAction action;
+  CHECK(UiLayout::hit(model,40,128,action) && action.kind==ActionKind::OpenUnit && action.value==1);
+  model.action(action,clockNow); CHECK(model.unit()==8 && model.page()==UiPage::Detail);
+  UiFrame frame; UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-ninth-details",frame);
+  r.can.sourcePower(0x100,false); r.can.batteryPower(0x100,false);
+  for(unsigned i=0;i<900;++i) r.step();
+  model.action({ActionKind::Startup},clockNow); model.action({ActionKind::AvailabilityIndividuals},clockNow);
+  CHECK(model.availabilitySelected()==0x100);
+  CHECK(UiLayout::hit(model,40,96,action) && action.kind==ActionKind::AvailabilityToggle && action.value==1);
+  model.action(action,clockNow); CHECK(model.availabilitySelected()==0);
+  model.action(action,clockNow); CHECK(model.availabilitySelected()==0x100);
+  CHECK(UiLayout::hit(model,80,145,action) && action.kind==ActionKind::AvailabilityReview);
+  model.action(action,clockNow);
+  CHECK(model.availabilityPlan().selected==0x100 && model.availabilityPlan().blocker==Issue::None);
+  CHECK(!r.controller.acceptedAbsences()); // Opening a review is not consent.
+  UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-ninth-absence-review",frame);
+  CHECK(UiLayout::hit(model,240,216,action) && action.kind==ActionKind::AvailabilityConfirm);
+  model.action(action,clockNow);
+  CHECK(r.controller.acceptedAbsences()==0x100 && r.controller.participants()==0xff);
+}
+
 void applicationScenarios() {
   clockNow=100; input={}; wheel={}; Serial.input.clear(); Serial.output.clear();
   Application app; app.begin();
   auto tick=[&](unsigned n) { while(n--) { clockNow+=20; app.tick(); } };
   auto command=[&](const std::string& s) { Serial.output.clear(); Serial.input=s+"\n"; tick(20); };
   auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(12); };
-  auto editCurrent=[&]() { tap(40,80); tap(112,216); tap(80,128); };
+  auto editCurrent=[&]() {
+    // Fault scenarios may raise another unit's incident between taps. Dismiss
+    // it explicitly before each fresh navigation gesture; acknowledgement must
+    // preserve the page rather than consume the next tap as navigation.
+    command("alerts ack all"); tap(40,80); command("alerts ack all");
+    tap(112,216); command("alerts ack all");
+    CHECK(hasText(appFrame,"BUS VOLTAGE - ALL GROUPS"));
+    tap(80,128); command("alerts ack all");
+  };
   tick(1600); CHECK(Serial.output.find("SIM:")!=std::string::npos);
   CHECK(Serial.output.find("CAN ready")==std::string::npos);
   command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
@@ -357,7 +390,7 @@ void applicationScenarios() {
     command("alerts ack all");
     command("ui-debug status"); CHECK(Serial.output.find("priming=0")!=std::string::npos);
 
-    CHECK(Serial.output.find("ERR")==std::string::npos);
+    if (Serial.output.find("ERR ")!=std::string::npos) throw std::runtime_error(std::string("Scenario ")+scenarioName(DebugScenario(s)).data+": "+Serial.output);
     CHECK(hasText(appFrame,"SIM"));
     if (DebugScenario(s)==DebugScenario::Empty) {
       CHECK(hasText(appFrame,"No groups configured")); wheel={0,false,true}; tick(5); CHECK(hasText(appFrame,"TOOLS"));
@@ -390,7 +423,12 @@ void applicationScenarios() {
         } else {
           // A background volatile refresh can discover this rejection before
           // the editor submits its write. Both paths must leave EEPROM alone.
-          CHECK(hasText(appFrame,"APPLY FAILED - NOT SAVED") || hasText(appFrame,"APPLY BLOCKED")); snapshot("touch-apply-failed",appFrame);
+          if (!hasText(appFrame,"APPLY FAILED - NOT SAVED") && !hasText(appFrame,"APPLY BLOCKED")) {
+            std::string frame;
+            for (unsigned i=0;i<UiFrame::cells;++i) { frame += appFrame.cell(i).character; if ((i+1)%ui::columns==0) frame += '\n'; }
+            throw std::runtime_error(std::string("Apply result for ")+scenarioName(DebugScenario(s)).data+":\n"+frame);
+          }
+          snapshot("touch-apply-failed",appFrame);
         }
         break;
       default: break;
@@ -443,6 +481,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

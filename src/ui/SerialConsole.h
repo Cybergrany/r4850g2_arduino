@@ -37,9 +37,9 @@ class SerialConsole {
   void reply(Result result);
   void storageReply(StorageResult result);
   void outputRow(uint32_t now);
-  void startView(View view, uint8_t mask = 0xff);
+  void startView(View view, UnitMask mask = allUnitsMask);
   void printIdentity(const Identity& identity);
-  void printMembers(uint8_t mask);
+  void printMembers(UnitMask mask);
   void printUnit(uint8_t slot, uint8_t field, uint32_t now);
   void printFrame(int8_t index, const CanFrame& frame);
   static void onFrame(void* context, int8_t index, const CanFrame& frame);
@@ -57,7 +57,8 @@ class SerialConsole {
   bool promptVisible_ = false, descriptionOpen_ = false;
   uint32_t lastInput_ = 0, now_ = 0;
   View view_ = View::None;
-  uint8_t viewMask_ = 0xff, row_ = 0, field_ = 0;
+  UnitMask viewMask_ = allUnitsMask;
+  uint8_t row_ = 0, field_ = 0;
   bool watch_ = false, raw_ = false, confirmation_ = false, wasBusy_ = false;
   uint8_t descriptionAddress_ = 0;
   uint32_t lastWatch_ = 0;
@@ -71,7 +72,7 @@ class SerialConsole {
   AvailabilityPlan availabilityPlan_;
   bool availabilityConfirmation_ = false;
   uint32_t availabilityNotice_ = 0;
-  uint8_t availabilityAttentionNotice_ = 0;
+  UnitMask availabilityAttentionNotice_ = 0;
 };
 }
 #endif

@@ -3,7 +3,9 @@
 namespace psu {
 class Discovery {
  public:
-  static constexpr uint8_t capacity = PSU_MAX_UNITS + 4;
+  // Retain the existing 12 observations at full capacity: nine managed PSUs
+  // plus three spare routes for discovery/address changes.
+  static constexpr uint8_t capacity = PSU_MAX_UNITS < 8 ? PSU_MAX_UNITS + 4 : 12;
   void receive(const CanFrame& frame, uint32_t now);
   void tick(uint32_t now, uint32_t staleMs);
   const Psu& device(uint8_t i) const { return devices_[i]; }

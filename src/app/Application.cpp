@@ -143,7 +143,10 @@ void Application::debugTick(uint32_t now) {
     resetDebug(r.kind == ActionKind::DebugRestart,r.kind == ActionKind::DebugReset,
         r.kind == ActionKind::ScenarioStart ? DebugScenario(r.value) : DebugScenario::Healthy);
   }
-  if (priming_ && !controller_.busy() && controller_.report().succeeded == membersMask(controller_.count())) {
+  // Inject scenarios only after every output has qualified, not just after
+  // the final setting ACK. With nine units those are visibly different times.
+  if (priming_ && !controller_.busy() && controller_.report().succeeded == membersMask(controller_.count()) &&
+      controller_.controlStatus(now).activity == Activity::Running) {
     priming_ = false; can_.scenario(desiredScenario_);
     if (desiredScenario_ == DebugScenario::ZeroHold || desiredScenario_ == DebugScenario::ZeroReject ||
         desiredScenario_ == DebugScenario::StopUnconfirmed) controller_.setAutoResume(false);
@@ -205,7 +208,7 @@ bool Application::command(void* context,uint8_t n,char** a,Print& out,uint32_t n
     out.println(F("SIM temperature changed; real thermal policy and stop persistence apply."));
   } else if (n==4 && (!PSU_STRCMP(a[1], "source") || !PSU_STRCMP(a[1], "battery")) && (!PSU_STRCMP(a[3], "on") || !PSU_STRCMP(a[3], "off"))) {
     const int8_t group = app.controller_.groupIndex(a[2]);
-    const uint8_t mask = !PSU_STRCMP(a[2], "all") ? membersMask(app.controller_.count()) : group >= 0 ? app.controller_.configuration().groups[group].members : 0;
+    const UnitMask mask = !PSU_STRCMP(a[2], "all") ? membersMask(app.controller_.count()) : group >= 0 ? app.controller_.configuration().groups[group].members : 0;
     if (!mask) out.println(F("ERR SIM target: all or group"));
     else {
       if (!PSU_STRCMP(a[1], "source")) app.can_.sourcePower(mask, !PSU_STRCMP(a[3], "on"));

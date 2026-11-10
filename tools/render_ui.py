@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render frames exported by the production UiView host tests into a standalone preview.
 
+mkdir -p /tmp/r4850-ui
 PSU_UI_SNAPSHOTS=/tmp/r4850-ui python3 tools/test_host.py
 PSU_UI_SNAPSHOTS=/tmp/r4850-ui python3 tools/test_touch.py
 python3 tools/render_ui.py /tmp/r4850-ui docs/ui-preview.html
@@ -23,7 +24,7 @@ body = source.split("font[] PROGMEM = {", 1)[1].split("}", 1)[0]
 font = [int(n, 16) for n in re.findall(r"0x[0-9a-fA-F]+", body)]
 assert len(font) == 1280
 frames = {}
-for name in ["groups", "groups-page2", "chargers", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")):
+for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")):
     lines = (args.frames / (name + ".txt")).read_bytes().decode("latin1").rstrip("\n").split("\n")
     assert len(lines) == 16 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
     frames[name] = {"rows": lines[:15], "styles": lines[15]}

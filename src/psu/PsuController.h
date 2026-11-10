@@ -9,7 +9,7 @@ enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
   Operation operation;
   int8_t group;
-  uint8_t members, recipients, missing, excluded;
+  UnitMask members, recipients, missing, excluded;
   uint16_t voltage, current[PSU_MAX_UNITS];
   uint8_t addresses[PSU_MAX_UNITS];
   uint32_t epochs[PSU_MAX_UNITS];
@@ -20,12 +20,12 @@ struct ApplyPlan {
 struct OperationReport {
   uint32_t sequence;
   Operation operation;
-  uint8_t requested, recipients, succeeded, failed, skipped;
+  UnitMask requested, recipients, succeeded, failed, skipped;
   bool active;
   CommandStatus units[PSU_MAX_UNITS];
 };
 struct GroupStatus {
-  uint8_t members, responding, ready, missing;
+  UnitMask members, responding, ready, missing;
   uint16_t requestedCurrent, authorizedCurrent;
 };
 struct BusStatus { uint8_t configured, responding, verified, broadcasting; };
@@ -43,7 +43,7 @@ class PsuController {
   const Configuration& configuration() const { return config_; }
   Result configure(const Configuration& config, bool resumeSaved = false);
   Result setCount(uint8_t count);
-  Result setGroup(const char* name, uint8_t members);
+  Result setGroup(const char* name, UnitMask members);
   Result removeGroup(uint8_t group);
   Result bind(uint8_t slot, const Identity& identity, uint16_t ratedCurrent, uint32_t now);
   // Also permits releasing a retained inactive slot. This does not turn off a PSU.
@@ -62,7 +62,7 @@ class PsuController {
   // Immediate, volatile fan test; targets are configured slots, not CAN addresses.
   // AUTO is only allowed while OFF and confirmed awake at zero current.
   Issue fanOverrideIssue(uint8_t slot, FanOverride mode, uint32_t now) const;
-  Result setFanOverride(uint8_t mask, FanOverride mode, uint32_t now);
+  Result setFanOverride(UnitMask mask, FanOverride mode, uint32_t now);
   // Logical duty (0..255), independent of the optional physical pin and enable.
   ExternalFanStatus externalFanStatus(uint32_t now) const;
   ControlStatus controlStatus(uint32_t now) const;
@@ -76,16 +76,16 @@ class PsuController {
   bool chargeAllowed() const { return startup_.permit == PermitState::Allowed; }
   bool powerAvailable() const { return startup_.permit == PermitState::NotFitted || chargeAllowed(); }
   Result hardStop();
-  uint8_t excluded() const { return excluded_; }
-  uint8_t acceptedAbsences() const { return (config_.acceptedAbsent | sessionAccepted_) & uint8_t(~sessionRequired_); }
-  uint8_t participants() const { return membersMask(count()) & uint8_t(~excluded_); }
-  uint8_t requiredMembers() const { return membersMask(count()) & uint8_t(~(excluded_ & acceptedAbsences())); }
+  UnitMask excluded() const { return excluded_; }
+  UnitMask acceptedAbsences() const { return (config_.acceptedAbsent | sessionAccepted_) & UnitMask(~sessionRequired_); }
+  UnitMask participants() const { return membersMask(count()) & UnitMask(~excluded_); }
+  UnitMask requiredMembers() const { return membersMask(count()) & UnitMask(~(excluded_ & acceptedAbsences())); }
   AvailabilityReason availabilityReason(uint8_t slot, uint32_t now) const;
   bool availabilitySettled(uint8_t group, uint32_t now) const;
   bool availabilityUnstable(uint8_t group, uint32_t now) const;
-  uint8_t availabilityAttention(uint32_t now) const;
+  UnitMask availabilityAttention(uint32_t now) const;
   uint32_t availabilityRevision() const { return availabilityRevision_; }
-  AvailabilityPlan previewAvailability(AvailabilityAction action, uint8_t mask, bool remember, uint32_t now) const;
+  AvailabilityPlan previewAvailability(AvailabilityAction action, UnitMask mask, bool remember, uint32_t now) const;
   Result confirmAvailability(const AvailabilityPlan& plan, MemoryManager& memory, uint32_t now);
   const AvailabilityReport& availabilityReport() const { return availabilityReport_; }
   bool availabilitySaving() const { return availabilityReport_.saving; }
@@ -117,7 +117,7 @@ class PsuController {
   uint16_t effectiveCurrent(uint8_t slot) const;
   bool acknowledgedCurrent(uint8_t slot, uint16_t& raw) const;
   bool temperatures(uint8_t slot, float& highest, uint32_t now) const;
-  Result retryTemperature(uint8_t mask, uint32_t now);
+  Result retryTemperature(UnitMask mask, uint32_t now);
   void serviceProtection(MemoryManager& memory, uint32_t now);
   void storageStatus(StorageResult result, bool older = false);
   void localStatus(bool display, bool calibration, bool saveFailed = false);
@@ -137,7 +137,7 @@ class PsuController {
   // Read requests are queued and paced. OK means queued, not a received reply;
   // readFailures reports subsequent transport failures or disappearing targets.
   Result requestDescription(uint8_t address);
-  Result requestPoll(uint8_t mask, uint32_t now);
+  Result requestPoll(UnitMask mask, uint32_t now);
   void resetAmpHours();
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
@@ -154,21 +154,21 @@ class PsuController {
   float highestTemperature_ = 0;
   uint16_t acknowledgedCurrent_[PSU_MAX_UNITS] = {};
   uint16_t protectionToken_ = 0, storageSeenToken_ = 0;
-  uint8_t acknowledgedMask_ = 0, validTemperatures_ = 0, hotContributors_ = 0;
-  uint8_t sensorFaults_ = 0, thermalIgnored_ = 0, energized_ = 0, activeLost_ = 0, identityLost_ = 0;
+  UnitMask acknowledgedMask_ = 0, validTemperatures_ = 0, hotContributors_ = 0;
+  UnitMask sensorFaults_ = 0, thermalIgnored_ = 0, energized_ = 0, activeLost_ = 0, identityLost_ = 0;
   ThermalLevel thermalLevel_ = ThermalLevel::Normal;
   ThermalStop savingStop_ = ThermalStop::None;
   EnableSource resumeSource_ = EnableSource::Serial;
   bool hotPrevious_ = false, cool_ = false, protectionDirty_ = false, protectionFailed_ = false, resumePending_ = false;
   bool controlCorrection_ = false;
-  Result change(const Configuration& candidate, uint8_t invalidate = 0);
+  Result change(const Configuration& candidate, UnitMask invalidate = 0);
   enum class TxPurpose : uint8_t { Background, Job, ManualRead, Control };
   bool send(const CanFrame& frame, TxPurpose purpose = TxPurpose::Background);
   void serviceTransmit(uint32_t now);
   void reconcileSessions(const Configuration& next);
   void receive(const CanFrame& frame, uint32_t now);
   void advance(bool success);
-  void beginReport(Operation operation, uint8_t requested, uint8_t recipients, uint8_t skipped = 0);
+  void beginReport(Operation operation, UnitMask requested, UnitMask recipients, UnitMask skipped = 0);
   void runJob(uint32_t now);
   void restore(uint32_t now);
   void refreshSettings(uint32_t now);
@@ -194,7 +194,7 @@ class PsuController {
   void currentAccepted(uint8_t slot, uint16_t raw);
   bool wakeAllowed(uint8_t slot, uint32_t now) const;
   bool releaseAllowed(uint32_t now) const;
-  bool controlsOnline(uint8_t mask) const;
+  bool controlsOnline(UnitMask mask) const;
   uint16_t reconciliationVoltage() const;
   CanTransport& transport_;
   EnableControl enable_;
@@ -209,7 +209,7 @@ class PsuController {
   StartupStatus startup_;
   uint32_t now_ = 0, acReleased_ = 0;
   bool startupConfigured_ = false;
-  uint8_t excluded_ = 0, sessionAccepted_ = 0, sessionRequired_ = 0;
+  UnitMask excluded_ = 0, sessionAccepted_ = 0, sessionRequired_ = 0;
   uint32_t availabilityRevision_ = 1;
   AvailabilityReason availabilityReasons_[PSU_MAX_UNITS] = {};
   uint32_t groupChanged_[limits::maxGroups] = {}, groupEpisode_[limits::maxGroups] = {};
@@ -225,19 +225,21 @@ class PsuController {
   uint32_t reportSequence_ = 0;
   uint32_t lastScan_ = 0, maxLoopUs_ = 0, txJobSequence_ = 0;
   float sessionAh_[PSU_MAX_UNITS] = {};
-  uint8_t sessionSeen_ = 0;
+  UnitMask sessionSeen_ = 0;
   uint32_t observedEpoch_[PSU_MAX_UNITS] = {};
-  uint8_t voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
-  uint8_t currentSynced_ = 0;
+  UnitMask voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
+  UnitMask currentSynced_ = 0;
   uint8_t scanAddress_ = 1, probeIndex_ = 0;
-  uint8_t requestedPoll_ = 0, requestedDescription_ = 0, txJobSlot_ = 0;
+  UnitMask requestedPoll_ = 0;
+  uint8_t requestedDescription_ = 0, txJobSlot_ = 0;
   bool txPending_ = false, sentThisTick_ = false;
   TxPurpose txPurpose_ = TxPurpose::Background;
   bool ready_ = false, waiting_ = false, secondPhase_ = false;
   bool jobStarted_ = false;
   bool voltageCommissioned_ = false, verifying_ = false, identityChecked_ = false;
   uint32_t verificationStarted_ = 0;
-  uint8_t pending_ = 0, jobSlot_ = 0;
+  UnitMask pending_ = 0;
+  uint8_t jobSlot_ = 0;
   uint16_t expected_ = 0, txFailures_ = 0;
   uint16_t readFailures_ = 0;
   ApplyPlan job_ = {};

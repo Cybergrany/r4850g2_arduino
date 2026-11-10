@@ -52,13 +52,13 @@ bool PsuController::availabilityUnstable(uint8_t group, uint32_t now) const {
   return group < limits::maxGroups && !availabilitySettled(group, now) &&
       uint32_t(now - groupEpisode_[group]) >= control::unstableMs;
 }
-uint8_t PsuController::availabilityAttention(uint32_t now) const {
+UnitMask PsuController::availabilityAttention(uint32_t now) const {
   if (!powerAvailable() || (startupConfigured_ && uint32_t(now - acReleased_) < control::availabilityGraceMs)) return 0;
-  uint8_t attention = 0;
+  UnitMask attention = 0;
   for (uint8_t i = 0; i < count(); ++i) {
     const int8_t g = groupFor(config_, i);
     if (g < 0 || !availabilitySettled(g, now)) continue;
-    const auto reason = availabilityReason(i, now); const uint8_t bit = uint8_t(1U << i);
+    const auto reason = availabilityReason(i, now); const UnitMask bit = UnitMask(1U << i);
     if (((reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc) && !(acceptedAbsences() & bit)) ||
         (reason == AvailabilityReason::Ready && (excluded_ & bit))) attention |= bit;
   }
@@ -74,13 +74,13 @@ void PsuController::availabilityTick(uint32_t now) {
       const int8_t g = groupFor(config_, i);
       if (g >= 0) groupChanged_[g] = now;
     }
-    const auto bit = uint8_t(1U << i);
+    const auto bit = UnitMask(1U << i);
     if ((acceptedAbsences() & bit) && reason != AvailabilityReason::Ready && !(excluded_ & bit)) {
       excluded_ |= bit; ++availabilityRevision_;
     }
   }
 }
-AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, uint8_t mask, bool remember, uint32_t now) const {
+AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, UnitMask mask, bool remember, uint32_t now) const {
   AvailabilityPlan p;
   p.action = action; p.requested = mask; p.remember = remember; p.created = now;
   p.configurationRevision = revision_; p.topologyRevision = discovery_.revision();
@@ -98,7 +98,7 @@ AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, u
   if (action == AvailabilityAction::Accept && startupConfigured_ &&
       uint32_t(now - acReleased_) < control::availabilityGraceMs) p.blocker = Issue::Settling;
   for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
-    const uint8_t bit = uint8_t(1U << i);
+    const UnitMask bit = UnitMask(1U << i);
     const int8_t g = groupFor(config_, i);
     if (!identified(config_.units[i].identity) || g < 0) { p.blocker = Issue::Unbound; continue; }
     if (action == AvailabilityAction::Require) {
@@ -118,23 +118,23 @@ AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, u
     p.selected |= bit;
   }
   if (!p.selected && p.blocker == Issue::None) p.blocker = Issue::Invalid;
-  if (action == AvailabilityAction::Accept) p.participants &= uint8_t(~p.selected);
+  if (action == AvailabilityAction::Accept) p.participants &= UnitMask(~p.selected);
   if (action == AvailabilityAction::Include) p.participants |= p.selected;
   return p;
 }
 void PsuController::applyAvailability(const AvailabilityPlan& p) {
   if (p.action == AvailabilityAction::Accept) {
-    thermalIgnored_ |= p.selected; hotContributors_ &= uint8_t(~p.selected);
-    energized_ &= uint8_t(~p.selected); activeLost_ &= uint8_t(~p.selected); identityLost_ &= uint8_t(~p.selected);
-    sessionAccepted_ |= p.selected; sessionRequired_ &= uint8_t(~p.selected); excluded_ |= p.selected;
+    thermalIgnored_ |= p.selected; hotContributors_ &= UnitMask(~p.selected);
+    energized_ &= UnitMask(~p.selected); activeLost_ &= UnitMask(~p.selected); identityLost_ &= UnitMask(~p.selected);
+    sessionAccepted_ |= p.selected; sessionRequired_ &= UnitMask(~p.selected); excluded_ |= p.selected;
     if (p.remember) config_.acceptedAbsent |= p.selected;
   } else if (p.action == AvailabilityAction::Include) {
-    excluded_ &= uint8_t(~p.selected);
+    excluded_ &= UnitMask(~p.selected);
     restorePending_ |= p.selected & config_.operating.voltageMask;
     running_ |= p.selected & config_.operating.voltageMask;
   } else if (p.action == AvailabilityAction::Require) {
-    sessionRequired_ |= p.selected; sessionAccepted_ &= uint8_t(~p.selected);
-    if (p.remember) config_.acceptedAbsent &= uint8_t(~p.selected);
+    sessionRequired_ |= p.selected; sessionAccepted_ &= UnitMask(~p.selected);
+    if (p.remember) config_.acceptedAbsent &= UnitMask(~p.selected);
     // Revoking a waiver never implicitly admits a currently excluded unit.
   } else {
     setAutoResume(false);
@@ -156,7 +156,7 @@ Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManag
   if (!p.remember) { applyAvailability(p); return Result::Ok; }
   Configuration snapshot = config_;
   if (p.action == AvailabilityAction::Accept) snapshot.acceptedAbsent |= p.selected;
-  else snapshot.acceptedAbsent &= uint8_t(~p.selected);
+  else snapshot.acceptedAbsent &= UnitMask(~p.selected);
   availabilityReport_.storage = memory.startSave(snapshot);
   if (availabilityReport_.storage != StorageResult::Ok) {
     storageStatus(availabilityReport_.storage);

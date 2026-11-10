@@ -217,7 +217,7 @@ bool UiModel::recoveryAction(UiAction a, uint32_t now) {
   if (working() || c_.busy() || memory_.saving()) { r.result = Result::Busy; return true; }
   if (r.command == RecoveryCommand::Retry) { c_.reconcile(); r.result = Result::Ok; }
   else if (r.command == RecoveryCommand::Enable) r.result = c_.setAutoResume(true);
-  else if (r.command == RecoveryCommand::Sensors) r.result = c_.retryTemperature(uint8_t(1U << r.slot), now);
+  else if (r.command == RecoveryCommand::Sensors) r.result = c_.retryTemperature(UnitMask(1U << r.slot), now);
   else if (r.command == RecoveryCommand::Save) {
     const auto saved = memory_.startSave(c_.configuration());
     r.result = saved == StorageResult::Ok ? Result::Ok : saved == StorageResult::Busy ? Result::Busy : Result::Invalid;

@@ -91,7 +91,7 @@ Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
 The supported target is Mega 2560, with a **512-byte EEPROM budget** even though
-Mega provides more. The original Nano was already at 99.7% flash.
+Mega provides more. All supplied builds support **nine PSU slots and eight source groups**. The original Nano was already at 99.7% flash.
 
 Defaults: MCP2515 CS 10, INT 2, **8 MHz crystal**, 125 kbit/s; Mega SPI MISO 50,
 MOSI 51, SCK 52 (or ICSP). Use correctly terminated CAN wiring. Encoder CLK/DT/SW
@@ -115,7 +115,7 @@ under `src/`; it is built automatically and needs no separate installation.
 | [`ControlConfig.h`](src/config/ControlConfig.h) | Enable input, AC cutoff, PSU_ACTIVE pin, fan policy and reconciliation timing |
 | [`ChargerConfig.h`](src/config/ChargerConfig.h) | Configuration types, limits, discovery/apply timing |
 | [`TouchConfig.h`](src/config/TouchConfig.h) | XPT2046 wiring, calibration profile, sampling and gesture timings |
-| [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–8) |
+| [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–9) |
 | [`ConsoleConfig.h`](src/config/ConsoleConfig.h) | Serial input budget and idle expiry |
 | [`UiConfig.h`](src/config/UiConfig.h) | UI timing, edit increments, paging, dimming and drawing budget |
 
@@ -163,9 +163,11 @@ voltage and verified wake before restoring authorized current. Optional
 ENABLE_IN is a latching switch with latest-event-wins semantics. See
 [control policy and wiring](docs/CONTROL.md). PSU nonvolatile defaults are a separate, explicit `offline all` operation.
 
-Old EEPROM records are preserved for inspection with `legacy`. Compatible
-uniform settings migrate to an unbound GROUP1 in RAM with auto-resume disabled;
-conflicting per-unit settings require manual review. See the migration section
+Existing parallel-controller records (schemas 2–4) load with their bindings,
+groups, drafts and authorized profile intact; schema-4 thermal stops are retained.
+The next save uses compact schema 5. Original per-unit schema-1 records remain
+inspectable with `legacy`: compatible uniform settings migrate to an unbound
+GROUP1 with auto-resume disabled; conflicting per-unit settings require review. See the migration section
 of the [commissioning guide](docs/GETTING_STARTED.md#upgrading-and-moving-installations).
 
 ## Development and validation
@@ -208,4 +210,4 @@ Derived protocol software is GPL-3.0-or-later; see [LICENSE](LICENSE) and
 
 Operator protection: [alerts, thermal limits, GPIOs and bench procedure](docs/ALERTS.md).
 The new serial/touch alert example profiles use D28 WARNING and D29 ERROR; pins
-are otherwise disabled by default. Schema 4 preserves the 512-byte EEPROM budget.
+are otherwise disabled by default. Schema 5 preserves the 512-byte EEPROM budget with nine PSU slots and eight groups.

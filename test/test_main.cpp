@@ -8,6 +8,7 @@
 #include "ui/SerialConsole.h"
 #include "ui/UiView.h"
 #include "ui/UiLayout.h"
+#include "ui/Touch.h"
 #include <fstream>
 #include <cstdlib>
 #include <array>
@@ -205,22 +206,23 @@ struct Rig {
   FakeCan can;
   PsuController c;
   uint32_t now = 100;
-  uint8_t live;
+  UnitMask live;
   uint8_t addresses[PSU_MAX_UNITS] = {};
   bool answerIdentityQueries = true;
-  uint8_t standby = 0, woken = 0;
+  UnitMask standby = 0, woken = 0;
   uint16_t current[PSU_MAX_UNITS] = {};
   uint16_t reportedCurrent[PSU_MAX_UNITS];
   int16_t inputTemperature = INT16_MIN, unitTemperature[PSU_MAX_UNITS];
-  uint8_t noInputTemperature = 0, noOutputTemperature = 0;
+  UnitMask noInputTemperature = 0, noOutputTemperature = 0;
   int16_t temperature = 40;
   bool reportAc = false;
   bool notReadyAtZero = false;
   uint32_t statusFlags = 0, outputReadyDelay = 0, outputReadyAt[PSU_MAX_UNITS] = {};
-  uint8_t noAc = 0, notReady = 0, noBroadcast = 0;
+  UnitMask noAc = 0, notReady = 0, noBroadcast = 0;
   uint16_t voltage = 5400;
   uint32_t notReadyUntil = 0;
-  uint8_t noTemperature = 0, noCurrent = 0, noVoltage = 0, rejectRegister = 0xff, dropRegister = 0xff;
+  UnitMask noTemperature = 0, noCurrent = 0, noVoltage = 0;
+  uint8_t rejectRegister = 0xff, dropRegister = 0xff;
   bool leaking = false, leakOnWake = false;
   size_t acknowledged = 0;
   explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true, uint32_t start = 100) : c(can), now(start), live(membersMask(config.count)) {
@@ -273,7 +275,7 @@ struct Rig {
         for(uint8_t i=0;i<c.count();++i) if(addresses[i]==protocol::address(f.id) && f.data[1]!=rejectRegister) {
           if(f.data[1]==protocol::Standby) {
             if(f.data[3]) standby |= 1U<<i;
-            else { standby &= uint8_t(~(1U<<i)); woken |= 1U<<i; }
+            else { standby &= UnitMask(~(1U<<i)); woken |= 1U<<i; }
           }
           if(f.data[1]==protocol::OnlineCurrent) {
             const auto next=protocol::readBigEndian(f.data+4)*5000/1024;
@@ -384,7 +386,7 @@ void controlLifecycle() {
   CHECK(boot.c.controlStatus(boot.now).activity==Activity::Running && boot.c.report().succeeded==3);
   uint8_t fans=0, voltage=0, zero=0, woken=0;
   for(const auto& f:boot.can.writes()) {
-    const uint8_t bit=1U<<(protocol::address(f.id)-1);
+    const UnitMask bit=1U<<(protocol::address(f.id)-1);
     CHECK(f.data[1]!=protocol::Standby || !f.data[3]);
     if(f.data[1]==protocol::FanMode && f.data[3]) { CHECK(zero==3); fans|=bit; }
     if(f.data[1]==protocol::OnlineCurrent && !protocol::readBigEndian(f.data+4)) zero|=bit;
@@ -556,7 +558,7 @@ void fanControl() {
   uint8_t max=0;
   const auto writes=r.can.writes();
   for(size_t n=before;n<writes.size();++n) {
-    const auto& f=writes[n]; const uint8_t bit=1U<<(protocol::address(f.id)-1);
+    const auto& f=writes[n]; const UnitMask bit=1U<<(protocol::address(f.id)-1);
     if(f.data[1]==protocol::FanMode && f.data[3]) max|=bit;
     if(f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)>0) CHECK(max&bit);
   }
@@ -646,7 +648,7 @@ void manualFanControl() {
   CHECK(resume.c.unitControl(0).fanOverride==FanOverride::Policy && resume.c.unitControl(1).fanAcknowledged==FanMode::Max);
   uint8_t maxAccepted=0; const auto restored=resume.can.writes();
   for(size_t i=enabled;i<restored.size();++i) {
-    const auto& f=restored[i]; const uint8_t bit=1U<<(protocol::address(f.id)-1);
+    const auto& f=restored[i]; const UnitMask bit=1U<<(protocol::address(f.id)-1);
     if(f.data[1]==protocol::FanMode && f.data[3]) maxAccepted|=bit;
     if(f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)) CHECK(maxAccepted&bit);
   }
@@ -1016,10 +1018,10 @@ void cooperativeCan() {
   success.can.incoming.push_back(ack(success.can.writes().back())); success.c.tick(success.now + 2);
   CHECK(!success.c.busy() && success.c.report().succeeded == 1 && success.c.voltageSynchronized(0));
 
-  Rig all(installation(8)); const size_t before = all.can.sent.size();
-  CHECK(all.c.requestPoll(0xff, all.now) == Result::Ok && all.can.sent.size() == before);
+  Rig all(installation(PSU_MAX_UNITS)); const size_t before = all.can.sent.size();
+  CHECK(all.c.requestPoll(allUnitsMask, all.now) == Result::Ok && all.can.sent.size() == before);
   CHECK(all.c.requestPoll(1, all.now) == Result::Busy);
-  size_t seen = before; uint8_t polled = 0; uint32_t lastPoll = 0;
+  size_t seen = before; UnitMask polled = 0; uint32_t lastPoll = 0;
   // Due background INFO/DATA take priority over the manual request. Allow one
   // full round of each plus the manual round, independent of boot-time phase.
   for (unsigned n = 0; n < 3 * all.c.count() * limits::readRequestGapMs; ++n) {
@@ -1031,16 +1033,16 @@ void cooperativeCan() {
       lastPoll = all.now; polled |= 1U << (protocol::address(f.id) - 1);
     }
   }
-  CHECK(polled == 0xff);
-  // At eight members, INFO and DATA both retain their schedules while an
+  CHECK(polled == allUnitsMask);
+  // At nine members, INFO and DATA both retain their schedules while an
   // address sweep progresses alongside volatile V/I refresh.
-  uint32_t lastData[8] = {}, lastInfo[8] = {};
-  unsigned dataCount[8] = {};
+  uint32_t lastData[PSU_MAX_UNITS] = {}, lastInfo[PSU_MAX_UNITS] = {};
+  unsigned dataCount[PSU_MAX_UNITS] = {};
   for (unsigned n = 0; n < 4000; ++n) {
     all.step(5);
     for (; seen < all.can.sent.size(); ++seen) {
       const auto& f = all.can.sent[seen]; const auto address = protocol::address(f.id);
-      if (address < 1 || address > 8) continue;
+      if (address < 1 || address > PSU_MAX_UNITS) continue;
       const auto command = protocol::command(f.id); const uint8_t i = address - 1;
       if (command == protocol::dataCommand) {
         CHECK(!lastData[i] || uint32_t(all.now - lastData[i]) <= 1250);
@@ -1056,14 +1058,14 @@ void cooperativeCan() {
       (f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)==0));
   for (auto count : dataCount) CHECK(count >= 15);
   // An operator repeatedly requesting all data must not starve identity refresh.
-  unsigned refreshed[8] = {};
+  unsigned refreshed[PSU_MAX_UNITS] = {};
   for (unsigned n = 0; n < 700; ++n) {
-    const auto result = all.c.requestPoll(0xff, all.now);
+    const auto result = all.c.requestPoll(allUnitsMask, all.now);
     CHECK(result == Result::Ok || result == Result::Busy);
     all.step(10);
     for (; seen < all.can.sent.size(); ++seen) {
       const auto& f = all.can.sent[seen]; const auto address = protocol::address(f.id);
-      if (address >= 1 && address <= 8 && protocol::command(f.id) == protocol::infoCommand) ++refreshed[address - 1];
+      if (address >= 1 && address <= PSU_MAX_UNITS && protocol::command(f.id) == protocol::infoCommand) ++refreshed[address - 1];
     }
   }
   for (auto count : refreshed) CHECK(count >= 2);
@@ -1084,16 +1086,39 @@ void recordCrc(uint8_t* bytes, uint16_t size) {
 }
 FakeEeprom legacyRecord(bool mixed = false) {
   FakeEeprom bytes;
-  const uint16_t size = 20 + 12 * PSU_MAX_UNITS;
+  const uint16_t size = 20 + 12 * 8;
   auto* b = bytes.bytes.data(); std::memset(b, 0, size);
   b[0] = 0xa5; b[1] = 1; put16(b + 2, size); b[4] = 42;
   std::memcpy(b + 10, "R48C", 4); b[16] = 2; b[17] = 1; put16(b + 18, 1000);
-  for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
+  for (uint8_t i = 0; i < 8; ++i) {
     auto* unit = b + 20 + i * 12; unit[0] = i + 1; unit[1] = 1;
     put16(unit + 2, mixed && i == 1 ? 5500 : 5400); put16(unit + 4, 2750);
     put16(unit + 6, 5300); put16(unit + 8, 1000); put16(unit + 10, 5000);
   }
   recordCrc(b, size); return bytes;
+}
+FakeEeprom parallelRecord(const Configuration& c, uint8_t schema = 4, uint8_t capacity = 8) {
+  CHECK(schema >= 2 && schema <= 4 && capacity >= c.count && capacity <= 8);
+  FakeEeprom bytes;
+  const uint16_t size = 136 + 10 * capacity;
+  auto* b = bytes.bytes.data(); std::memset(b, 0, size);
+  b[0] = 0xa5; b[1] = schema; put16(b + 2, size); b[4] = 42;
+  std::memcpy(b + 10, "R48C", 4); b[14] = c.operating.voltageAuthorized; b[15] = c.operating.voltageMask;
+  for (uint8_t i = 0; i < 4; ++i) b[16+i] = c.deploymentId >> (8*i);
+  put16(b + 20, c.voltage); put16(b + 22, c.offlineVoltage); put16(b + 24, c.pollMs);
+  b[26] = c.count; b[27] = uint8_t(c.autoResume) | (schema == 4 ? uint8_t(c.thermalStop) << 1 : 0);
+  b[28] = schema >= 3 ? c.acceptedAbsent : 0;
+  uint16_t at = 29;
+  for (const auto& g : c.groups) {
+    std::memcpy(b + at, g.name, 8); b[at+8] = g.members;
+    put16(b + at + 9, g.current); put16(b + at + 11, g.offlineCurrent); at += 13;
+  }
+  for (uint8_t i = 0; i < capacity; ++i) {
+    std::memcpy(b + at, c.units[i].identity.bytes, 6); put16(b + at + 6, c.units[i].ratedCurrent); at += 8;
+  }
+  put16(b + at, c.operating.voltage); at += 2; b[at++] = c.operating.currentMask;
+  for (uint8_t i = 0; i < capacity; ++i) { put16(b + at, c.operating.current[i]); at += 2; }
+  CHECK(at == size); recordCrc(b, size); return bytes;
 }
 void eepromAndMigration() {
   CHECK(MemoryManager::recordSize <= 256 && MemoryManager::budget == 512);
@@ -1104,9 +1129,10 @@ void eepromAndMigration() {
   one.operating.voltageMask = membersMask(PSU_MAX_UNITS);
   one.groups[0] = {};
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    one.groups[i].name[0] = 'G'; one.groups[i].name[1] = '1' + i;
-    one.groups[i].members = 1U << i; one.groups[i].current = 2000 + i;
-    one.groups[i].offlineCurrent = 1000 + i;
+    const uint8_t g = i % limits::maxGroups;
+    one.groups[g].name[0] = 'G'; one.groups[g].name[1] = '1' + g;
+    one.groups[g].members |= 1U << i; one.groups[g].current = 2000 + g;
+    one.groups[g].offlineCurrent = 1000 + g;
     one.operating.current[i] = 500 + i; one.units[i].ratedCurrent = 5000 + 100 * i;
   }
   CHECK(validConfig(one) && memory.load(out) == StorageResult::NoValidRecord);
@@ -1125,8 +1151,9 @@ void eepromAndMigration() {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
     CHECK(sameIdentity(out.units[i].identity, one.units[i].identity));
     CHECK(out.units[i].ratedCurrent == one.units[i].ratedCurrent);
-    CHECK(sameName(out.groups[i].name, one.groups[i].name) && out.groups[i].members == one.groups[i].members);
-    CHECK(out.groups[i].current == one.groups[i].current && out.groups[i].offlineCurrent == one.groups[i].offlineCurrent);
+    const uint8_t g = i % limits::maxGroups;
+    CHECK(sameName(out.groups[g].name, one.groups[g].name) && out.groups[g].members == one.groups[g].members);
+    CHECK(out.groups[g].current == one.groups[g].current && out.groups[g].offlineCurrent == one.groups[g].offlineCurrent);
     CHECK(out.operating.current[i] == one.operating.current[i]);
   }
   auto two = one; two.voltage = 5500; CHECK(memory.save(two) == StorageResult::Ok);
@@ -1722,9 +1749,11 @@ void uiLayouts() {
 #include "test_serial_alerts.inc"
 #include "test_psu_active.inc"
 #include "test_ui_recovery.inc"
+#include "test_nine_units.inc"
 }
 int main() {
   try {
+    nineUnitMigration(); ninthProtectionAndControl(); ninthAvailabilityAndRouting(); ninthSerialAndUi();
     decimalFormatting(); uiRecoveryAvailability(); uiRecoveryGuards(); uiRecoverySave(); uiRecoveryResultsAndThermal();
     psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();
     serialAlertCadence(); serialAlertStorm();
