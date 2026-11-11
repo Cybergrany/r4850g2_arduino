@@ -261,15 +261,16 @@ StorageResult MemoryManager::startSave(const Configuration& c) {
   startWrite(previous == int16_t(base) ? base + slotSize : base, recordSize, sequence + 1, false);
   return StorageResult::Ok;
 }
-StorageResult MemoryManager::startAvailabilitySave(const Configuration& c, UnitMask accepted) {
-  if (accepted & ~membersMask(c.count)) return StorageResult::InvalidConfig;
-  for (uint8_t i = 0; i < c.count; ++i) if ((accepted & (1U << i)) &&
+StorageResult MemoryManager::startAvailabilitySave(const Configuration& c, UnitMask accepted, UnitMask disabled) {
+  if ((accepted | disabled) & ~membersMask(c.count)) return StorageResult::InvalidConfig;
+  for (uint8_t i = 0; i < c.count; ++i) if (((accepted | disabled) & (1U << i)) &&
       (!identified(c.units[i].identity) || groupFor(c, i) < 0)) return StorageResult::InvalidConfig;
   const auto result = startSave(c);
   if (result == StorageResult::Ok) {
     // The writer has not yielded yet. Change only its private snapshot, never
     // the live configuration or an operator's unsaved draft.
-    put16(pending_ + 26, accepted); put16(pending_ + 8, crc(pending_, recordSize));
+    put16(pending_ + 26, accepted); put16(pending_ + 32, disabled);
+    put16(pending_ + 8, crc(pending_, recordSize));
   }
   return result;
 }

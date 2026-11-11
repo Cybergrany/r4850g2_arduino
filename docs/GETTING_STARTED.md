@@ -316,7 +316,7 @@ if a known unit reconnects, it restores its last authorized voltage/current,
 not a later staged edit. `config` and `diag group` distinguish these values.
 
 During the same controller session, returning authorized units reconcile through
-zero current, checked fan mode, common voltage and verified wake before
+zero current, checked fan mode, its authorized voltage and verified wake before
 restoring their shares. New/unaccepted missing members block charging-current release;
 unaffected healthy PSUs keep their shares. No current is increased to compensate for absence. Control
 failures latch visibly; inspect `diag control`, fix the cause, and use `reconcile`
@@ -324,9 +324,12 @@ to request a new attempt. Reconciliation never applies later staged drafts.
 
 For an intentionally unavailable source, use `startup accept GROUP2 remember`,
 review the identities/allocation and `confirm yes`. Wait for verified save
-completion. Returning excluded members require `startup include GROUP2` and
-confirmation. Use slot selections for partial groups. See [STARTUP.md](STARTUP.md)
-for session-only choices, removing exceptions, settling and the UI equivalent.
+completion. Excluded members remain excluded when they return. To include them,
+request `autoresume off`, wait for confirmed zero hold, then use
+`startup include GROUP2 remember` and confirm. Omit `remember` for a session-only
+choice; unrelated saves do not persist it. Included absent units are required.
+Use slot selections for partial groups. See [STARTUP.md](STARTUP.md) for the
+three-column overview, checkbox editor, Controller controls and reboot/profile checks.
 
 Enable is OFF by default. **`autoresume on/off` now controls live operation**, as
 well as the preference saved for next boot. `autoresume off` requests zero current

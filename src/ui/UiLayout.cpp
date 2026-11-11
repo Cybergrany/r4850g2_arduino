@@ -103,25 +103,37 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
 #endif
       if (m.cutoffFitted()) add(10,0,26,2,ActionKind::HardStop,UI_TEXT("Hard stop: AC cutoff"));
       add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
+    case UiPage::AvailabilityOverview:
+      for (uint8_t i=0;i<3;++i) {
+        const uint8_t rank=m.groupRank()/3*3+i;
+        if (rank<m.groupCount()) add(2,i*9,8,8,ActionKind::AvailabilityGroup,UI_TEXT(""),rank);
+      }
+      add(10,0,26,2,ActionKind::Controller,UI_TEXT("Controller"));
+      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
+      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
+      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+    case UiPage::Controller:
+      add(2,0,26,2,ActionKind::Stop,UI_TEXT("Stop / zero-current hold"));
+      add(4,0,12,2,ActionKind::Enable,UI_TEXT("Enable..."));
+      add(4,14,12,2,ActionKind::Diagnostics,UI_TEXT("Diagnostics"));
+      if (m.cutoffFitted()) add(6,0,26,2,ActionKind::Probe,UI_TEXT("Commissioning probe..."));
+      add(8,0,26,2,ActionKind::Retry,UI_TEXT("Retry ALL PSUs..."));
+      if (m.cutoffFitted()) add(10,0,26,2,ActionKind::HardStop,UI_TEXT("Hard stop: AC cutoff"));
+      add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
     case UiPage::Availability:
-      add(6,0,26,2,ActionKind::AvailabilityPrimary,m.startupRetry() ? UI_TEXT("Retry ALL PSUs...") : m.startupProbe() ? UI_TEXT("Power PSUs for discovery") :
-          m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Include group") : UI_TEXT("Continue without group"));
-      add(8,0,26,2,ActionKind::Back,m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Keep excluded") : UI_TEXT("Wait for group"));
+      add(6,0,26,2,ActionKind::AvailabilityInclude,UI_TEXT("Include"));
+      add(8,0,26,2,ActionKind::AvailabilityExclude,UI_TEXT("Exclude"));
       add(10,0,26,2,ActionKind::AvailabilityIndividuals,UI_TEXT("Choose individuals"));
-      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
-      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
-      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+      add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
     case UiPage::AvailabilityUnits:
-      for (uint8_t i = 0; i < 2 && m.unitRank()/2*2+i < m.unitCount(); ++i)
-        add(2+i*3,0,26,2,ActionKind::AvailabilityToggle,UI_TEXT(""),m.unitRank()/2*2+i);
-      add(8,0,26,2,ActionKind::AvailabilityReview,UI_TEXT("Review selected units"));
-      add(10,0,26,2,ActionKind::AvailabilityMode,m.availabilityAction() == AvailabilityAction::Accept ? UI_TEXT("Action: accept absence") :
-          m.availabilityAction() == AvailabilityAction::Include ? UI_TEXT("Action: include") : UI_TEXT("Action: require again"));
-      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev"));
-      add(12,9,8,3,ActionKind::Back,UI_TEXT("Back"));
-      add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
+      for (uint8_t i=0; i<4 && m.availabilityTop()+i<m.unitCount(); ++i)
+        add(2+i*2,0,26,2,ActionKind::AvailabilityToggle,UI_TEXT(""),m.availabilityTop()+i);
+      add(10,0,8,2,ActionKind::AvailabilityScroll,UI_TEXT("Up"),-1);
+      add(10,18,8,2,ActionKind::AvailabilityScroll,UI_TEXT("Down"),1);
+      add(12,0,12,3,ActionKind::Back,UI_TEXT("Cancel"));
+      add(12,14,12,3,ActionKind::AvailabilityReview,UI_TEXT("CONFIRM")); break;
     case UiPage::AvailabilityConfirm:
-      if (m.availabilityPlan().action == AvailabilityAction::Accept || m.availabilityPlan().action == AvailabilityAction::Require)
+      if (m.availabilityPlan().action != AvailabilityAction::Probe)
         add(9,0,26,2,ActionKind::AvailabilityRemember,m.availabilityPlan().remember ? UI_TEXT("[x] Remember + save config") : UI_TEXT("[ ] Remember + save config"));
       add(12,0,12,3,ActionKind::Back,UI_TEXT("Cancel"));
       if (m.availabilityPlan().blocker == Issue::None) add(12,14,12,3,ActionKind::AvailabilityConfirm,UI_TEXT("Confirm"));

@@ -235,23 +235,31 @@ void layoutAndLocalUi() {
   // Actual touch hit boxes: whole-source acceptance, verified save and rejoin.
   r.can.sourcePower(0x18,false); for(int i=0;i<1200;++i) tick();
   r.controller.alerts().acknowledgeAll(); for(int i=0;i<12;++i) tick();
-  tap(100,216); tap(160,216); tap(100,48); tap(270,216); // Back, Tools, Startup, GROUP2.
+  wheel={0,false,true}; tick(); for(int i=0;i<5;++i) tick();
+  tap(160,216); tap(50,48); tap(150,64); // Groups -> Tools -> overview -> GROUP2.
   snapshot("touch-availability-group",display.shown);
-  tap(150,112); // Review group.
+  tap(150,144); // Exclude group review.
   snapshot("touch-availability-confirm",display.shown);
-  tap(150,160); tap(240,216); // Remember + save, Confirm.
+  tap(240,216); // Remember defaults checked; confirm verified save.
   for(int i=0;i<350;++i) tick();
-  CHECK(r.controller.configuration().acceptedAbsent==0x18 && r.controller.excluded()==0x18);
+  CHECK(r.controller.configuration().disabled==0x18 && r.controller.excluded()==0x18);
   snapshot("touch-availability-saved",display.shown);
   r.can.sourcePower(0x18,true); for(int i=0;i<1200;++i) tick();
   CHECK(r.controller.unitControl(3).phase==ControlPhase::Held && r.controller.excluded()==0x18);
   r.controller.alerts().acknowledgeAll(); for(int i=0;i<12;++i) tick();
-  tap(100,216); // Back to overview; live overview updates to Include group.
-  for(int i=0;i<20;++i) tick();
+  tap(100,216); tap(100,216); // Result -> group -> overview.
   snapshot("touch-availability-return",display.shown);
-  tap(150,112); tap(240,216);
+  tap(150,176); tap(150,48); // Controller -> Stop.
+  for(int i=0;i<1200;++i) tick();
+  CHECK(!r.controller.enableControl().enabled());
+  tap(100,216); tap(150,64); // Overview -> GROUP2.
+  tap(150,112); tap(240,216); // Include, reviewed + remembered.
   for(int i=0;i<400;++i) tick();
-  CHECK(r.controller.excluded()==0 && r.controller.currentSynchronized(3));
+  CHECK(r.controller.excluded()==0);
+  tap(100,216); tap(100,216); tap(150,176); tap(60,80); // Controller -> Enable review.
+  CHECK(!r.controller.enableControl().enabled()); tap(240,216);
+  for(int i=0;i<400;++i) tick();
+  CHECK(r.controller.currentSynchronized(3));
 }
 struct Capture : Print {
   std::string value;
@@ -389,10 +397,10 @@ void touchRecoveryWorkflow() {
   CHECK(hasText(display.shown,"Acknowledge") && hasText(display.shown,"Config"));
   snapshot("touch-recovery-missing",display.shown);
   const auto id=r.controller.alerts().at(AlertManager::Startup).id;
-  tap(240,216); CHECK(hasText(display.shown,"Continue without group"));
+  tap(240,216); CHECK(hasText(display.shown,"PSU PARTICIPATION"));
   CHECK(!r.controller.alerts().at(AlertManager::Startup).acknowledged && !r.controller.acceptedAbsences());
   snapshot("touch-recovery-availability",display.shown);
-  tap(150,145); CHECK(hasText(display.shown,"Acknowledge")); // Wait: back to same incident.
+  tap(150,216); CHECK(hasText(display.shown,"Acknowledge")); // Overview Back returns to the incident.
   CHECK(r.controller.alerts().at(AlertManager::Startup).id==id);
   tap(60,216); CHECK(r.controller.alerts().at(AlertManager::Startup).acknowledged);
   // A failed journal write has an independent reviewed-save recovery path.
@@ -431,19 +439,45 @@ void ninthTouchSelection() {
   UiFrame frame; UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-ninth-details",frame);
   r.can.sourcePower(0x100,false); r.can.batteryPower(0x100,false);
   for(unsigned i=0;i<900;++i) r.step();
-  model.action({ActionKind::Startup},clockNow); model.action({ActionKind::AvailabilityIndividuals},clockNow);
-  CHECK(model.availabilitySelected()==0x100);
-  CHECK(UiLayout::hit(model,40,96,action) && action.kind==ActionKind::AvailabilityToggle && action.value==1);
+  model.action({ActionKind::Startup},clockNow); model.action({ActionKind::AvailabilityGroup,3},clockNow); model.action({ActionKind::AvailabilityIndividuals},clockNow);
+  CHECK(model.availabilitySelected()==0);
+  CHECK(UiLayout::hit(model,40,72,action) && action.kind==ActionKind::AvailabilityToggle && action.value==1);
+  model.action(action,clockNow); CHECK(model.availabilitySelected()==0x100);
   model.action(action,clockNow); CHECK(model.availabilitySelected()==0);
   model.action(action,clockNow); CHECK(model.availabilitySelected()==0x100);
-  CHECK(UiLayout::hit(model,80,145,action) && action.kind==ActionKind::AvailabilityReview);
+  CHECK(UiLayout::hit(model,240,216,action) && action.kind==ActionKind::AvailabilityReview);
   model.action(action,clockNow);
-  CHECK(model.availabilityPlan().selected==0x100 && model.availabilityPlan().blocker==Issue::None);
+  CHECK(model.availabilityPlan().selected==0x180 && model.availabilityPlan().blocker==Issue::None);
   CHECK(!r.controller.acceptedAbsences()); // Opening a review is not consent.
   UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-ninth-absence-review",frame);
   CHECK(UiLayout::hit(model,240,216,action) && action.kind==ActionKind::AvailabilityConfirm);
   model.action(action,clockNow);
+  CHECK(!r.controller.acceptedAbsences());
+  for(unsigned i=0;i<500;++i) { r.step(); model.tick(clockNow); }
   CHECK(r.controller.acceptedAbsences()==0x100 && r.controller.participants()==0xff);
+  // Four-row touch viewport: Down/Up scroll one row, not a page; checkbox
+  // hit targets follow the visible logical slot and Cancel preserves live intent.
+  auto all=r.controller.configuration();
+  for(auto& g:all.groups) g={};
+  std::strcpy(all.groups[0].name,"NINE"); all.groups[0].members=0x1ff;
+  CHECK(r.controller.configure(all,false)==Result::Ok);
+  r.can.sourcePower(0x1ff,true); r.can.batteryPower(0x1ff,true);
+  for(unsigned i=0;i<2000;++i) r.step();
+  model.resetNavigation(); model.tick(clockNow); model.action({ActionKind::Startup},clockNow);
+  model.action({ActionKind::AvailabilityGroup,0},clockNow); model.action({ActionKind::AvailabilityIndividuals},clockNow);
+  CHECK(UiLayout::hit(model,270,176,action) && action.kind==ActionKind::AvailabilityScroll);
+  model.action(action,clockNow); CHECK(model.availabilityTop()==1);
+  for(unsigned i=0;i<10;++i) model.action(action,clockNow);
+  CHECK(model.availabilityTop()==5);
+  CHECK(UiLayout::hit(model,40,144,action) && action.kind==ActionKind::AvailabilityToggle && action.value==8);
+  model.action(action,clockNow); CHECK(model.availabilitySelected()==0 && r.controller.excluded()==0x100);
+  UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-availability-scroll-nine",frame);
+  CHECK(UiLayout::hit(model,40,176,action) && action.kind==ActionKind::AvailabilityScroll);
+  model.action(action,clockNow); CHECK(model.availabilityTop()==4);
+  for(unsigned i=0;i<10;++i) model.action(action,clockNow);
+  CHECK(model.availabilityTop()==0);
+  CHECK(UiLayout::hit(model,40,216,action) && action.kind==ActionKind::Back);
+  model.action(action,clockNow); CHECK(model.page()==UiPage::Availability && r.controller.excluded()==0x100);
 }
 
 void applicationScenarios() {
@@ -556,15 +590,16 @@ void applicationScenarios() {
   command("startup accept GROUP2 remember"); tick(100);
   CHECK(Serial.output.find("selected=4,5")!=std::string::npos);
   command("confirm yes"); tick(350);
-  CHECK(Serial.output.find("Configuration + decision saved")!=std::string::npos);
+  CHECK(Serial.output.find("SAVED AND VERIFIED")!=std::string::npos);
   command("set current GROUP2 26"); command("apply GROUP2"); tick(100);
   command("save"); tick(350); command("ui-debug restart"); tick(1600);
   command("diag startup"); tick(150);
   CHECK(Serial.output.find("excluded=4,5")!=std::string::npos);
   command("diag psu 4"); tick(100);
   CHECK(Serial.output.find("authorized A=13.00")!=std::string::npos && Serial.output.find("held-at-zero-awake")!=std::string::npos);
-  command("startup include GROUP2"); tick(100); CHECK(Serial.output.find("ARE YOU SURE?")!=std::string::npos);
-  command("confirm yes"); tick(600);
+  command("autoresume off"); tick(1200);
+  command("startup include GROUP2 remember"); tick(100); CHECK(Serial.output.find("ARE YOU SURE?")!=std::string::npos);
+  command("confirm yes"); tick(600); command("autoresume on"); tick(600);
   command("diag psu 4"); tick(100); CHECK(Serial.output.find("current-acked=1")!=std::string::npos);
   command("startup stop"); tick(10); command("autoresume on"); tick(200);
   command("diag startup"); tick(150); CHECK(Serial.output.find("LOW fault latched")!=std::string::npos);

@@ -1767,6 +1767,7 @@ void uiLayouts() {
 #include "test_nine_units.inc"
 #include "test_route_cache.inc"
 #include "test_scoped_profiles.inc"
+#include "test_participation.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1774,6 +1775,7 @@ int main() {
     try { test(); } catch (const std::exception& e) { ++failures; std::cerr << name << ": " << e.what() << '\n'; }
   };
   try {
+    run("participationPersistence", participationPersistence); run("participationAtomicity", participationAtomicity); run("participationProfiles", participationProfiles); run("participationUiViewport", participationUiViewport); run("participationChangedGroup", participationChangedGroup);
     run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
     run("scopedSettings", scopedSettings); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);
     run("routeCacheLifecycle", routeCacheLifecycle); run("drawingReceiveService", drawingReceiveService); run("exactGroupRange", exactGroupRange); run("idleSerialStatusCadence", idleSerialStatusCadence);

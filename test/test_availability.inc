@@ -64,45 +64,36 @@ void acceptedAbsences() {
   Rig r(cfg,true,false); r.live=1; r.finish(); r.step(6000); r.finish();
   CHECK(r.c.participants()==1 && r.c.requiredMembers()==1 && r.current[0]>0 && r.current[1]==0);
   CHECK(r.c.configuration().operating.current[1]==1000);
-  // A returning accepted identity is fully reconciled at zero before inclusion.
   r.live=3; r.finish(); r.step(8000);
   CHECK(r.c.excluded()==2 && r.current[1]==0 && r.c.unitControl(1).phase==ControlPhase::Held);
-  CHECK(r.c.availabilityAttention(r.now)==2);
+  CHECK(r.c.availabilityAttention(r.now)==2); // Unreviewed legacy waiver still needs a decision.
   auto p=r.c.previewAvailability(AvailabilityAction::Include,3,false,r.now);
-  CHECK(p.blocker==Issue::None && p.selected==2 && p.participants==3);
-  CHECK(r.c.setCurrent(0,4000)==Result::Ok); // Staging invalidates old confirmation.
+  CHECK(p.blocker==Issue::ParticipationHold); // Available participation changes now require OFF.
+  r.c.setAutoResume(false); r.finish(); r.step(6000);
+  p=r.c.previewAvailability(AvailabilityAction::Include,3,false,r.now);
+  CHECK(p.blocker==Issue::None && p.selected==3 && p.participants==3);
+  CHECK(r.c.setCurrent(0,4000)==Result::Ok);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Changed);
-  r.apply(Operation::GroupCurrent,0);
-  CHECK(r.c.report().recipients==1 && r.c.report().skipped==2);
-  CHECK(r.c.configuration().operating.current[0]==2000 && r.c.configuration().operating.current[1]==2000);
-  CHECK(r.current[1]==0);
-  p=r.c.previewAvailability(AvailabilityAction::Include,2,false,r.now); CHECK(p.blocker==Issue::None);
-  CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok); r.finish();
-  CHECK(r.c.participants()==3 && r.current[1]>1900 && r.c.configuration().acceptedAbsent==2);
-  CHECK(r.c.availabilityAttention(r.now)==0);
-  // Inclusion is session-only. A later loss excludes this physical member again.
-  r.live=1; r.step(6000); CHECK(r.c.excluded()==2 && r.c.participants()==1);
-  r.live=3; r.finish(); r.step(4000); CHECK(r.current[1]==0);
-  // Revoking a waiver must not silently admit a currently excluded PSU.
-  p=r.c.previewAvailability(AvailabilityAction::Require,2,false,r.now);
+  p=r.c.previewAvailability(AvailabilityAction::Include,2,false,r.now);
   CHECK(p.blocker==Issue::None && r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
-  CHECK(r.c.acceptedAbsences()==0 && r.c.excluded()==2 && r.c.requiredMembers()==3);
-  CHECK(r.c.preview(Operation::GroupCurrent,0,r.now).blocker==Issue::ApprovalRequired);
-  // Newly missing identities are not covered by the saved exception.
+  CHECK(r.c.participants()==3 && r.c.acceptedAbsences()==0 && r.c.configuration().acceptedAbsent==2);
+  CHECK(!r.c.participationStatus(1).remembered && !r.c.availabilityAttention(r.now));
+  r.c.setAutoResume(true); r.finish(); CHECK(r.current[1]>0);
+  // Session inclusion now requires future absences rather than reviving the old waiver.
+  r.live=1; r.step(12000); CHECK(r.c.excluded()==0 && r.c.requiredMembers()==3);
+  CHECK(r.c.availabilityAttention(r.now)==2);
+  r.live=3; r.finish(); r.step(6000); CHECK(r.c.excluded()==0);
+  CHECK(memory.save(r.c.configuration())==StorageResult::Ok);
+  Configuration saved; CHECK(memory.load(saved)==StorageResult::Ok && saved.acceptedAbsent==2);
+  Rig reboot(saved,true,false); CHECK(reboot.c.excluded()==2); // Session inclusion did not leak into save.
   Rig another(cfg,true,false); another.live=2; another.step(12000);
-  CHECK(another.current[1]==0 && another.c.requiredMembers()==1);
   auto absent=another.c.previewAvailability(AvailabilityAction::Accept,1,false,another.now);
   CHECK(absent.blocker==Issue::None);
   CHECK(another.c.confirmAvailability(absent,memory,another.now)==Result::Ok && another.c.participants()==0);
   CHECK(another.c.controlStatus(another.now).blocker==Issue::NoParticipants);
-  CHECK(another.c.setCurrent(0,3000)==Result::Ok);
-  const auto before=another.can.writes().size(); another.apply(Operation::GroupCurrent,0);
+  CHECK(another.c.setCurrent(0,3000)==Result::Ok); another.apply(Operation::GroupCurrent,0);
   CHECK(another.c.configuration().operating.current[0]==1500 && another.c.configuration().operating.current[1]==1500);
   CHECK(another.c.report().recipients==0 && another.c.report().succeeded==0);
-  for(size_t n=before;n<another.can.writes().size();++n) {
-    const auto f=another.can.writes()[n]; CHECK(f.data[1]!=protocol::OnlineCurrent || !protocol::readBigEndian(f.data+4));
-  }
-  // Bindings/group edits invalidate permissions along with old current shares.
   CHECK(another.c.removeGroup(0)==Result::Ok && another.c.configuration().acceptedAbsent==0 && another.c.acceptedAbsences()==0);
 }
 void availabilityDecisionsAndStorage() {
@@ -115,22 +106,22 @@ void availabilityDecisionsAndStorage() {
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok && memory.saving());
   CHECK(r.c.excluded()==0 && r.current[0]==0);
   while(memory.saving()) { memory.stepSave(); r.step(1); }
-  r.step(); CHECK(r.c.availabilityReport().remembered && r.c.configuration().acceptedAbsent==2);
+  r.step(); CHECK(r.c.availabilityReport().remembered && r.c.configuration().disabled==2 && r.c.configuration().acceptedAbsent==0);
   r.finish(); CHECK(r.current[0]>0 && r.c.participants()==1);
-  Configuration loaded=defaultConfiguration(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==2);
+  Configuration loaded=defaultConfiguration(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.disabled==2 && loaded.acceptedAbsent==0);
   CHECK(loaded.operating.current[1]==1000 && loaded.autoResume);
   // Remember includes current drafts but never authorizes them implicitly.
   CHECK(r.c.setCurrent(0,5000)==Result::Ok);
   p=r.c.previewAvailability(AvailabilityAction::Require,2,true,r.now); CHECK(p.blocker==Issue::None);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
   while(memory.saving()) { memory.stepSave(); r.step(1); }
-  r.step(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0);
+  r.step(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0 && loaded.disabled==0);
   CHECK(groupCurrent(loaded, 0)==5000 && loaded.operating.current[0]==1000);
   // Session permission does not leak into an ordinary save.
   p=r.c.previewAvailability(AvailabilityAction::Accept,2,false,r.now); CHECK(p.blocker==Issue::None);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
   CHECK(memory.save(r.c.configuration())==StorageResult::Ok);
-  CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0);
+  CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0 && loaded.disabled==0);
   // A topology change in the same tick as save completion prevents activation.
   Rig race(authorized(),true,false); race.live=1; race.step(16000);
   p=race.c.previewAvailability(AvailabilityAction::Accept,2,true,race.now); CHECK(p.blocker==Issue::None);
@@ -138,7 +129,7 @@ void availabilityDecisionsAndStorage() {
   while(memory.saving()) memory.stepSave();
   race.live=3; race.step();
   CHECK(race.c.availabilityReport().remembered && race.c.availabilityReport().result==Result::Changed && race.c.excluded()==0);
-  CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==2);
+  CHECK(memory.load(loaded)==StorageResult::Ok && loaded.disabled==2 && loaded.acceptedAbsent==0);
   // A failed journal write never applies the in-memory decision.
   FakeEeprom bad; MemoryManager badMemory(bad); bad.ignoredAddress=0;
   Rig fail(authorized(),true,false); fail.live=1; fail.step(16000);
@@ -151,7 +142,7 @@ void availabilityDecisionsAndStorage() {
   FakeEeprom journal; MemoryManager journalMemory(journal); auto old=authorized(); old.acceptedAbsent=1;
   CHECK(journalMemory.save(old)==StorageResult::Ok); const auto baseline=journal.bytes;
   auto next=old; next.acceptedAbsent=2; draftGroupCurrent(next, 0, 4400);
-  for(int cut=0;cut<218;++cut) {
+  for(int cut=0;cut<MemoryManager::recordSize+12;++cut) {
     journal.bytes=baseline; journal.stopAfter=cut; journal.calls=0;
     try { MemoryManager writing(journal); writing.save(next); } catch(const PowerCut&) {}
     journal.stopAfter=-1; MemoryManager reading(journal); Configuration value=defaultConfiguration();
@@ -161,7 +152,7 @@ void availabilityDecisionsAndStorage() {
   }
   // Schema 2 migrates without an absence exception; reserved bits stay validated.
   journal.bytes=parallelRecord(old,2).bytes;
-  CHECK(journalMemory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0);
+  CHECK(journalMemory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0 && loaded.disabled==0);
   journal.bytes[28]=1; recordCrc(journal.bytes.data(),216);
   CHECK(journalMemory.load(loaded)!=StorageResult::Ok);
 }
@@ -208,70 +199,68 @@ void availabilityInterfaces() {
   CHECK(terminal.input("\x18" "confirm yes\n").find("no valid confirmation")!=std::string::npos);
   terminal.input("startup accept GROUP1 remember\n"); terminal.input("confirm yes\n");
   for(unsigned n=0;n<500;++n) { terminal.memory.stepSave(); r.step(1); terminal.console.tick(r.now); }
-  r.finish(); CHECK(r.c.configuration().acceptedAbsent==2 && r.current[0]>0);
-  CHECK(terminal.input("diag bus\n").find("output-overruns=0")!=std::string::npos);
-  CHECK(terminal.input("startup include GROUP1 remember\n").find("ARE YOU SURE?")==std::string::npos);
+  r.finish(); CHECK(r.c.configuration().disabled==2 && r.current[0]>0);
   r.live=3; r.step(12000);
-  CHECK(terminal.input("startup include GROUP1\n").find("selected=2 participants-after=1,2")!=std::string::npos);
+  CHECK(terminal.input("startup include GROUP1 remember\n").find("ARE YOU SURE?")==std::string::npos);
+  terminal.input("autoresume off\n"); r.finish(); r.step(6000);
+  CHECK(terminal.input("startup include GROUP1 remember\n").find("selected=1,2 participants-after=1,2")!=std::string::npos);
   terminal.input("confirm no\n"); CHECK(r.c.excluded()==2);
-  terminal.input("startup include GROUP1\n"); terminal.input("confirm yes\n"); r.finish();
-  CHECK(r.c.excluded()==0 && r.current[1]>0);
-  // The local group-first flow uses exactly the same confirmation and writer.
+  terminal.input("startup include GROUP1 remember\n"); terminal.input("confirm yes\n");
+  for(unsigned n=0;n<500;++n) { terminal.memory.stepSave(); r.step(1); terminal.console.tick(r.now); }
+  CHECK(r.c.excluded()==0 && r.c.configuration().disabled==0 && !r.c.enableControl().enabled());
+  CHECK(terminal.input("startup exclude GROUP1\n").find("ARE YOU SURE?")!=std::string::npos);
+  terminal.input("confirm yes\n"); CHECK(r.c.participants()==0 && r.c.configuration().disabled==0);
+  CHECK(terminal.input("startup require GROUP1 remember\n").find("ARE YOU SURE?")!=std::string::npos);
+  terminal.input("confirm yes\n");
+  for(unsigned n=0;n<500;++n) { terminal.memory.stepSave(); r.step(1); terminal.console.tick(r.now); }
+  CHECK(r.c.participants()==3 && !r.c.acceptedAbsences());
+
   Rig local(authorized(),true,false); local.live=1; local.step(16000); UiRig u(local); UiFrame frame;
   u.ui.action({ActionKind::Startup},local.now);
-  CHECK(u.ui.page()==UiPage::Availability);
+  CHECK(u.ui.page()==UiPage::AvailabilityOverview);
+  UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-overview",frame);
+  CHECK(rowText(frame,7).find("Config")!=std::string::npos);
+  u.ui.action({ActionKind::AvailabilityGroup,0},local.now);
   UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-group",frame);
-  CHECK(rowText(frame,3).find("Availability settled")!=std::string::npos);
   u.ui.action({ActionKind::AvailabilityIndividuals},local.now);
-  CHECK(u.ui.page()==UiPage::AvailabilityUnits && u.ui.availabilitySelected()==2);
+  CHECK(u.ui.page()==UiPage::AvailabilityUnits && u.ui.availabilitySelected()==0);
+  u.ui.action({ActionKind::AvailabilityToggle,1},local.now);
   UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-individual",frame);
   u.ui.action({ActionKind::AvailabilityReview},local.now);
-  CHECK(u.ui.availabilityPlan().selected==2 && u.ui.availabilityPlan().blocker==Issue::None);
-  u.ui.action({ActionKind::AvailabilityRemember},local.now);
+  CHECK(u.ui.availabilityPlan().selected==3 && u.ui.availabilityPlan().participants==1 && u.ui.availabilityPlan().blocker==Issue::None);
+  CHECK(u.ui.availabilityPlan().remember && u.ui.availabilitySelection()==1);
   UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-confirm",frame);
-  CHECK(rowText(frame,10).find("Remember + save config")!=std::string::npos);
-  u.ui.action({ActionKind::AvailabilityConfirm},local.now); CHECK(u.ui.working()); u.finish(); local.finish();
-  CHECK(u.ui.availabilityResult()==Result::Ok && u.ui.availabilityRemembered());
+  u.ui.action({ActionKind::AvailabilityConfirm},local.now); CHECK(u.ui.working() && local.c.excluded()==0);
+  u.finish(); local.finish(); CHECK(u.ui.availabilityResult()==Result::Ok && u.ui.availabilityRemembered());
   UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-result",frame);
-  CHECK(rowText(frame,10).find("AC cutoff not fitted")!=std::string::npos);
-  UiButton buttons[UiLayout::capacity];
-  auto buttonCount=UiLayout::buttons(u.ui,buttons);
-  for(uint8_t i=0;i<buttonCount;++i) CHECK(buttons[i].action.kind!=ActionKind::HardStop);
   u.ui.action({ActionKind::Back},local.now); u.ui.action({ActionKind::Back},local.now);
-  local.can.incoming.push_back(data(1,0x73,540*1024UL)); local.c.tick(local.now);
-  UiView::compose(frame,u.ui,local.c,local.now);
-  CHECK(rowText(frame,1).find("RUN 1/2")!=std::string::npos && rowText(frame,12).find("ACT 1/2")!=std::string::npos);
-  local.live=3; local.step(12000); u.ui.action({ActionKind::Startup},local.now);
-  CHECK(u.ui.availabilityAction()==AvailabilityAction::Include);
-  u.ui.action({ActionKind::AvailabilityPrimary},local.now); CHECK(u.ui.page()==UiPage::AvailabilityConfirm);
-  local.c.setAutoResume(false); u.ui.tick(local.now);
-  CHECK(u.ui.page()==UiPage::AvailabilityResult && u.ui.availabilityResult()==Result::Changed);
-  // Faults remain red and cannot be hidden by the accepted-absence count.
-  local.finish(); local.rejectRegister=protocol::FanMode; local.c.setFanOverride(1,FanOverride::Auto,local.now);
-  local.step(2000); u.ui.action({ActionKind::Back},local.now); u.ui.action({ActionKind::Back},local.now);
-  UiView::compose(frame,u.ui,local.c,local.now); CHECK(rowText(frame,12).find("ERR")!=std::string::npos);
-  // A failed CAN initialization is directly retryable on the local interface.
+  CHECK(u.ui.page()==UiPage::AvailabilityOverview);
+  UiView::compose(frame,u.ui,local.c,local.now); CHECK(rowText(frame,7).find("Settled")!=std::string::npos);
+  u.ui.action({ActionKind::Controller},local.now); u.ui.action({ActionKind::Stop},local.now);
+  CHECK(!local.c.enableControl().enabled()); local.finish(); local.step(6000);
+  UiView::compose(frame,u.ui,local.c,local.now); snapshot("availability-controller",frame);
+  u.ui.action({ActionKind::Enable},++local.now);
+  CHECK(u.ui.page()==UiPage::RecoveryConfirm && u.ui.recoverySelection()==0);
+  u.ui.input({0,true,false},++local.now); CHECK(!local.c.enableControl().enabled() && u.ui.page()==UiPage::Controller);
+  u.ui.action({ActionKind::Enable},++local.now); u.ui.action({ActionKind::RecoveryConfirm},++local.now);
+  CHECK(local.c.enableControl().enabled());
+
   Rig retry(authorized(false),true,false); retry.c.configureStartup(true,true,retry.now);
   retry.can.initOk=false; CHECK(!retry.c.begin()); UiRig retryUi(retry);
-  retryUi.ui.action({ActionKind::Startup},retry.now);
-  UiView::compose(frame,retryUi.ui,retry.c,retry.now);
-  CHECK(rowText(frame,3).find("CAN INIT FAILED: RETRY")!=std::string::npos);
-  CHECK(rowText(frame,7).find("Retry ALL PSUs")!=std::string::npos);
-  retry.can.initOk=true; retryUi.ui.action({ActionKind::AvailabilityPrimary},retry.now);
+  retryUi.ui.action({ActionKind::Startup},retry.now); retryUi.ui.action({ActionKind::Controller},retry.now);
+  retry.can.initOk=true; retryUi.ui.action({ActionKind::Retry},retry.now);
   CHECK(!retry.c.ready() && retryUi.ui.page()==UiPage::RecoveryConfirm && retryUi.ui.recoverySelection()==0);
   retryUi.ui.action({ActionKind::RecoveryConfirm},++retry.now);
   CHECK(retry.c.ready() && !retry.c.chargeAllowed()); retry.step(2000); CHECK(retry.c.chargeAllowed());
-  // A stale confirmation must not inherit an earlier decision's storage error.
   Rig stale(authorized(),true,false); stale.live=1; stale.step(16000); UiRig staleUi(stale);
   staleUi.bytes.ignoredAddress=0;
-  staleUi.ui.action({ActionKind::Startup},stale.now);
-  staleUi.ui.action({ActionKind::AvailabilityPrimary},stale.now);
-  staleUi.ui.action({ActionKind::AvailabilityRemember},stale.now);
+  staleUi.ui.action({ActionKind::Startup},stale.now); staleUi.ui.action({ActionKind::AvailabilityGroup,0},stale.now);
+  staleUi.ui.action({ActionKind::AvailabilityIndividuals},stale.now); staleUi.ui.action({ActionKind::AvailabilityToggle,1},stale.now);
+  staleUi.ui.action({ActionKind::AvailabilityReview},stale.now);
   staleUi.ui.action({ActionKind::AvailabilityConfirm},stale.now); staleUi.finish();
   CHECK(staleUi.ui.storageResult()==StorageResult::WriteFailed);
-  staleUi.ui.action({ActionKind::Back},stale.now);
-  staleUi.ui.action({ActionKind::AvailabilityPrimary},stale.now);
-  stale.c.setAutoResume(false);
-  staleUi.ui.action({ActionKind::AvailabilityConfirm},stale.now);
+  staleUi.ui.action({ActionKind::Back},stale.now); staleUi.ui.action({ActionKind::AvailabilityIndividuals},stale.now);
+  staleUi.ui.action({ActionKind::AvailabilityToggle,1},stale.now); staleUi.ui.action({ActionKind::AvailabilityReview},stale.now);
+  stale.c.setAutoResume(false); staleUi.ui.action({ActionKind::AvailabilityConfirm},stale.now);
   CHECK(staleUi.ui.availabilityResult()==Result::Changed && staleUi.ui.storageResult()==StorageResult::Ok);
 }

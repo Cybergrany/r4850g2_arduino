@@ -49,7 +49,9 @@ void drawRecovery(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t
     } else line(f, 6, UI_TEXT("No verified live address"), Warning);
     PSU_SNPRINTF(text, sizeof(text), "Discovery overflows %u", c.discovery().overflow()); f.text(7, 0, 26, text);
     f.wrap(8, 9, flash(issueName(c.issue(slot, now))), Warning);
-    line(f, 10, m.startupFault() ? UI_TEXT("AC cutoff latched LOW") : UI_TEXT("Serial: diag bus/control"), Muted);
+    const auto status = c.controlStatus(now);
+    line(f, 10, m.startupFault() ? UI_TEXT("AC cutoff latched LOW") : flash(activityName(status.activity)),
+        status.activity == Activity::Holding || status.activity == Activity::Running ? Good : Warning);
     line(f, 11, UI_TEXT("Identity fixes: serial bind"), Muted);
   } else if (kind == RecoveryKind::Temperatures) {
     const auto t = c.thermalStatus();

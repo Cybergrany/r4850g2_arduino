@@ -5,7 +5,7 @@ See [scoped settings and profiles](PROFILES.md) for `set`, `preview`, `apply`,
 
 For `diag startup`, whole-group/individual absence acceptance, remembered
 exceptions, returned-unit inclusion, commissioning probe and immediate AC stop,
-see [STARTUP.md](STARTUP.md). `startup accept/include/require GROUP|slots
+see [STARTUP.md](STARTUP.md). `startup accept/exclude/include/require GROUP|slots
 [remember]` always previews before `confirm yes`; `startup stop` is immediate.
 Ctrl-X cancels unsubmitted availability confirmations too. Disconnecting the
 terminal does not undo a submitted decision or an already-started save.

@@ -40,7 +40,7 @@ inline const __FlashStringHelper* alertAction(AlertCode c) {
     case AlertCode::Command: case AlertCode::Control: case AlertCode::StopUnconfirmed:
       return F("Restore blocked. Bounded stop/fault fallback.");
     case AlertCode::Cutoff: return F("Common AC permit LOW; output must be checked.");
-    case AlertCode::Missing: case AlertCode::Returned: return F("Inclusion/exclusion requires a separate decision.");
+    case AlertCode::Missing: case AlertCode::Returned: case AlertCode::Unstable: return F("REVIEW REQUIRED.");
     case AlertCode::Excluded: return F("Excluded shares are not redistributed.");
     case AlertCode::Storage: return F("Saved state unconfirmed. Review before power loss.");
     default: return F("Notification only; existing control gates apply.");
@@ -52,8 +52,10 @@ inline const __FlashStringHelper* alertRecovery(AlertCode c) {
       return F("Inspect cooling. All monitored temperatures must cool.");
     case AlertCode::ThermalStop: return F("Cool, verify persistence, then explicit Resume/ON.");
     case AlertCode::TemperatureSensor: return F("Restore both readings, then Retry sensors.");
-    case AlertCode::Missing: case AlertCode::Returned: case AlertCode::ActiveLost: case AlertCode::Excluded:
-      return F("Review Startup/availability; confirm decisions separately.");
+    case AlertCode::Missing: case AlertCode::Returned: case AlertCode::Unstable:
+      return F("Open config before proceeding with power supply.");
+    case AlertCode::ActiveLost: return F("Review cause and participation in Config.");
+    case AlertCode::Excluded: return F("Excluded until explicitly included in Config.");
     case AlertCode::Identity: return F("Inspect bindings and bus. Isolate conflicting devices.");
     case AlertCode::Command: case AlertCode::Control: case AlertCode::StopUnconfirmed: case AlertCode::Cutoff: case AlertCode::CanInit:
       return F("Inspect diag control/bus, fix cause, then reconcile.");

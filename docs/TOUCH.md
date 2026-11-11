@@ -171,8 +171,10 @@ diag startup
 startup accept GROUP2 remember
 confirm yes
 ui-debug source GROUP2 on
-# Wait for settled zero-hold readiness, then approve rejoin:
-startup include GROUP2
+# Stop, wait for settled zero hold, then review inclusion:
+autoresume off
+diag control
+startup include GROUP2 remember
 confirm yes
 ```
 

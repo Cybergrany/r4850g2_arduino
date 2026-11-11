@@ -64,6 +64,8 @@ void profileRecords() {
   uint16_t v[9]={},a[9]={}; uint8_t mismatch; UnitMask included;
   CHECK(memory.profileTargets(0,1,reordered,v,a,mismatch,&included)==StorageResult::Ok);
   CHECK(v[0]==cfg.voltage[8] && v[8]==cfg.voltage[0] && a[0]==cfg.current[8]);
+  auto participationReorder=cfg; std::swap(participationReorder.units[0],participationReorder.units[1]);
+  CHECK(memory.profileTargets(0,1,participationReorder,v,a,mismatch,&included)==StorageResult::Ok && included==0x102);
   auto replaced=cfg; replaced.units[0].identity=identity(50);
   CHECK(memory.profileTargets(0,1,replaced,v,a,mismatch)==StorageResult::IdentityMismatch);
   auto smaller=cfg; --smaller.count;
@@ -110,21 +112,21 @@ void profileLoadAndParticipation() {
   if(review.blocker!=Issue::None) std::cerr << "profile participation blocker=" << unsigned(review.blocker) << " phase=" << unsigned(r.c.unitControl(1).phase) << " zero=" << r.c.unitControl(1).zeroConfirmed << " reason=" << unsigned(r.c.availabilityReason(1,r.now)) << " now=" << r.now << "\n";
   CHECK(review.blocker==Issue::None);
   CHECK(r.c.loadProfile(memory,review,r.now)==Result::Ok);
-  CHECK(r.c.participants()==1 && r.c.excluded()==2 && r.c.configuration().disabled==2);
+  CHECK(r.c.participants()==3 && r.c.configuration().disabled==0); // Verified save gates participation.
   for(unsigned n=0;n<MemoryManager::recordSize+8;++n) { r.c.profileTick(memory); memory.stepSave(); }
   CHECK(memory.load(persisted)==StorageResult::Ok && persisted.disabled==2);
   Rig reboot(persisted,true,false); reboot.finish(); CHECK(reboot.c.participants()==1 && reboot.current[1]==0);
   CHECK(r.c.setAutoResume(true)==Result::Ok); r.finish();
   auto full=saved; CHECK(memory.startProfileSave(1,"BOTH",full,0,true,3)==StorageResult::Ok);
   while(memory.saving()) memory.stepSave();
-  review=r.c.previewProfile(memory,1,true,r.now); CHECK(review.blocker==Issue::Disabled);
+  review=r.c.previewProfile(memory,1,true,r.now); CHECK(review.blocker==Issue::ParticipationHold);
   CHECK(r.c.loadProfile(memory,review,r.now)==Result::Blocked && r.c.participants()==1);
   CHECK(r.c.setAutoResume(false)==Result::Ok); r.finish(); for(unsigned n=0;n<60;++n) r.step(250); r.finish();
   review=r.c.previewProfile(memory,1,true,r.now); CHECK(review.blocker==Issue::None);
   CHECK(r.c.setVoltage(5600)==Result::Ok);
   CHECK(r.c.loadProfile(memory,review,r.now)==Result::Changed && r.c.participants()==1);
   review=r.c.previewProfile(memory,1,true,r.now);
-  CHECK(r.c.loadProfile(memory,review,r.now)==Result::Ok && r.c.participants()==3);
+  CHECK(r.c.loadProfile(memory,review,r.now)==Result::Ok && r.c.participants()==1);
   for(unsigned n=0;n<MemoryManager::recordSize+8;++n) { r.c.profileTick(memory); memory.stepSave(); }
   CHECK(memory.load(persisted)==StorageResult::Ok && persisted.disabled==0);
   // Newer OFF/config revisions invalidate an in-progress load's auto-save.

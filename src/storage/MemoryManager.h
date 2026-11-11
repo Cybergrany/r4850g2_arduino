@@ -29,7 +29,7 @@ class MemoryManager {
   // byte when storage.ready(). UI/serial observe their completion token.
   // Synchronous save is for offline callers/tests, not the runtime UI/console.
   StorageResult startSave(const Configuration& config);
-  StorageResult startAvailabilitySave(const Configuration& config, UnitMask accepted);
+  StorageResult startAvailabilitySave(const Configuration& config, UnitMask accepted, UnitMask disabled);
   // Modify only protection state in the last saved profile, never RAM drafts.
   StorageResult startProtectionSave(ThermalStop stop);
   bool reviseProtection(uint16_t token, ThermalStop stop);

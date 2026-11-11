@@ -31,7 +31,7 @@ RecoveryLink UiModel::recoveryLink() const {
     } else if (notice_ == UiNotice::Changed || notice_ == UiNotice::Cancelled) link.kind = RecoveryKind::Settings;
     else if (notice_ == UiNotice::Blocked) {
       switch (blocker_) {
-        case Issue::Missing: case Issue::NoAc: case Issue::ApprovalRequired: case Issue::Settling: case Issue::NoParticipants:
+        case Issue::ParticipationHold: case Issue::Missing: case Issue::NoAc: case Issue::ApprovalRequired: case Issue::Settling: case Issue::NoParticipants:
           code = AlertCode::Missing; break;
         case Issue::Disabled: link.kind = RecoveryKind::Enable; break;
         case Issue::NoProfile: case Issue::VoltageUnsynced: link.kind = RecoveryKind::Settings; break;
@@ -79,7 +79,7 @@ RecoveryLink UiModel::recoveryLink() const {
     for (uint8_t i = 0; i < c_.count(); ++i) if (attention & (1U << i)) { link.slot = i; break; }
   }
   if (link.slot == PSU_MAX_UNITS && group_ >= 0) link.slot = unitAt(0);
-  if ((link.kind == RecoveryKind::Availability || link.kind == RecoveryKind::Settings) && !groupCount()) link.kind = RecoveryKind::Help;
+  if (link.kind == RecoveryKind::Settings && !groupCount()) link.kind = RecoveryKind::Help;
   if (link.kind == RecoveryKind::Unit && (link.slot >= c_.count() || groupFor(c_.configuration(), link.slot) < 0)) link.kind = RecoveryKind::Bus;
 #if !PSU_ENABLE_TOUCH
   if (link.kind == RecoveryKind::Calibration) link.kind = RecoveryKind::Help;
@@ -98,6 +98,11 @@ void UiModel::openRecovery(uint32_t now, RecoveryLink link) {
     r.page = page_; r.field = field_; r.scope = scope_; r.group = group_; r.unit = unit_;
     r.edit = edit_; r.editRevision = editRevision_; r.editing = editing_;
     r.notice = notice_; r.blocker = blocker_; r.operation = operationSequence_;
+    r.participationDraft = availabilitySelected_; r.participationFocus = availabilitySelection_; r.participationTop = availabilityTop_;
+    if (page_ == UiPage::AvailabilityUnits) {
+      r.editRevision = availabilityPlan_.configurationRevision; r.participationTopology = availabilityPlan_.topologyRevision;
+      r.participationRemember = availabilityPlan_.remember;
+    }
     r.incident = alertOverlay_ ? displayedAlert_ : AlertState{};
     r.overlay = alertOverlay_; r.alertSelection = alertSelection_;
   }
@@ -131,7 +136,17 @@ void UiModel::returnFromRecovery() {
     // an earlier confirmation after that plan was used by the recovery flow.
     if (page_ == UiPage::AvailabilityConfirm) {
       page_ = UiPage::AvailabilityResult; availabilityResult_ = Result::Changed;
-      availabilityRemembered_ = false; availabilitySelection_ = 0;
+      availabilityRemembered_ = false; storageResult_ = StorageResult::Ok; availabilitySelection_ = 0;
+    }
+    availabilitySelected_ = r.participationDraft; availabilitySelection_ = r.participationFocus; availabilityTop_ = r.participationTop;
+    if (page_ == UiPage::AvailabilityUnits) {
+      if (c_.configurationRevision() != r.editRevision || c_.discovery().revision() != r.participationTopology) {
+        page_ = UiPage::AvailabilityResult; availabilityResult_ = Result::Changed; availabilityRemembered_ = false; storageResult_ = StorageResult::Ok;
+      } else {
+        const bool remember = r.participationRemember;
+        availabilityPlan_ = c_.previewParticipation(c_.configuration().groups[group_].members, availabilitySelected_, remember, uiNow_);
+        availabilityAction_ = AvailabilityAction::Selection;
+      }
     }
     refresh(uiNow_);
   }
@@ -188,9 +203,17 @@ void UiModel::recoveryTick(uint32_t now) {
 }
 bool UiModel::recoveryAction(UiAction a, uint32_t now) {
   if (a.kind == ActionKind::Recover) { openRecovery(now); return true; }
-  if (!recovering() && a.kind == ActionKind::AvailabilityPrimary && startupRetry()) {
-    openRecovery(now, {RecoveryKind::Bus, unit_});
-    if (recovering()) reviewRecovery(RecoveryCommand::Retry, now);
+  if (a.kind == ActionKind::Enable || a.kind == ActionKind::Retry || a.kind == ActionKind::Diagnostics) {
+    const auto kind = a.kind == ActionKind::Enable ? RecoveryKind::Enable : RecoveryKind::Bus;
+    if (!recovering()) {
+      // Keep the Controller page as the origin; the same guarded review is
+      // shared with issue recovery, without introducing a navigation stack.
+      openRecovery(now, {kind, unit_});
+      if (recovering() && a.kind != ActionKind::Diagnostics) page_ = UiPage::Controller;
+    } else recovery_.kind = kind;
+    if (recovering() && a.kind != ActionKind::Diagnostics)
+      reviewRecovery(a.kind == ActionKind::Enable ? RecoveryCommand::Enable : RecoveryCommand::Retry, now);
+    else if (recovering()) page_ = UiPage::Recovery;
     return true;
   }
   if (!recovering()) return false;
@@ -199,7 +222,7 @@ bool UiModel::recoveryAction(UiAction a, uint32_t now) {
   if (a.kind == ActionKind::Back) {
     if (working() || recoverySaving() || availabilityWorking_) { r.result = Result::Busy; return true; }
     if (page_ == UiPage::RecoveryConfirm) { page_ = r.reviewPage; r.command = RecoveryCommand::None; r.selection = 0; return true; }
-    if (page_ == UiPage::Recovery || page_ == UiPage::Availability || page_ == UiPage::Detail ||
+    if (page_ == UiPage::Recovery || page_ == UiPage::AvailabilityOverview || page_ == UiPage::Detail ||
         page_ == UiPage::Config || page_ == UiPage::Editor || page_ == UiPage::Calibration || page_ == UiPage::Result ||
         page_ == UiPage::Groups || page_ == UiPage::Tools || page_ == UiPage::Units) { returnFromRecovery(); return true; }
   }
@@ -207,8 +230,8 @@ bool UiModel::recoveryAction(UiAction a, uint32_t now) {
     r.slot = (r.slot < c_.count() ? r.slot : 0) + (a.kind == ActionKind::Next ? 1 : c_.count() - 1);
     r.slot %= c_.count(); return true;
   }
-  if (a.kind == ActionKind::RecoveryReview || (a.kind == ActionKind::AvailabilityPrimary && startupRetry())) {
-    const auto command = a.kind == ActionKind::RecoveryReview ? availableRecoveryCommand() : RecoveryCommand::Retry;
+  if (a.kind == ActionKind::RecoveryReview) {
+    const auto command = availableRecoveryCommand();
     if (command != RecoveryCommand::None) reviewRecovery(command, now);
     return true;
   }

@@ -98,7 +98,8 @@ void psuActiveAbsences() {
   excluded.live = 3; excluded.step(20000); excluded.finish();
   CHECK(excluded.c.excluded() == 2 && !excluded.c.psuActive(excluded.now));
   FakeEeprom bytes; MemoryManager memory(bytes);
+  excluded.c.setAutoResume(false); excluded.finish(); excluded.step(6000);
   const auto plan = excluded.c.previewAvailability(AvailabilityAction::Include, 2, false, excluded.now);
   CHECK(plan.blocker == Issue::None && excluded.c.confirmAvailability(plan, memory, excluded.now) == Result::Ok);
-  excluded.finish(); CHECK(excluded.c.psuActive(excluded.now));
+  excluded.c.setAutoResume(true); excluded.finish(); CHECK(excluded.c.psuActive(excluded.now));
 }

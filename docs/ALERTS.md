@@ -46,9 +46,13 @@ encoding quantization and means command acceptance, not measured output. Use
 
 Recovery actions remain explicit:
 
-- Missing or returned PSUs: `diag startup`, then `startup accept GROUP1
-  [remember]` or `startup include GROUP1`, and the existing `confirm yes/no`.
-  Slot lists also work. Acknowledgement does not approve either decision.
+- Missing or excluded PSUs: `diag startup`, then `startup accept GROUP1
+  [remember]`, `startup exclude GROUP1 [remember]` or
+  `startup include GROUP1 [remember]`, followed by `confirm yes/no`. Changes to
+  available units require OFF and confirmed zero hold. Included absent units are
+  required; excluded units remain excluded on return. The Config shortcut opens
+  the availability overview, with the affected group selected. Acknowledgement
+  does not approve a decision. See [participation and persistence](STARTUP.md#participation-include-exclude-and-remember).
 - Temperature sensor loss: restore both valid readings, confirm the affected PSU
   is stopped, then `thermal retry 1`, `thermal retry GROUP1` or `thermal retry all`.
   If a setting/stop also failed, inspect `diag control`, correct it and

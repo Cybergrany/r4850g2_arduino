@@ -7,7 +7,7 @@
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
 enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios,
-  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail, Recovery, RecoveryConfirm,
+  AvailabilityOverview, Controller, Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail, Recovery, RecoveryConfirm,
   ConfigMenu, GroupSelect, UnitSelect, ProfileList, ProfileOptions, ProfileName, ProfileReview, ScopeConfirm };
 enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
@@ -25,13 +25,15 @@ class UiModel {
   UiAction takeRequest() { const auto r = request_; request_ = {}; return r; }
   uint8_t toolSelection() const { return toolSelection_; }
   uint8_t scenarioSelection() const { return scenarioSelection_; }
-  uint8_t availabilitySelection() const { return availabilitySelection_; }
+  uint8_t availabilitySelection() const;
+  uint8_t availabilityFocus() const { return availabilitySelection_; }
+  uint8_t availabilityTop() const { return availabilityTop_; }
   UnitMask availabilitySelected() const { return availabilitySelected_; }
   AvailabilityAction availabilityAction() const { return availabilityAction_; }
   const AvailabilityPlan& availabilityPlan() const { return availabilityPlan_; }
   Result availabilityResult() const { return availabilityResult_; }
   bool availabilityRemembered() const { return availabilityRemembered_; }
-  bool availabilityPage() const { return !alertOverlay_ && (page_ == UiPage::Availability || page_ == UiPage::AvailabilityUnits ||
+  bool availabilityPage() const { return !alertOverlay_ && (page_ == UiPage::AvailabilityOverview || page_ == UiPage::Controller || page_ == UiPage::Availability || page_ == UiPage::AvailabilityUnits ||
       page_ == UiPage::AvailabilityConfirm || page_ == UiPage::AvailabilityResult); }
   bool alertPage() const { return alertOverlay_ != 0; }
   uint8_t alertSelection() const { return alertSelection_; }
@@ -108,6 +110,10 @@ class UiModel {
     uint32_t revision = 0, topology = 0, availability = 0, since = 0, report = 0;
     uint32_t editRevision = 0, operation = 0;
     uint16_t edit = 0, saveToken = 0;
+    UnitMask participationDraft = 0;
+    uint32_t participationTopology = 0;
+    bool participationRemember = true;
+    uint8_t participationFocus = 0, participationTop = 0;
     AlertState incident;
     UiPage page = UiPage::Groups, reviewPage = UiPage::Recovery;
     UiField field = UiField::Current;
@@ -164,7 +170,7 @@ class UiModel {
   AvailabilityPlan availabilityPlan_;
   AvailabilityAction availabilityAction_ = AvailabilityAction::Accept;
   UnitMask availabilitySelected_ = 0;
-  uint8_t availabilitySelection_ = 0;
+  uint8_t availabilitySelection_ = 0, availabilityTop_ = 0;
   uint32_t availabilitySequence_ = 0;
   Result availabilityResult_ = Result::Ok;
   bool availabilityWorking_ = false, availabilityRemembered_ = false;

@@ -301,6 +301,7 @@ void SerialConsole::execute() {
     AvailabilityAction action = AvailabilityAction::Probe;
     if (!probe) {
       if (!PSU_STRCMP(args[1], "accept")) action = AvailabilityAction::Accept;
+      else if (!PSU_STRCMP(args[1], "exclude")) action = AvailabilityAction::Exclude;
       else if (!PSU_STRCMP(args[1], "include")) action = AvailabilityAction::Include;
       else if (!PSU_STRCMP(args[1], "require")) action = AvailabilityAction::Require;
       else { reply(Result::Invalid); return; }
@@ -491,6 +492,8 @@ void SerialConsole::tick(uint32_t now) {
     profileNotice_ = profile.operation; beginOutput();
     io_.println(profile.state == ProfileLoadState::Failed ? F("PROFILE LOAD FAILED; inspect status/alerts") : profile.older ? F("Profile loaded; earlier snapshot saved, newer changes unsaved") :
       profile.prepared ? F("PROFILE SAVED; prepared for next ON, charging remains OFF") : F("PROFILE APPLIED AND SAVED"));
+    if (profile.restoreParticipation && (profile.state == ProfileLoadState::Failed || profile.older))
+      io_.println(F("Profile participation NOT ACTIVATED; inspect current/saved intent with diag startup."));
     if (profile.storage != StorageResult::Ok) storageReply(profile.storage);
     prompt(); return;
   }
@@ -529,9 +532,9 @@ void SerialConsole::tick(uint32_t now) {
     availabilityNotice_ = availability.sequence; beginOutput();
     io_.print(F("STARTUP decision: ")); reply(availability.result);
     if (availability.remembered) io_.println(availability.result == Result::Ok ?
-        F("Configuration + decision saved; enable policy still applies.") : F("Saved reviewed snapshot, but live state changed; no continuation. Review diag startup."));
+        F("ACTIVE; SAVED AND VERIFIED. Enable policy still applies.") : F("Saved reviewed snapshot, but live state changed; no continuation. Review diag startup."));
     else if (availability.storage != StorageResult::Ok) storageReply(availability.storage);
-    else io_.println(F("Session decision only; no new persistent acceptance."));
+    else io_.println(F("ACTIVE; SESSION ONLY. Unrelated saves do not persist this choice."));
     if (!submitted_) prompt();
     return;
   }
@@ -713,6 +716,7 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" negotiating=")); io_.println(controller_.discovery().negotiating());
     } else if (row_ == 2) {
       io_.print(F("saved-absence=")); printMembers(c.acceptedAbsent);
+      io_.print(F(" saved-exclusions=")); printMembers(c.disabled);
       io_.print(F(" effective-waivers=")); printMembers(controller_.acceptedAbsences());
       io_.print(F(" excluded=")); printMembers(controller_.excluded());
       io_.print(F(" participants=")); printMembers(controller_.participants()); io_.println();
@@ -722,7 +726,9 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(' '); io_.println(availabilityName(controller_.availabilityReason(i, now)));
       io_.print(F("  AC=")); const auto ac = d ? d->acState(now, controller_.staleMs()) : AcState::Unknown;
       io_.print(ac == AcState::Unknown ? F("unknown") : ac == AcState::Absent ? F("absent") : F("present"));
-      if (controller_.excluded() & (1U << i)) io_.print(F(" EXCLUDED; return needs approval"));
+      const auto participation = controller_.participationStatus(i);
+      io_.print(participation.excluded ? F(" EXCLUDED") : F(" INCLUDED/REQUIRED"));
+      io_.print(participation.legacy ? F(" legacy permission; review intent") : participation.remembered ? F(" remembered") : F(" session only"));
       io_.print(F(" authorized-A=")); io_.println(c.operating.current[i] / 100.0f);
     } else if (row_ < 3 + c.count + limits::maxGroups) {
       const uint8_t g = row_ - 3 - c.count; const auto& group = c.groups[g];
@@ -734,17 +740,18 @@ void SerialConsole::outputRow(uint32_t now) {
         io_.print(F(" target-A=")); io_.print(groupCurrent(c, g) / 100.0f);
         io_.print(F(" participating-authorized-A=")); io_.println(active / 100.0f);
       }
-    } else { io_.println(F("startup accept/include/require GROUP|slots [remember]; confirm yes/no. No current redistribution.")); view_ = View::None; }
+    } else { io_.println(F("startup accept/exclude/include/require GROUP|slots [remember]; confirm yes/no. No current redistribution.")); view_ = View::None; }
     ++row_;
   } else if (view_ == View::AvailabilityPlan) {
     const auto& p = availabilityPlan_;
     if (row_ == 0) {
       io_.print(F("STARTUP PLAN: ")); io_.println(issueName(p.blocker));
-      io_.print(F("action=")); io_.println(p.action == AvailabilityAction::Accept ? F("accept absence") : p.action == AvailabilityAction::Include ? F("include returned units") :
-          p.action == AvailabilityAction::Require ? F("require again; no implicit inclusion") : F("power PSUs for discovery; charging enable OFF"));
+      io_.print(F("action=")); io_.println(p.action == AvailabilityAction::Accept ? F("accept absence") : p.action == AvailabilityAction::Include ? F("include / require units") :
+          p.action == AvailabilityAction::Require ? F("include / require units") :
+          p.action == AvailabilityAction::Exclude ? F("exclude until explicitly included") : F("power PSUs for discovery; charging enable OFF"));
     } else if (row_ == 1) {
       io_.print(F("selected=")); printMembers(p.selected); io_.print(F(" participants-after=")); printMembers(p.participants); io_.println();
-      io_.println(p.remember ? F("REMEMBER: saves current configuration too; staged values remain unapplied.") : F("SESSION ONLY: no absence permission persisted."));
+      io_.println(p.remember ? F("REMEMBER: saves current configuration too; staged values remain unapplied.") : F("SESSION ONLY: participation is not persisted by unrelated saves."));
     } else if (row_ < 2 + c.count) {
       const uint8_t i = row_ - 2;
       if ((p.selected | p.participants) & (1U << i)) {
@@ -754,6 +761,8 @@ void SerialConsole::outputRow(uint32_t now) {
         io_.println(availabilityName(controller_.availabilityReason(i, now)));
       }
     } else {
+      if (controller_.thermalStatus().contributors & p.selected & UnitMask(~p.participants))
+        io_.println(F("Explicit missing-unit exclusion releases its thermal contribution; remembered/profile choices do not."));
       if (availabilityConfirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; shares unchanged. Saved enable may resume charging. confirm yes/no within 15s."));
       view_ = View::None;
     }
@@ -821,7 +830,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
-      case 18: io_.println(F("diag startup; startup accept/include/require GROUP|slots [remember]; confirm yes/no")); break;
+      case 18: io_.println(F("diag startup; startup accept/exclude/include/require GROUP|slots [remember]; confirm yes/no")); break;
       case 20: io_.println(F("alerts; alerts ack ID|all; alerts every [0..3600 seconds]; diag thermal; thermal retry GROUP|slots|all")); break;
       case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;

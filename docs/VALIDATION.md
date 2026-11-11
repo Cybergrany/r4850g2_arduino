@@ -4,16 +4,24 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
-## Scoped settings, eight profiles and optional participation (2026-11-11)
+## Availability UI and consistent participation (2026-11-11)
 
-The [settings/profile guide](PROFILES.md) covers global/group/individual targets,
-OFF preparation, names, participation reviews, schema-6 migration and the bench
-sequence. The new [generated previews](ui-preview.html) include the five-choice
-menu, mixed settings, individual selector, names and profile save/load reviews.
+The [startup guide](STARTUP.md) covers the three-column overview, four-row
+checkbox editor, guarded Controller actions, serial aliases, persistence rules
+and reboot/profile bench sequence. The [profile guide](PROFILES.md) describes the
+shared participation validation and single final verified controller save.
+[Generated previews](ui-preview.html) include empty commissioning, nine-row
+scrolling, a second group page, reviews, results and alert-to-config navigation.
+
+Confirmed exclusion now persists across a return until explicit inclusion.
+Remembered inclusion clears legacy absence permissions; session-only choices
+remain separate from saved policy. The existing schema 6, journal addresses and
+profile format are unchanged. Remembered participation, including profile
+restoration, activates only after verified persistence and final revalidation.
 
 Software validation passes:
 
-- **2,827,020** host checks with AddressSanitizer/UndefinedBehaviorSanitizer:
+- **3,239,224** host checks with AddressSanitizer/UndefinedBehaviorSanitizer:
   scoped precedence and field isolation; unequal group sizes and rounding;
   invalid-setting rejection; distinct authorized voltages through startup,
   refresh, apply and restore; OFF priority, identity and thermal protections.
@@ -21,19 +29,28 @@ Software validation passes:
   identity reorder/mismatch, current-rating/deployment rejection, generations,
   interrupted writes, corruption, migration and calibration/protection ownership.
   Participation defaults to No, captures session choices when selected, and
-  changed restores require OFF, settled availability and zero/inclusion guards.
+  restores changing available units require OFF, settled availability and zero hold.
   A profile cannot release a new missing-hot-unit thermal contribution.
-- **1,324** touch/simulator checks, including real hit-box/gesture paths through
+- Remembered and session-only inclusion/exclusion, old absence permissions,
+  returning excluded units, unrelated UI saves and all eight profile slots through
+  reboot. Failed or stale saves do not activate intent. Fault injection includes
+  every participation-journal interruption, calibration/protection contention,
+  newer OFF during the final profile save, expiry and group removal.
+- Nine-member checkboxes, four-row wheel/touch scrolling, more than three groups,
+  empty commissioning, all-excluded operation, draft cancellation, Remember
+  retention and alert recovery preserving the focused row and draft. Confirmed
+  participation, never an unconfirmed checkbox draft, is captured in profiles.
+- **1,350** touch/simulator checks, including real hit-box/gesture paths through
   names, participation, Cancel-first reviews, serial changes invalidating a
   confirmation, an alert arriving during a named save, and OFF load persistence.
   The existing readiness, thermal, recovery and calibration suites still run.
-- Production renderer with **73 exported screens** at 500 kHz, 1, 2, 4 and 8 MHz;
+- Production renderer with **79 exported screens** at 500 kHz, 1, 2, 4 and 8 MHz;
   **19,652** real ClickEncoder checks; route-search budgets; GPIO, fan, cutoff, AVR printf and debug isolation.
   The compact AVR debug storage adapter also passes its own sanitizer test for
   controller/eight-profile/calibration mappings, failures and protection.
 - All **19 Mega profiles** build. The nine-unit instruction-level rendering run
-  gives 88.5 ms group selection, 85.4 ms charger selection, 50.5 ms Tools selection
-  and 767.0 ms page replacement with priority drawing. These model AVR computation
+  gives 88.6 ms group selection, 85.5 ms charger selection, 50.5 ms Tools selection
+  and 764.2 ms page replacement with priority drawing. These model AVR computation
   and nominal SPI; they do not measure hardware CAN/display interrupt load.
 
 The three AVR UI-debug builds use four simulated units (two groups, 3/1) to leave
@@ -49,36 +66,40 @@ UI simulation adapter, not an EEPROM power-loss model. Calibration retains both
 ### Flash and static RAM
 
 Bytes, release builds with the repository's PlatformIO settings. Free RAM below
-1 KiB is advisory; actual RAM/flash overflow remains a failed check.
+1 KiB is advisory; actual RAM/flash overflow remains a failed check. This patch
+adds 21 static bytes to the full UI build (11 to serial): bounded participation
+save metadata and the interrupted-draft bookmark, with no extra scene buffer or
+configuration copy. The preceding scoped-profile baseline was 7,364 static bytes
+in the touch+wheel build; the current figure is 7,385.
 
 | Mega profile | Flash | Static RAM | Static free |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 195094 | 7131 | 1061 |
-| `mega2560_serial` | 117982 | 5273 | 2919 |
-| `mega2560_display` | 183436 | 7100 | 1092 |
-| `mega2560_local` | 145452 | 6108 | 2084 |
-| `mega2560_minimal` | 52190 | 4252 | 3940 |
-| `mega2560_touch` | 204782 | 7333 | 859 |
-| `mega2560_touch_wheel` | 206346 | 7364 | 828 |
-| `mega2560_ui_debug` | 197646 | 6715 | 1477 |
-| `mega2560_touch_debug` | 207080 | 6917 | 1275 |
-| `mega2560_touch_local` | 151726 | 6310 | 1882 |
-| `mega2560_touch_debug_local` | 152214 | 5919 | 2273 |
-| `mega2560_touch_enable` | 205092 | 7333 | 859 |
-| `mega2560_touch_fan` | 205494 | 7338 | 854 |
-| `mega2560_serial_fan` | 118380 | 5278 | 2914 |
-| `mega2560_serial_cutoff` | 118070 | 5274 | 2918 |
-| `mega2560_touch_cutoff` | 205604 | 7339 | 853 |
-| `mega2560_serial_alerts` | 118252 | 5275 | 2917 |
-| `mega2560_touch_alerts` | 205868 | 7341 | 851 |
-| `mega2560_wheel_alerts` | 195724 | 7134 | 1058 |
+| `mega2560` | 199256 | 7152 | 1040 |
+| `mega2560_serial` | 119706 | 5284 | 2908 |
+| `mega2560_display` | 186478 | 7121 | 1071 |
+| `mega2560_local` | 149332 | 6129 | 2063 |
+| `mega2560_minimal` | 53650 | 4263 | 3929 |
+| `mega2560_touch` | 209264 | 7354 | 838 |
+| `mega2560_touch_wheel` | 210840 | 7385 | 807 |
+| `mega2560_ui_debug` | 201688 | 6736 | 1456 |
+| `mega2560_touch_debug` | 211534 | 6938 | 1254 |
+| `mega2560_touch_local` | 155636 | 6331 | 1861 |
+| `mega2560_touch_debug_local` | 156118 | 5940 | 2252 |
+| `mega2560_touch_enable` | 209572 | 7354 | 838 |
+| `mega2560_touch_fan` | 209968 | 7359 | 833 |
+| `mega2560_serial_fan` | 120102 | 5289 | 2903 |
+| `mega2560_serial_cutoff` | 119844 | 5285 | 2907 |
+| `mega2560_touch_cutoff` | 210070 | 7360 | 832 |
+| `mega2560_serial_alerts` | 119958 | 5286 | 2906 |
+| `mega2560_touch_alerts` | 210348 | 7362 | 830 |
+| `mega2560_wheel_alerts` | 199898 | 7155 | 1037 |
 
 ### AVR stack audit and remaining margin
 
 `tools/analyze_avr_stack.py` audits the **linked** ELF, including saved registers,
 fixed local frames and three-byte Mega return addresses. It flags indirect calls
 and cycles; it is not a complete stack proof. In the largest production build
-(`mega2560_touch_wheel`, 828 bytes statically free):
+(`mega2560_touch_wheel`, 807 bytes statically free):
 
 - The former EEPROM audit's 606-byte load frame plus 232-byte validation frame
   no longer coexist. Boot/serial restoration use one caller-owned 256-byte
@@ -91,22 +112,25 @@ and cycles; it is not a complete stack proof. In the largest production build
   **and epoch** guards live in one controller-owned array instead of every plan;
   both checks remain in dispatch/ACK validation.
 - Source-reviewed direct-call estimates, including the `main` caller, are about
-  **509 bytes** for boot/migration, **547 bytes** for serial restoration,
-  **545 bytes** for migration during protection persistence, and **670 bytes**
+  **509 bytes** for boot/migration, **550 bytes** for the largest serial path (participation save),
+  **545 bytes** for migration during protection persistence, and **668 bytes**
   for wheel-driven profile review/loading. Target arrays are released before
   application plans are allocated. UI dispatch keeps mutually exclusive
   alert/recovery/navigation/profile frames separate. Calibration and ordinary
-  rendering paths remain below the reviewed profile-load peak.
+  rendering paths remain below the reviewed profile-load peak. The participation
+  backend entries measure 453 bytes for confirmation/save, 262 bytes for final
+  revalidation and 266 bytes for preview, before their respective callers; the
+  complete application paths remain below the 668-byte profile-load peak.
 - The raw graph reports a larger load path because `newestConfig` can allocate
   its own candidate when called without one. Production `loadCandidate` and
   migrated protection pass their existing candidate, so that nested allocation
   is unreachable there. Boot's calibration action also cannot load a profile.
   These are source/argument constraints, not blanket exclusions from the audit.
 - The direct graph omits the virtual EEPROM read callees and outgoing arguments.
-  Allowing another dozen bytes for those on the 670-byte review path, the
+  Allowing another dozen bytes for those on the 668-byte review path, the
   largest reviewed ISR path is approximately **53 bytes**, including the hardware return address, saved registers, indirect
   MCP2515 callback and callees. Encoder/Timer0/UART paths are smaller; these
-  handlers do not enable nested interrupts. That leaves approximately **90 bytes**
+  handlers do not enable nested interrupts. That leaves approximately **74 bytes**
   on this reviewed estimate. No reachable allocating `new`/`malloc`
   call was found in the linked production path; the linked allocator symbol alone
   does not imply a heap allocation.

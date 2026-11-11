@@ -45,11 +45,12 @@ struct ProfileReview {
 };
 enum class ProfileLoadState : uint8_t { Idle, Applying, Saving, Complete, Failed };
 struct ProfileLoadStatus {
-  uint32_t operation = 0, revision = 0;
+  uint32_t operation = 0, revision = 0, topology = 0, availability = 0;
+  UnitMask participation = 0;
   uint16_t saveToken = 0;
   ProfileLoadState state = ProfileLoadState::Idle;
   StorageResult storage = StorageResult::Ok;
-  bool prepared = false, older = false;
+  bool prepared = false, older = false, restoreParticipation = false;
 };
 class PsuController {
  public:
@@ -101,6 +102,10 @@ class PsuController {
   UnitMask acceptedAbsences() const { return (config_.acceptedAbsent | config_.disabled | sessionAccepted_) & UnitMask(~sessionRequired_); }
   UnitMask participants() const { return membersMask(count()) & UnitMask(~excluded_); }
   UnitMask requiredMembers() const { return membersMask(count()) & UnitMask(~(excluded_ & acceptedAbsences())); }
+  UnitMask deliberateExclusions() const { return (config_.disabled | sessionAccepted_) & UnitMask(~sessionRequired_); }
+  ParticipationStatus participationStatus(uint8_t slot) const;
+  AvailabilityStatus availabilityStatus(uint8_t group, uint32_t now) const;
+  AvailabilityPlan previewParticipation(UnitMask members, UnitMask excluded, bool remember, uint32_t now) const;
   AvailabilityReason availabilityReason(uint8_t slot, uint32_t now) const;
   bool availabilitySettled(uint8_t group, uint32_t now) const;
   bool availabilityUnstable(uint8_t group, uint32_t now) const;
@@ -229,6 +234,7 @@ class PsuController {
   void startupTick(uint32_t now);
   void finishAvailability(uint32_t now);
   void applyAvailability(const AvailabilityPlan& plan);
+  void applyParticipation(UnitMask members, UnitMask excluded, bool remember, bool releaseHot, uint32_t now);
   Issue routingIssue(uint8_t slot, uint32_t now) const;
   void enableChanged(bool wasEnabled);
   void cancelJob();

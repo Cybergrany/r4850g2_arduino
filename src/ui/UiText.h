@@ -28,6 +28,7 @@ inline const __FlashStringHelper* stateName(CommandState s) {
 }
 inline const __FlashStringHelper* issueName(Issue s) {
   switch (s) {
+    case Issue::ParticipationHold: return F("participation change requires autoresume off / Controller Stop, then confirmed zero hold");
     case Issue::TemperatureSensor: return F("both temperatures must be fresh; latched losses require thermal retry <slots>");
     case Issue::ThermalStopped: return F("thermal stop latched; cool then explicit autoresume on; diag thermal");
     case Issue::None: return F("ready"); case Issue::Missing: return F("missing; output state unknown");

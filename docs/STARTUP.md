@@ -1,7 +1,8 @@
 # Startup, intermittent AC and unavailable groups
 
-This firmware manages one parallel DC bus. A source group selects physical PSU
-identities. Losing a source never redistributes its current share to the others.
+The controller manages stable PSU identities and per-unit voltage/current
+targets. A source group selects physical PSUs; it is not a separate enable or
+protection domain. Losing a source never redistributes its current share to the others.
 
 ## AC cutoff wiring and builds
 
@@ -42,7 +43,7 @@ The sequence runs cooperatively; CAN, serial, UI and cooling keep being serviced
    persisted by the Mega.
 4. For each reachable bound unit, send zero online current, require its ACK
    and fresh measured current within ±0.5 A. Establish fan policy and the
-   authorized common voltage (compiled voltage if none is authorized), then
+   unit's authorized voltage (compiled voltage if none is authorized), then
    clear inherited standby. Enable OFF still permits awake zero holding.
 5. Require fresh broadcast and low-current observations after wake. Allow at least
    **15 seconds**, or three poll periods if longer, for readiness. If a zero-limit
@@ -74,7 +75,7 @@ no setting and is not itself proof that a stop failed; freshness expiry can
 classify an unavailable member. Rejected/unconfirmed stopping or unexpected
 current while held invokes the bounded fault fallback and drops a fitted AC
 permit. The cutoff fault latches: ON cannot release it. Correct the cause, then
-use `reconcile` or **Retry startup**. Explicit retry also retries CAN initialization.
+use `reconcile` or **Controller → Retry ALL PSUs**. Explicit retry also retries CAN initialization.
 
 Normal `autoresume off` keeps AC allowed and holds zero for cooling.
 `startup stop` immediately commands LOW and latches the cutoff; without a fitted
@@ -99,81 +100,124 @@ the inhibit interval and grants no charging profile. It saves nothing. A
 wrong-deployment record must first be reviewed and replaced with the intended
 `defaults`. Continue through [GETTING_STARTED.md](GETTING_STARTED.md): bind actual
 identities, create groups, commission compatible offline defaults, apply the
-common voltage/group currents and save. `save` alone does not release an already
+scoped voltage/current targets and save. `save` alone does not release an already
 inhibited startup; probe/reboot is explicit.
 
-## Accept an unavailable source
+## Participation: include, exclude and remember
 
-Initial absence approval waits **15 seconds after AC release**, plus a stable
-group interval of **max(3 seconds, two poll periods)**. An observed transition
-restarts that interval. Repeated changes for 30 seconds show `UNSTABLE`; this
-never accepts anything automatically. Eight paced reconciliations can take
-longer than 15 seconds. Booting, ambiguous, unbound or faulted units cannot be
-waived as ordinary absence.
+A participation decision changes intent, not current allocation. **Included**
+means the PSU is required, even while absent. **Excluded** means it remains out
+of service until explicitly included, including when AC/CAN returns. Available
+excluded units remain at zero, with monitoring and cooling continuing. Shares
+are never redistributed to other units.
 
-Serial announces `STARTUP REVIEW` when a settled absence or excluded return
-needs attention. Inspect `diag startup` for the exact identities and reasons;
-the group screen also flags returns that need inclusion.
+Initial absence decisions wait **15 seconds after AC release**, plus a stable
+group interval of **max(3 seconds, two poll periods)**. Observed transitions
+restart that interval. Repeated changes for 30 seconds require review. Booting,
+ambiguous, unbound or faulted units cannot be waived as ordinary absences.
+
+Changing an available PSU's participation requires **controller OFF and confirmed
+zero-current hold**. Use `autoresume off` or the UI's Controller → Stop first,
+then inspect `diag control`. OFF is a request, not proof of zero current.
+Accepting an ordinary settled absence is still possible while other units run.
 
 For an unavailable, commissioned GROUP2:
 
 ```text
 diag startup
 startup accept GROUP2 remember
-# Review selected identities, remaining participants and unchanged shares.
 confirm yes
-# Wait for "Configuration + decision saved".
+# Wait for ACTIVE; SAVED AND VERIFIED.
 diag startup
 diag control
 ```
 
-`remember` saves the **current complete configuration too**, including drafts,
-authorized profile and effective enable preference. It activates the exception
-only after journal verification and another check that the preview is current.
-Enable ON may then resume remaining participants; OFF keeps zero holding.
-Omit `remember` for this session only. A later ordinary `save` does not silently
-persist session waivers.
-
-The exception belongs to bound identities, not a group name or CAN address.
-New missing members still block startup/restoration. Binding/membership edits
-clear affected exceptions and current authorization. All units may be excluded;
-the result explicitly says no active units, not a successful hardware apply.
-
-## Returning groups and individual choices
-
-Accepted identities remain excluded on the next boot even if present. Once
-reconciled at zero, explicitly include them:
+`accept` is an absence-only exclusion alias: it selects only missing-CAN/no-AC
+members, but does not skip a fault disguised as an absence. `exclude` expresses
+exclusion for the entire requested selection. `include` and `require` both mean
+included/required intent. They remove affected old absence permissions, so a
+future loss cannot silently exclude a deliberately included unit again.
 
 ```text
-startup include GROUP2
+autoresume off
+diag control
+# Wait for zero hold and settled availability.
+startup exclude GROUP2 remember
 confirm yes
+# Later, deliberately include them again:
+startup include GROUP2 remember
+confirm yes
+# Absent included units remain required; do not enable until ready.
+diag startup
+diag control
+autoresume on
 ```
 
-Inclusion lasts this session and preserves the saved absence policy. Losing
-the unit again excludes it again. To remove an exception:
+Every command accepts `all`, a group, or controller slots such as `3`, `3-4`,
+`1,3-4`. Add `remember` to either include or exclude to save the **current full
+configuration too**, including drafts, authorized targets and enable preference.
+Staged targets remain unapplied. Remembered participation activates only after
+journal verification and final revalidation. Omit `remember` for session-only
+intent: later unrelated `save` or UI voltage/current saves do not promote it.
 
-```text
-startup require GROUP2 remember
-confirm yes
-```
+The UI defaults **Remember + save config** to checked; serial requires the
+explicit `remember` word. Confirmations expire after 15 seconds and are
+invalidated by configuration/enable, topology or availability changes. `confirm
+no` cancels. A save can finish after conditions change: **saved snapshot, not
+activated** is distinct from an active decision or a failed save. Inspect the
+result and `diag startup`; do not assume that a stored record was activated.
 
-Requiring a unit never silently includes an excluded unit; include it when
-ready. All commands accept `all`, a group, or global slots such as `3`, `3-4`,
-`1,3-4`. `include` cannot use `remember`. `confirm no` cancels. Confirmations
-expire after 15 seconds and on configuration/enable, topology or availability
-changes. A change during save may leave the reviewed snapshot saved but refuse
-live continuation; serial/UI distinguish these outcomes.
+Schema 6 and the EEPROM/profile layouts are unchanged. Old absence permissions
+remain conservative and may request review on return until explicitly replaced.
+New decisions use the existing explicit participation mask. Rebinding or group
+membership changes clear affected intent. All units can be excluded; this
+reports no active units and never claims successful hardware current delivery.
 
-Display: **Tools → Startup / availability**, or tap the startup status row.
-Select a group with Prev/Next. Absent groups offer **Continue without group /
-Wait for group / Choose individuals**. Returned groups offer **Include group /
-Keep excluded / Choose individuals**. Review slots and allocation, optionally
-select **Remember + save config**, then Confirm. Individual mode cycles accept,
-include and require. Waiting/keeping excluded grants nothing. Wheel navigation
-uses these same backend decisions and screens. Fault details and hard stop
-remain accessible. Failed CAN initialization offers **Retry startup** directly.
-Builds without the output display **AC cutoff not fitted** and have no hard-stop
-button.
+## Availability UI
+
+Open **Tools → Startup**, tap the status row, or use an alert's **Config** shortcut.
+The three-column overview preselects the affected group. Each card shows live
+Ready/Absent counts and one of:
+
+- **Settled**, green: stable observations, no outstanding availability decision.
+- **Config Required**, red: a required absence, legacy return decision, fault or
+  commissioning problem. A fault still needs its proper diagnostics/recovery.
+- **Settling**, amber: startup, reconciliation or the observation interval.
+
+Opening a group offers **Include**, **Exclude**, **Choose individuals**, and Back.
+Bulk actions open a review without changing anything. Individuals use a four-row
+scrolling list: **[x] excluded; [ ] included/required**. The wheel scrolls its
+focused row into view; touch Up/Down moves one row per tap. CONFIRM opens the
+review. Cancel from review preserves the draft and Remember choice; Cancel from
+the checklist discards that draft. The review begins on Cancel, never Confirm.
+
+Opening Config does not acknowledge an alert. Back from the overview returns to
+the incident, and Acknowledge returns to the original screen. Interrupted drafts
+survive unless configuration or identity changes invalidate them. Approved
+exclusions do not continually request another decision merely because they return.
+
+**Controller**, below the overview, provides Stop/zero-current hold, Enable,
+startup/bus diagnostics, commissioning probe and Retry ALL. Enable, probe and
+retry require Cancel-first reviews. Retry affects all PSUs and may restore
+previously authorized targets when enable is ON. A fitted hard AC cutoff remains
+accessible; boards without it show "AC cutoff not fitted". Binding and group
+creation remain explicit serial commands.
+
+## Profiles and thermal exclusions
+
+Profile Store/Restore participation remains independent and defaults **No**.
+Saving Yes captures current confirmed intent, including session-only choices;
+unconfirmed checkbox drafts are not included. Loading Yes maps stable identities
+and replaces old absence permissions for the restored selection. Loading No
+leaves participation unchanged. The existing final controller save also stores
+restored participation; it activates after verification and revalidation, without
+an extra save. Failure or changed conditions are reported explicitly.
+
+Explicitly confirming the exclusion of a currently missing hot unit may release
+its thermal contribution; the review warns about this. Remembered exclusions and
+profile loads never automatically release a new thermal incident. Returning
+units are temperature-checked again. See [PROFILES.md](PROFILES.md) and
+[ALERTS.md](ALERTS.md).
 
 ## Current intent, ACKs and refresh
 
@@ -181,7 +225,7 @@ For two configured members, `set current GROUP2 55` still means 27.50 A each.
 `apply GROUP2` authorizes the latest shares for excluded members too, but sends
 no positive current to them before inclusion. One participant still receives
 27.50 A, not 55 A. With none participating, apply updates pending intent and
-reports zero recipients/zero hardware successes. Voltage remains global.
+reports zero recipients/zero hardware successes. Voltage follows each PSU's scoped target.
 
 At low priority, volatile V/I settings are refreshed approximately every
 10 seconds per unit. This uses authorized voltage/current, or zero while held
@@ -193,16 +237,31 @@ not setpoint readback, actual current delivery or fan RPM.
 
 ## Bench acceptance
 
-Capture `diag startup`, `diag control`, raw CAN and physical CHG_ALLOW for:
+Use a suitable low-current test profile and verify physical output separately.
+Start with `watch off`, `raw off`, `autoresume off`, then `diag startup`,
+`diag control`, `diag memory`, `diag ui` and `diag bus`.
 
-- Cold AC/DC boot; battery-backed CAN before AC; an 8-second start; battery
-  disconnection/reconnection with and without AC.
-- Whole-source absence, partial return, a new missing unit, address negotiation
-  and replacement identity. Verify excluded return stays at zero until included.
-- Session/remembered decisions, reboot, interrupted save and a topology/enable
-  change during confirmation/save.
-- Zero/fan/wake failures, unexpected held current, cutoff/retry and normal OFF
-  cooling. Check actual PSU communication-loss defaults and post-ready retention.
+1. With all units available, wait for zero hold/settling. Exclude one using the
+   checklist with Remember checked. Confirm only after reviewing its identity.
+   Verify **ACTIVE / SAVED AND VERIFIED**, `diag startup`, physical zero output,
+   and continued cooling. Reboot: it must stay excluded, including when online.
+2. Include it with Remember unchecked. Verify session-only status; make an
+   unrelated UI V/A edit/save and reboot. The original remembered exclusion must
+   return. Repeat inclusion with Remember checked: reboot must now require it.
+3. Remove AC from a required unit. Check Config Required and the correct group
+   shortcut. Explicitly accept its absence; confirm no redistribution. Bring it
+   back and verify it stays held until included. Check that Ack changes no intent.
+4. Save a profile with Store participation Yes, using a session-only exclusion.
+   Change participation, then load it with Restore No: intent must remain unchanged.
+   Load Yes while OFF/held: verify completion, reboot, and the captured intent.
+   An unchecked absent member must stay required, never regain an older waiver.
+5. Exercise nine checklist rows, top/bottom scrolling, more than three groups,
+   Cancel/review/Remember, and alert interruption of an edit. Confirm Controller,
+   V/A settings, profiles, faults, thermal recovery and calibration remain reachable.
+6. Re-run `diag memory`, `diag ui`, `diag bus` while scrolling under real CAN
+   traffic. Record the stack watermark, redraw timings, RX losses and command
+   timeouts. Test cold AC/DC boot, delayed AC, battery-backed CAN, address changes,
+   failed stopping and fitted hard-cutoff/retry separately.
 
 Host tests and simulations verify policy, not contactor operation or physical
 current/voltage behavior. The timing margin accommodates the documented 3–8 s

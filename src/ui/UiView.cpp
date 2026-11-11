@@ -78,7 +78,8 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   const Issue issue = displayIssue(c, slot, now);
   const auto state = c.report().units[slot].state;
   if ((c.excluded() & (1U << slot)) && c.availabilityReason(slot, now) != AvailabilityReason::Fault)
-    line(f, row, (c.configuration().disabled & (1U << slot)) ? UI_TEXT("EXCLUDED BY PROFILE") : c.availabilityReason(slot, now) == AvailabilityReason::Ready ? UI_TEXT("RETURNED: APPROVAL NEEDED") : UI_TEXT("ACCEPTED ABSENCE"), background | Warning);
+    line(f, row, c.participationStatus(slot).legacy ? UI_TEXT("EXCLUDED: REVIEW INTENT") :
+        c.participationStatus(slot).remembered ? UI_TEXT("EXCLUDED / REMEMBERED") : UI_TEXT("EXCLUDED / SESSION ONLY"), background | Warning);
   else if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
   else if (commandFailed(state)) line(f, row, shortCommand(state), background | Error);
   else if (commandActive(state)) line(f, row, UI_TEXT("APPLYING"), background | Warning);
@@ -126,9 +127,9 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     } else f.text(5, col, 8, UI_TEXT("/--A"), bg | Warning, true);
     if (!PSU_ENABLE_TOUCH) f.text(6, col, 8, UI_TEXT("MAX TEMP"), bg | Muted);
     reading(f, PSU_ENABLE_TOUCH ? 6 : 7, col, 8, summarize(c, group.members, protocol::OutputTemperature, Aggregate::Maximum, now), "C", bg, 0);
-    reading(f, PSU_ENABLE_TOUCH ? 7 : 8, col, 8, sessionTotal(c, group.members), "Ah", bg);
-    if (!PSU_ENABLE_TOUCH) f.text(9, col, 8, UI_TEXT("SESSION~"), bg | Muted);
-    reading(f, PSU_ENABLE_TOUCH ? 8 : 10, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
+    f.text(PSU_ENABLE_TOUCH ? 7 : 8, col, 8, UI_TEXT("Output:"), bg | Muted);
+    reading(f, PSU_ENABLE_TOUCH ? 8 : 9, col, 8, summarize(c, group.members, protocol::OutputPower, Aggregate::Sum, now), "W", bg, 0);
+    reading(f, PSU_ENABLE_TOUCH ? 9 : 10, col, 8, sessionTotal(c, group.members), "Ah", bg);
     uint8_t errors = 0, active = 0, verifying = 0;
     for (uint8_t i = 0; i < c.count(); ++i) if (group.members & (1U << i)) {
       const bool waived = (c.excluded() & c.acceptedAbsences() & (1U << i)) &&
@@ -250,7 +251,7 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     if (voltage && population(mask)>1) f.text(row,17,9,UI_TEXT("Per PSU"),Muted);
     else reading(f,row,17,9,summarize(c,mask,voltage ? protocol::OutputVoltage : protocol::OutputCurrent,Aggregate::Sum,now),voltage ? "V" : "A");
   }
-  if (!PSU_ENABLE_TOUCH) { line(f,11,UI_TEXT("Tools: turn then click"),Muted); f.outline(11,0,26,1,m.field()==UiField::Tools); }
+  if (!PSU_ENABLE_TOUCH) { line(f,11,UI_TEXT("TOOLS"),Muted); f.outline(11,0,26,1,m.field()==UiField::Tools); }
   line(f,12,c.enableControl().enabled() ? UI_TEXT("EEPROM saved after ACKs") : UI_TEXT("Apply prepares next ON"),Muted);
   line(f,14,m.editing() ? UI_TEXT("Click:Apply Hold:Cancel") : UI_TEXT("Click:Edit Hold:Back"),Muted);
 }
@@ -286,6 +287,10 @@ void result(UiFrame& f, const UiModel& m) {
     case UiNotice::Cancelled: title = UI_TEXT("CANCELLED - DRAFT RETAINED"); body = UI_TEXT("No partial apply sent. Review the staged request before applying again."); break;
     default: break;
   }
+  if (m.profileOperation() && !m.savingProfile() && m.profileInclusion()) {
+    if (m.notice() == UiNotice::SavedOlder) body = UI_TEXT("Snapshot saved; participation NOT ACTIVATED because conditions changed. Review current settings and Config.");
+    if (m.notice() == UiNotice::SaveFailed) body = UI_TEXT("Targets prepared/applied. Participation NOT ACTIVATED: save failed. Review config before retrying.");
+  }
   line(f, 2, title, color); f.wrap(4, 8, body);
   if (m.notice() == UiNotice::Applying || m.notice() == UiNotice::ApplyFailed || m.notice() == UiNotice::Saving) {
     char b[27];
@@ -296,7 +301,7 @@ void result(UiFrame& f, const UiModel& m) {
 void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   // Recovery pages carry their own control/protection details. Keep their
   // target and review heading intact, including during a thermal latch.
-  if (m.page() == UiPage::Recovery || m.page() == UiPage::RecoveryConfirm) return;
+  if (m.page() == UiPage::Recovery || m.page() == UiPage::RecoveryConfirm || m.availabilityPage()) return;
   const auto s = c.controlStatus(now); const auto& e = c.enableControl();
   if (s.activity == Activity::Running && !c.excluded()) return;
   const bool fault = s.activity == Activity::StopUnconfirmed || (s.activity == Activity::StartBlocked && s.blocker != Issue::NoProfile);
@@ -317,7 +322,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   if (full) {
     f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, text, color);
     if (s.activity == Activity::Running) {
-      char b[32]; PSU_SNPRINTF(b, sizeof(b), "RUN %u/%u: REVIEW ABSENCES", unsigned(population(c.participants())), unsigned(c.count()));
+      char b[32]; PSU_SNPRINTF(b, sizeof(b), "RUN %u/%u: EXCLUSIONS", unsigned(population(c.participants())), unsigned(c.count()));
       if (c.availabilityAttention(now)) f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, UI_TEXT("PSUS RETURNED: REVIEW"), Warning);
       else f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, b, Warning);
     } else if (fault && s.blocker != Issue::Cutoff) {
@@ -349,7 +354,7 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
     case UiPage::Confirm: confirmation(f, m); break;
     case UiPage::Result: result(f, m); break;
     case UiPage::Recovery: case UiPage::RecoveryConfirm: drawRecovery(f, m, c, now); break;
-    case UiPage::Availability: case UiPage::AvailabilityUnits: case UiPage::AvailabilityConfirm: case UiPage::AvailabilityResult:
+    case UiPage::AvailabilityOverview: case UiPage::Controller: case UiPage::Availability: case UiPage::AvailabilityUnits: case UiPage::AvailabilityConfirm: case UiPage::AvailabilityResult:
       drawAvailability(f, m, c, now); break;
     default: UiLayout::extras(f,m,c,now); break;
   }

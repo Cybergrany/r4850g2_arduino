@@ -129,19 +129,28 @@ The stored choice is the current included/excluded selection, including decision
 made for this session only. It costs a two-byte identity-indexed mask and one flag
 inside each existing 128-byte profile copy; all eight slots remain available.
 
-Restoring a changed selection requires **OFF**, settled availability and the
-existing guards. A responding unit must be reconciled and confirmed at zero before
-being excluded; returning units must qualify before inclusion. Faulted units
-require their normal recovery first. An included unit that is unavailable cannot
-be silently included by a profile. Turn OFF, inspect `diag control` and `diag group`,
-then review again. A changed topology invalidates confirmation.
+Participation uses the same preview and guards as the availability UI/serial.
+Changing an available PSU requires **OFF**, settled availability and confirmed
+awake zero hold. Included absent units are **required**, so operation waits for
+them; exclusion is never inferred from absence. Faults and ambiguous identities
+still block decisions. Inspect `diag startup` and `diag control` before review.
 
-Explicitly excluded, responding PSUs remain held at zero after reboot until an
-inclusion decision; they are not treated as newly returned units merely because
-they were already online. Existing saved absence permissions still govern later
-losses. Loading participation does not erase them or authorize a new hot-unit
-thermal exclusion. Use the dedicated availability confirmation to release a
-missing hot unit's contribution. Healthy units retain their shares.
+While ON, voltage/current application also checks the currently required members.
+If a required absence blocks a profile load, explicitly accept that settled absence
+first, or Stop and load while OFF. A load does not waive a missing participant
+before its participation save has verified.
+
+Restored participation is written with the profile's single final controller save,
+then activated only after verification and revalidation. It replaces affected old
+absence permissions: deliberately included units cannot be re-excluded by an older
+waiver after reboot. Failed saves or changed conditions are reported; unactivated
+intent does not leak into a later unrelated save. Loading with participation No
+leaves both runtime choices and saved participation policy untouched.
+
+Excluded units stay excluded when they return, with cooling and monitoring at zero
+current. Profiles do not authorize a new hot-unit thermal exclusion: only an explicit
+current absence review can release that contribution. Unconfirmed UI checkbox drafts
+are never captured. Healthy units retain their configured shares.
 
 ## EEPROM and migration
 

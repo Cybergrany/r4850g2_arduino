@@ -18,24 +18,26 @@ void uiRecoveryAvailability() {
   CHECK(u.ui.recoveryLink().kind==RecoveryKind::Availability && u.ui.recoveryLink().slot==1);
   recoverySnapshot(u,"recovery-unavailable-alert");
   u.ui.input({1,false,false},++r.now); CHECK(u.ui.alertSelection()==1);
-  u.ui.input({0,true,false},++r.now); CHECK(u.ui.page()==UiPage::Availability && u.ui.group()==1);
+  u.ui.input({0,true,false},++r.now); CHECK(u.ui.page()==UiPage::AvailabilityOverview && u.ui.group()==1);
   CHECK(!r.c.alerts().at(1).acknowledged && !r.c.acceptedAbsences() && !r.c.enableControl().enabled());
   recoverySnapshot(u,"recovery-unavailable-config");
-  r.c.alerts().set(0,AlertCode::Control,++r.now); u.ui.notifications(++r.now); CHECK(u.ui.page()==UiPage::Availability);
-  u.ui.action({ActionKind::AvailabilityIndividuals},++r.now); CHECK(u.ui.availabilitySelected()==2);
+  r.c.alerts().set(0,AlertCode::Control,++r.now); u.ui.notifications(++r.now); CHECK(u.ui.page()==UiPage::AvailabilityOverview);
+  u.ui.action({ActionKind::AvailabilityGroup,1},++r.now);
+  u.ui.action({ActionKind::AvailabilityIndividuals},++r.now); CHECK(u.ui.availabilitySelected()==0);
   u.ui.action({ActionKind::Back},++r.now); CHECK(u.ui.page()==UiPage::Availability);
+  u.ui.action({ActionKind::Back},++r.now); CHECK(u.ui.page()==UiPage::AvailabilityOverview);
   u.ui.action({ActionKind::Back},++r.now); CHECK(u.ui.alertDisplayId()==id && !u.ui.recovering());
   u.ui.action({ActionKind::Acknowledge},++r.now); CHECK(u.ui.editing() && u.ui.editValue()==edit && u.ui.group()==0);
   // Acceptance remains a separate confirmed decision and remembered save.
   u.ui.action({ActionKind::Cancel},++r.now); openIncident(u,AlertCode::Missing,1);
-  u.ui.action({ActionKind::Recover},++r.now); u.ui.action({ActionKind::AvailabilityPrimary},++r.now);
+  u.ui.action({ActionKind::Recover},++r.now); u.ui.action({ActionKind::AvailabilityGroup,1},++r.now); u.ui.action({ActionKind::AvailabilityExclude},++r.now);
   CHECK(u.ui.page()==UiPage::AvailabilityConfirm && u.ui.availabilityPlan().selected==2);
-  u.ui.action({ActionKind::AvailabilityConfirm},++r.now); CHECK(r.c.acceptedAbsences()==2);
+  u.ui.action({ActionKind::AvailabilityConfirm},++r.now); u.finish(); CHECK(r.c.acceptedAbsences()==2);
   CHECK(!r.c.alerts().at(1).acknowledged);
-  u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Acknowledge},++r.now);
+  u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Acknowledge},++r.now);
   // Returned PSU routes to Include, never silently back into service.
   r.live=2; r.step(18000); openIncident(u,AlertCode::Returned,1);
-  u.ui.action({ActionKind::Recover},++r.now); CHECK(u.ui.availabilityAction()==AvailabilityAction::Include && u.ui.group()==1);
+  u.ui.action({ActionKind::Recover},++r.now); CHECK(u.ui.page()==UiPage::AvailabilityOverview && u.ui.group()==1);
   CHECK(r.c.excluded()&2); recoverySnapshot(u,"recovery-returned-config");
   u.ui.action({ActionKind::Back},++r.now); u.ui.action({ActionKind::Acknowledge},++r.now);
   // Serial configuration invalidates the suspended edit.

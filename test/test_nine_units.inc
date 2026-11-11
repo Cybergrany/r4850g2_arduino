@@ -159,12 +159,14 @@ void ninthAvailabilityAndRouting() {
   for (unsigned i = 0; i < 300; ++i) { memory.stepSave(); r.step(20); }
   CHECK(r.c.acceptedAbsences() == 0x100 && r.c.participants() == 0xff);
   CHECK(r.c.alerts().at(8).code == AlertCode::Excluded);
-  Configuration saved; CHECK(memory.load(saved) == StorageResult::Ok && saved.acceptedAbsent == 0x100);
+  Configuration saved; CHECK(memory.load(saved) == StorageResult::Ok && saved.disabled == 0x100 && saved.acceptedAbsent == 0);
   r.live = allUnitsMask; r.step(16000); r.finish();
-  CHECK(r.c.participants() == 0xff && r.current[8] == 0 && r.c.alerts().at(8).code == AlertCode::Returned);
+  CHECK(r.c.participants() == 0xff && r.current[8] == 0 && r.c.alerts().at(8).code == AlertCode::Excluded);
+  CHECK(r.c.previewAvailability(AvailabilityAction::Include, 0x100, false, r.now).blocker == Issue::ParticipationHold);
+  r.c.setAutoResume(false); r.finish(); r.step(6000);
   plan = r.c.previewAvailability(AvailabilityAction::Include, 0x100, false, r.now);
   CHECK(plan.selected == 0x100 && plan.blocker == Issue::None && r.c.confirmAvailability(plan, memory, r.now) == Result::Ok);
-  r.finish(); CHECK(r.c.participants() == 0x1ff && r.current[8] > 0);
+  r.c.setAutoResume(true); r.finish(); CHECK(r.c.participants() == 0x1ff && r.current[8] > 0);
   // Address movement retains slot 9's identity/group; stale plans cannot write
   // to an old route or a replacement that happens to use that address.
   const auto stale = r.c.preview(Operation::GroupCurrent, 1, r.now);

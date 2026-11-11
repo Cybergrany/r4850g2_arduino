@@ -36,7 +36,7 @@ void PsuController::alertTick(uint32_t now) {
         report_.units[i].state != CommandState::Incomplete)) code = AlertCode::Command;
     else if (route == Issue::Conflict) code = AlertCode::Identity;
     else if (!identified(config_.units[i].identity) || group < 0) code = AlertCode::Commissioning;
-    else if ((excluded_ & bit) && reason == AvailabilityReason::Ready) code = AlertCode::Returned;
+    else if ((excluded_ & bit) && !(deliberateExclusions() & bit) && reason == AvailabilityReason::Ready) code = AlertCode::Returned;
     else if ((excluded_ & acceptedAbsences() & bit)) code = AlertCode::Excluded;
     else if (attention & bit) code = AlertCode::Missing;
     else if (group >= 0 && availabilityUnstable(group, now)) code = AlertCode::Unstable;

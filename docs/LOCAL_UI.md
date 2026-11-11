@@ -72,7 +72,7 @@ Reads temporarily use the lower of `displaySpiHz` and `displayReadMaxSpiHz`
 (default cap 1 MHz), then restore the drawing speed even if the ID is wrong.
 This lets drawing run faster without exceeding the stricter read timing.
 
-A missing-members alert offers **Acknowledge** and **Config**. Acknowledge starts selected; Config opens the relevant availability review. Release the wheel button, then short-press and
+A missing-members alert offers **Acknowledge** and **Config**. Acknowledge starts selected; Config opens the availability overview with the affected group selected. Release the wheel button, then short-press and
 release to dismiss the notification. This does not accept missing PSUs or enable
 charging; those decisions remain explicit confirmations in Config or Tools → Startup. A press already in progress
 when an alert appears is discarded until the button has been released for 50 ms
@@ -150,6 +150,9 @@ silently added to these totals; use `diag bus` when commissioning.
 - Long text is abbreviated with `~`. Numbers retain their units and digits:
   precision is reduced or k/M units are used as needed; unrepresentable values
   show `OVF` rather than a misleading truncated number.
+
+The group card reads **Output:**, watts, then Ah. The former `SESSION~` label
+was an approximation hint; removing it does not change the counter.
 
 Session Ah is **approximate, volatile and calculated on the Mega** from each
 verified bound PSU's current broadcasts, using the existing reference conversion
@@ -273,20 +276,23 @@ absent. The UI observes the matching completion token and verification result.
 
 The unavailable-members notification has **Acknowledge** and **Config** side by
 side. The wheel initially selects Acknowledge. Turning to Config and clicking,
-or tapping Config, opens the affected group's availability page. Choose
-**Continue without group**, **Wait for group**, or **Choose individuals**. Returned
-units offer **Include group** / **Keep excluded**. Existing settling checks,
-review, confirmation and optional remembered absence permissions still apply.
-
+or tapping Config, opens the three-column availability overview with the affected
+group selected. Cards show Ready/Absent counts and green Settled, amber Settling
+or red Config Required. Open a group for **Include / Exclude / Choose individuals**.
+Individual checkboxes mean **checked = excluded, unchecked = included/required**;
+the four-row list scrolls with wheel focus or one-row touch Up/Down arrows.
+CONFIRM opens a review, with **Remember + save config** checked and **Cancel
+selected**. Cancelling review retains the draft; cancelling the checklist discards it.
+Available membership changes require OFF and confirmed zero hold first.
 Opening Config does not acknowledge the incident, accept an absence or enable
-current. Back/Wait returns to that incident; Acknowledge then returns to the
+current. Back from the overview returns to that incident; Acknowledge then returns to the
 original screen. An interrupted editor retains its value unless configuration
 changes invalidate it. Recovery uses one return bookmark; following a further
 blocked-operation shortcut keeps that same original return point.
 
 | Incident/result | Shortcut |
 | --- | --- |
-| Missing, excluded, returned or unstable members | Config → affected group's availability |
+| Missing, excluded, returned or unstable members | Config → availability overview, affected group selected |
 | Active dropout | Config for missing CAN/AC; Details for a responding control fault |
 | Setting/fan fault, reconciliation or unconfirmed stop | Details → PSU diagnostics → Retry ALL |
 | CAN initialization or latched cutoff | Diagnostics → bus/control → Retry ALL |
@@ -327,17 +333,22 @@ compatibility, worst-case interrupt timing, or PSU behavior on a loaded CAN bus.
 
 ## Enable and control status
 
-**Tools → Startup / availability** provides group-first accept/wait/individual
-choices for absent sources, and include/keep-excluded/individual choices for
-returning sources. Touch can also open it from the status row. Review the
-selected slots/allocation before confirming; **Remember + save config** explicitly
-saves the current full configuration too. Wheel navigation uses the same actions.
-See [STARTUP.md](STARTUP.md) for settling, stale decisions, faults and persistence.
+**Tools → Startup** opens the availability overview; touch can also use the status
+row. The overview's **Controller** section keeps Stop/zero-current hold, guarded
+Enable, diagnostics, commissioning probe and Retry ALL reachable even with no
+groups configured. Hard AC cutoff remains accessible when fitted.
+
+Remembered participation is activated only after verified persistence. Session-only
+include/exclude remains a runtime override, even after unrelated UI saves. Included
+absent units are required; excluded returning units stay excluded until explicitly
+changed. Profiles optionally store/restore the same confirmed choices, default No;
+unconfirmed checkbox drafts are not profile data. [STARTUP.md](STARTUP.md) explains
+the serial commands, legacy permissions, blockers and bench verification.
 
 Groups with accepted exclusions show `ACT n/m` in amber, while genuine faults
-keep red error precedence. The running banner reports participant counts.
-Cutoff/inhibit and no-active-unit states have explicit labels. Returning excluded
-units remain at zero and show an approval-needed message.
+keep red error precedence. PSU rows distinguish remembered exclusions, session-only
+exclusions and legacy permissions still needing review. Successful confirmation,
+failed persistence and saved-but-not-activated snapshots have separate result text.
 
 The spare row below the V/A/W header shows intentional zero-current hold and its winning
 control source in amber. Reconciliation and zero-current startup are also

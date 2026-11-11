@@ -181,8 +181,8 @@ earlier recipient before the last voltage ACK also blocks current. Skipped
 current phases retain an Incomplete per-unit result instead of reporting success.
 Each member is attempted sequentially and results remain explicit; no rollback
 is claimed. Group-current operations only send currents using the authorized
-voltage and require recipient voltage synchronization plus a completed global
-voltage commissioning. Thus a partly failed voltage change cannot be followed
+voltage and require each recipient's authorized voltage and matching
+voltage acknowledgement. Thus a partly failed voltage change cannot be followed
 by an apparently successful group current apply hiding the inconsistency.
 
 Failure does not clear faults, redistribute current, or stop unaffected units.
@@ -356,10 +356,13 @@ even when the operator leaves the progress screen. See [local UI](LOCAL_UI.md).
 ## Startup and availability backend
 
 `PsuAvailability.cpp` owns the AC permit, group observation windows and explicit
-accept/include/require/probe decisions. `AvailabilityPlan` captures config,
+accept/exclude/include/require/probe decisions. `AvailabilityPlan` captures config,
 topology and availability revisions, selected identities by stable slot and the
-resulting participant mask. Serial and UI use `previewAvailability` and
-`confirmAvailability`; neither implements independent exception policy.
+resulting participant mask. `previewParticipation` validates the complete desired selection. Serial aliases
+adapt that shared plan; UI and profiles use it directly. `confirmAvailability`
+revalidates before action; no presentation layer implements its own waiver policy.
+`availabilityStatus` reports group readiness/review/settling; `participationStatus`
+distinguishes runtime intent from remembered and legacy policy.
 `startupStatus`, `availabilityReason`, `availabilitySettled`, `availabilityUnstable`,
 `participants`, `excluded` and `availabilityReport` expose the same facts to
 future renderers. `ChargeAllowOutput` is the only physical permit writer.
@@ -368,7 +371,13 @@ Remembered choices use the shared incremental `MemoryManager`. Successful
 verification is followed by revalidation after this loop's CAN receive/control
 processing. A changed snapshot can be persisted without activating its decision;
 the result distinguishes these states. Session acceptances and inclusions remain
-RAM-only. Binding/membership changes invalidate affected exceptions. All current
+RAM-only in the existing session masks; normal configuration serialization never
+includes them. Explicit remembered intent updates `disabled` and clears affected
+legacy `acceptedAbsent` bits in the private writer snapshot, then in live config
+only after verification. Profiles patch that same snapshot in their one final save,
+then activate participation without releasing a new thermal contribution. EEPROM
+schema, record sizes, calibration locations and profile format are unchanged.
+Binding/membership changes invalidate affected exceptions. All current
 allocations still use full configured membership, never participant count.
 
 `PsuControl` separates wake readiness from stopping deadlines, reasserts the

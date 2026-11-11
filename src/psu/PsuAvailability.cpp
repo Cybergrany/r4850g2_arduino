@@ -60,7 +60,7 @@ UnitMask PsuController::availabilityAttention(uint32_t now) const {
     if (g < 0 || !availabilitySettled(g, now)) continue;
     const auto reason = availabilityReason(i, now); const UnitMask bit = UnitMask(1U << i);
     if (((reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc) && !(acceptedAbsences() & bit)) ||
-        (reason == AvailabilityReason::Ready && (excluded_ & bit) && !(config_.disabled & bit))) attention |= bit;
+        (reason == AvailabilityReason::Ready && (excluded_ & bit) && !(deliberateExclusions() & bit))) attention |= bit;
   }
   return attention;
 }
@@ -80,82 +80,136 @@ void PsuController::availabilityTick(uint32_t now) {
     }
   }
 }
-AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, UnitMask mask, bool remember, uint32_t now) const {
+ParticipationStatus PsuController::participationStatus(uint8_t slot) const {
+  const UnitMask bit = UnitMask(1U << slot);
+  const bool excluded = excluded_ & bit;
+  const bool legacy = excluded && !(deliberateExclusions() & bit);
+  const bool remembered = excluded ? (config_.disabled & bit) != 0 : ((config_.disabled | config_.acceptedAbsent) & bit) == 0;
+  return {excluded, remembered, legacy};
+}
+AvailabilityStatus PsuController::availabilityStatus(uint8_t group, uint32_t now) const {
+  AvailabilityStatus s;
+  if (group >= limits::maxGroups || !config_.groups[group].members) { s.state = AvailabilityState::Review; return s; }
+  bool fault = !ready_ || !startup_.configurationReady || startup_.permit == PermitState::Fault ||
+      config_.thermalStop != ThermalStop::None || config_.deploymentId != deployment::id;
+  bool reconciling = !powerAvailable();
+  const auto members = config_.groups[group].members;
+  for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
+    const auto reason = availabilityReason(i, now);
+    s.ready += reason == AvailabilityReason::Ready;
+    s.absent += reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc;
+    const auto incident = alerts_.at(i);
+    fault |= (incident.active && alertLevel(incident.code) == AlertLevel::Error) || reason == AvailabilityReason::Fault ||
+        (enable_.enabled() && (requiredMembers() & (1U << i)) && !(config_.operating.voltageMask & (1U << i)));
+    reconciling |= reason == AvailabilityReason::Reconciling;
+  }
+  if (fault || (availabilityAttention(now) & members) || availabilityUnstable(group, now)) s.state = AvailabilityState::Review;
+  else if (!reconciling && availabilitySettled(group, now) &&
+      (!startupConfigured_ || uint32_t(now - acReleased_) >= control::availabilityGraceMs)) s.state = AvailabilityState::Settled;
+  return s;
+}
+AvailabilityPlan PsuController::previewParticipation(UnitMask mask, UnitMask excluded, bool remember, uint32_t now) const {
   AvailabilityPlan p;
-  p.action = action; p.requested = mask; p.remember = remember; p.created = now;
-  p.configurationRevision = revision_; p.topologyRevision = discovery_.revision();
-  p.availabilityRevision = availabilityRevision_; p.participants = participants();
+  p.action = AvailabilityAction::Selection; p.requested = p.selected = mask; p.remember = remember; p.created = now;
+  p.configurationRevision = revision_; p.topologyRevision = discovery_.revision(); p.availabilityRevision = availabilityRevision_;
+  p.participants = (participants() & UnitMask(~mask)) | (mask & UnitMask(~excluded));
+  if (!mask || (mask & ~membersMask(count())) || (excluded & ~mask)) { p.blocker = Issue::Invalid; return p; }
   if (busy() || availabilitySaving()) p.blocker = Issue::Busy;
   if (config_.deploymentId != deployment::id) p.blocker = Issue::DeploymentMismatch;
+  if (!ready_) p.blocker = Issue::Invalid;
+  if (!powerAvailable() || discovery_.negotiating()) p.blocker = Issue::Cutoff;
+  if (startupConfigured_ && uint32_t(now - acReleased_) < control::availabilityGraceMs) p.blocker = Issue::Settling;
+  for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
+    const UnitMask bit = UnitMask(1U << i); const int8_t g = groupFor(config_, i);
+    if (!identified(config_.units[i].identity) || g < 0) { p.blocker = Issue::Unbound; continue; }
+    const auto reason = availabilityReason(i, now);
+    if (reason == AvailabilityReason::Fault) { p.blocker = Issue::ControlFault; continue; }
+    if (!availabilitySettled(g, now)) p.blocker = Issue::Settling;
+    // An unchanged live participant need not stop just because a missing peer
+    // is explicitly excluded. Any changed available participant must be held.
+    if (((excluded ^ excluded_) & bit) && reason != AvailabilityReason::NoCan && reason != AvailabilityReason::NoAc) {
+      if (enable_.enabled()) p.blocker = Issue::ParticipationHold;
+      else if (reason != AvailabilityReason::Ready || control_[i].phase != ControlPhase::Held ||
+          !control_[i].zeroConfirmed || !control_[i].awakeConfirmed) p.blocker = Issue::Reconciling;
+    } else if (reason == AvailabilityReason::Reconciling) p.blocker = Issue::Reconciling;
+  }
+  return p;
+}
+AvailabilityPlan PsuController::previewAvailability(AvailabilityAction action, UnitMask mask, bool remember, uint32_t now) const {
   if (action == AvailabilityAction::Probe) {
+    AvailabilityPlan p; p.action = action; p.created = now; p.remember = remember;
+    p.configurationRevision = revision_; p.topologyRevision = discovery_.revision(); p.availabilityRevision = availabilityRevision_;
+    p.participants = participants();
+    if (busy() || availabilitySaving()) p.blocker = Issue::Busy;
+    if (config_.deploymentId != deployment::id) p.blocker = Issue::DeploymentMismatch;
     if (startup_.permit == PermitState::NotFitted || !ready_ || remember) p.blocker = Issue::Invalid;
     return p;
   }
-  if (!mask || (mask & ~membersMask(count())) || (action == AvailabilityAction::Include && remember)) {
-    p.blocker = Issue::Invalid; return p;
-  }
-  if (!powerAvailable() || discovery_.negotiating()) p.blocker = Issue::Cutoff;
-  if (action == AvailabilityAction::Accept && startupConfigured_ &&
-      uint32_t(now - acReleased_) < control::availabilityGraceMs) p.blocker = Issue::Settling;
-  for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
-    const UnitMask bit = UnitMask(1U << i);
-    const int8_t g = groupFor(config_, i);
-    if (!identified(config_.units[i].identity) || g < 0) { p.blocker = Issue::Unbound; continue; }
-    if (action == AvailabilityAction::Require) {
-      p.selected |= bit; continue;
+  UnitMask selected = mask;
+  if (action == AvailabilityAction::Accept) {
+    selected = 0;
+    for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
+      const auto reason = availabilityReason(i, now);
+      if (reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc) selected |= UnitMask(1U << i);
     }
-    const auto reason = availabilityReason(i, now);
-    if (reason == AvailabilityReason::Fault) { p.blocker = Issue::ControlFault; continue; }
-    if (action == AvailabilityAction::Accept) {
-      if (reason != AvailabilityReason::NoCan && reason != AvailabilityReason::NoAc) continue;
-    } else {
-      if (!(excluded_ & bit)) continue;
-      if (reason != AvailabilityReason::Ready || control_[i].phase != ControlPhase::Held) {
-        p.blocker = Issue::Reconciling; continue;
-      }
-    }
-    if (!availabilitySettled(g, now)) p.blocker = Issue::Settling;
-    p.selected |= bit;
   }
-  if (!p.selected && p.blocker == Issue::None) p.blocker = Issue::Invalid;
-  if (action == AvailabilityAction::Accept) p.participants &= UnitMask(~p.selected);
-  if (action == AvailabilityAction::Include) p.participants |= p.selected;
+  auto p = previewParticipation(selected, action == AvailabilityAction::Accept || action == AvailabilityAction::Exclude ? selected : 0, remember, now);
+  p.action = action; p.requested = mask;
+  if (!mask || (mask & ~membersMask(count())) || action == AvailabilityAction::Selection) p.blocker = Issue::Invalid;
+  // Bulk acceptance must not silently skip a fault or ambiguous identity.
+  if (action == AvailabilityAction::Accept) for (uint8_t i = 0; i < count(); ++i) if (mask & (1U << i)) {
+    if (!identified(config_.units[i].identity) || groupFor(config_, i) < 0) p.blocker = Issue::Unbound;
+    else if (availabilityReason(i, now) == AvailabilityReason::Fault) p.blocker = Issue::ControlFault;
+  }
   return p;
 }
+void PsuController::applyParticipation(UnitMask mask, UnitMask excluded, bool remember, bool releaseHot, uint32_t now) {
+  const UnitMask included = mask & UnitMask(~excluded);
+  const UnitMask added = included & excluded_;
+  if (releaseHot) for (uint8_t i = 0; i < count(); ++i) if (excluded & (1U << i)) {
+    const auto reason = availabilityReason(i, now);
+    if (reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc) {
+      thermalIgnored_ |= UnitMask(1U << i); hotContributors_ &= UnitMask(~(1U << i));
+    }
+  }
+  excluded_ = (excluded_ & UnitMask(~mask)) | excluded;
+  sessionAccepted_ = (sessionAccepted_ & UnitMask(~mask)) | excluded;
+  sessionRequired_ = (sessionRequired_ & UnitMask(~mask)) | included;
+  if (remember) {
+    config_.acceptedAbsent &= UnitMask(~mask); // Explicit intent replaces legacy absence permission.
+    config_.disabled = (config_.disabled & UnitMask(~mask)) | excluded;
+    sessionAccepted_ &= UnitMask(~mask); sessionRequired_ &= UnitMask(~mask);
+  }
+  restorePending_ &= UnitMask(~excluded);
+  restorePending_ |= added & config_.operating.voltageMask;
+  running_ |= added & config_.operating.voltageMask;
+  energized_ &= UnitMask(~excluded); activeLost_ &= UnitMask(~excluded); identityLost_ &= UnitMask(~excluded);
+  ++revision_; ++availabilityRevision_;
+}
 void PsuController::applyAvailability(const AvailabilityPlan& p) {
-  if (p.action == AvailabilityAction::Accept) {
-    thermalIgnored_ |= p.selected; hotContributors_ &= UnitMask(~p.selected);
-    energized_ &= UnitMask(~p.selected); activeLost_ &= UnitMask(~p.selected); identityLost_ &= UnitMask(~p.selected);
-    sessionAccepted_ |= p.selected; sessionRequired_ &= UnitMask(~p.selected); excluded_ |= p.selected;
-    if (p.remember) config_.acceptedAbsent |= p.selected;
-  } else if (p.action == AvailabilityAction::Include) {
-    excluded_ &= UnitMask(~p.selected); config_.disabled &= UnitMask(~p.selected);
-    restorePending_ |= p.selected & config_.operating.voltageMask;
-    running_ |= p.selected & config_.operating.voltageMask;
-  } else if (p.action == AvailabilityAction::Require) {
-    sessionRequired_ |= p.selected; sessionAccepted_ &= UnitMask(~p.selected);
-    if (p.remember) config_.acceptedAbsent &= UnitMask(~p.selected);
-    // Revoking a waiver never implicitly admits a currently excluded unit.
-  } else {
+  if (p.action != AvailabilityAction::Probe) applyParticipation(p.selected, p.selected & UnitMask(~p.participants), p.remember, true, now_);
+  else {
     setAutoResume(false);
     startup_.configurationReady = true; startup_.commissioning = true;
     startup_.permit = PermitState::Inhibited; startup_.since = now_;
-    reconcile();
+    reconcile(); ++revision_; ++availabilityRevision_;
   }
-  ++revision_; ++availabilityRevision_;
 }
 Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManager& memory, uint32_t now) {
   if (availabilitySaving() || busy()) return Result::Busy;
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       p.availabilityRevision != availabilityRevision_ || uint32_t(now - p.created) > limits::confirmationMs) return Result::Changed;
-  const auto fresh = previewAvailability(p.action, p.requested, p.remember, now);
+  const auto fresh = p.action == AvailabilityAction::Selection ?
+      previewParticipation(p.requested, p.requested & UnitMask(~p.participants), p.remember, now) :
+      previewAvailability(p.action, p.requested, p.remember, now);
   if (fresh.blocker != Issue::None) return Result::Blocked;
   if (p.selected != fresh.selected || p.participants != fresh.participants) return Result::Changed;
   ++availabilityReport_.sequence; availabilityReport_.remembered = false;
   availabilityReport_.storage = StorageResult::Ok; availabilityReport_.result = Result::Ok;
   if (!p.remember) { applyAvailability(p); return Result::Ok; }
-  const UnitMask accepted = p.action == AvailabilityAction::Accept ? config_.acceptedAbsent | p.selected : config_.acceptedAbsent & UnitMask(~p.selected);
-  availabilityReport_.storage = memory.startAvailabilitySave(config_, accepted);
+  const UnitMask accepted = config_.acceptedAbsent & UnitMask(~p.selected);
+  const UnitMask disabled = (config_.disabled & UnitMask(~p.selected)) | (p.selected & UnitMask(~p.participants));
+  availabilityReport_.storage = memory.startAvailabilitySave(config_, accepted, disabled);
   if (availabilityReport_.storage != StorageResult::Ok) {
     storageStatus(availabilityReport_.storage);
     availabilityReport_.result = Result::Blocked; return Result::Blocked;
@@ -171,7 +225,9 @@ void PsuController::finishAvailability(uint32_t now) {
   if (availabilityReport_.storage != StorageResult::Ok) { storageStatus(availabilityReport_.storage); availabilityReport_.result = Result::Blocked; return; }
   availabilityReport_.remembered = true;
   const auto& p = savedAvailability_;
-  const auto fresh = previewAvailability(p.action, p.requested, p.remember, now);
+  const auto fresh = p.action == AvailabilityAction::Selection ?
+      previewParticipation(p.requested, p.requested & UnitMask(~p.participants), p.remember, now) :
+      previewAvailability(p.action, p.requested, p.remember, now);
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       p.availabilityRevision != availabilityRevision_ || uint32_t(now - p.created) > limits::confirmationMs ||
       fresh.blocker != Issue::None || fresh.selected != p.selected || fresh.participants != p.participants) {
