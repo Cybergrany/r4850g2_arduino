@@ -203,32 +203,32 @@ and is consumed. Dimming is suppressed during local apply/save operations.
 
 `UiModel` owns navigation and operation state, `UiView` owns layout, and
 `Display` is the replaceable hardware interface. The classic font, colours,
-filled selection backgrounds, text size and layout are retained. Configuration
+text size and control locations are retained. Selection uses a bright cyan outline;
+unselected cards and buttons use a dim outline, with dark interiors. Configuration
 values show two decimal places; the fullscreen editor shows one, matching its
 0.1 V / 0.5 A increments. The shared formatter generates fractional digits
 directly because AVR-libc does not support variable-width printf conversions.
 
-`Ili9341Display` compares visible pixels. A foreground change on an empty cell
-costs no SPI transfer; unchanged glyph rows are also skipped. At 8 MHz it sends
-up to four adjacent changed rows (48 pixels) per transaction. At 4 MHz the limit
-is two rows; at lower clocks, one row. A service call checks a **750 us cooperative
-budget** between work units, with a ceiling of eight transfers above 2 MHz and
-two at 2 MHz or below. At 500 kHz the conservative one-row/two-transfer limit
-remains. Pixel preparation happens before opening SPI, and every transaction
-ends before another strip, so CAN reception can run between them. Uniform strips
-use a solid-colour write without constructing individual pixels; filled blank
-cells also skip glyph expansion. The first prepared strip may finish after the
-budget expires so expensive preparation cannot prevent all progress. The budget
-can overrun by a bounded work unit or interrupt; it is not a hard real-time guarantee.
+`Ili9341Display` draws selection edges separately from text. Moving a selection
+recolours only the previous and new outlines, leaving readings and status colours
+unchanged. This applies to groups, chargers, settings, menus, alerts, recovery
+choices, touch buttons and calibration targets. No selection change accepts an
+alert, changes configuration or applies settings.
 
-There is no pixel framebuffer or extra scene buffer. Cells are recorded as
-painted only after all necessary strips complete; changing a scene mid-glyph
-schedules a complete new comparison pass. Comparison proceeds in batches of
-eight cells, checking elapsed time between batches instead of stopping after
-32 cells regardless of time remaining. Completed scenes require no idle scanning.
-Input still composes immediately and live readings refresh every 500 ms.
-Touch targets on new pages arm only after
-drawing finishes. Initialization and its full clear happen before CAN reception.
+The two-pixel edges use at most **48 pixels per transaction at 8 MHz**, 24 at
+4 MHz and 12 below. Normal text strips retain their four/two/one-row limits.
+The **750 us cooperative budget**, eight-transfer ceiling above 2 MHz and
+two-transfer ceiling at lower clocks remain unchanged. Pixel preparation takes
+place before SPI opens; every transaction closes before yielding so CAN can run.
+One work unit or interrupt can overrun the budget; it is not a hard deadline.
+
+Rectangles and text share the existing compact scene cache. Rapid selection
+reversals and page changes complete or erase tracked edges, without leaving
+fragments behind. Text takes precedence over borders with a small dark clearance
+so glyphs and error colours remain legible. Touch targets on a new page arm only
+after both its text and outlines finish. Input composes immediately; live data
+refreshes every 500 ms through the normal background pipeline. Boot clearing
+still happens before CAN starts.
 
 User navigation/highlight changes receive consecutive drawing slices in an
 additional **8 ms cooperative window**, with at most twelve extra slices per

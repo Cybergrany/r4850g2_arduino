@@ -18,4 +18,5 @@ with tempfile.TemporaryDirectory(prefix='psu-renderer-') as tmp:
             'src/ui/UiFrame.cpp', 'src/ui/Ili9341Display.cpp', 'test/test_renderer.cpp', '-o', binary], cwd=root, check=True)
         env = os.environ.copy()
         env['ASAN_OPTIONS'] = env.get('ASAN_OPTIONS', '') + ':detect_leaks=0'
-        subprocess.run([binary], env=env, check=True)
+        snapshots = sorted(Path(env['PSU_UI_SNAPSHOTS']).glob('*.txt')) if env.get('PSU_UI_SNAPSHOTS') else []
+        subprocess.run([binary, *map(str, snapshots)], env=env, check=True)

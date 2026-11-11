@@ -183,6 +183,9 @@ python3 tools/test_route_budget.py
 pio run -e mega2560 -e mega2560_serial -e mega2560_display -e mega2560_local -e mega2560_minimal
 ```
 
+UI selection uses high-contrast outlines across cards, menus and buttons. See
+[the UI preview](docs/ui-preview.html) and [redraw measurements](docs/VALIDATION.md#outline-selection-throughout-the-ui-2026-11-11).
+
 Host tests run the production code with simulated CAN, serial, and EEPROM under
 AddressSanitizer/UndefinedBehaviorSanitizer. See [validation](docs/VALIDATION.md)
 for coverage, build sizes, the optional `tools/test_avr_render.py` complete-redraw

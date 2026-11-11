@@ -161,6 +161,7 @@ void LocalUi::touchTick(uint32_t now) {
 void LocalUi::drawTouch() {
   if (model_.page()==UiPage::Calibration) {
     // Clear the normal page body; buttons are drawn only after a completed save.
+    frame_.clearOutlines();
     for (uint8_t r=1;r<15;++r) frame_.text(r,0,26,UI_TEXT(""));
     frame_.text(1,0,26,UI_TEXT("TOUCH CALIBRATION"),Accent);
     if (wizard_.state()==CalibrationState::Collecting) {
@@ -168,7 +169,8 @@ void LocalUi::drawTouch() {
       if (wizard_.targetIndex()==5) strcpy(b,"Release to finish");
       frame_.text(12,0,26,b); frame_.text(14,0,26,PSU_ENABLE_ENCODER ? UI_TEXT("Wheel hold: exit") : PSU_ENABLE_SERIAL ? UI_TEXT("Serial: touch debug off") : UI_TEXT("Lift between targets"),Muted);
       const auto t=CalibrationWizard::target(wizard_.targetIndex());
-      frame_.text(t.y/16,(t.x-4)/12,1,UI_TEXT("+"),selectedStyle|Accent);
+      frame_.text(t.y/16,(t.x-4)/12,1,UI_TEXT("+"),Accent);
+      frame_.outline(t.y/16,(t.x-4)/12,1,1,true);
     } else if (wizard_.state()==CalibrationState::Failed) {
       frame_.wrap(4,8,UI_TEXT("Calibration failed. Release then tap to retry."),Warning);
       frame_.text(9,0,26,calibration_.valid ? UI_TEXT("Back: use old calibration") : PSU_ENABLE_ENCODER ? UI_TEXT("Wheel hold: exit") :

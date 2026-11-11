@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 namespace psu {
+static_assert(sizeof(UiOutline)==3 && sizeof(UiFrame)<=565, "UI scenes must retain Mega RAM headroom");
 namespace {
 char read(const char* p, bool flash) {
 #ifdef __AVR__
@@ -13,13 +14,35 @@ char read(const char* p, bool flash) {
 #endif
 }
 }
-void UiFrame::clear() { memset(characters_, ' ', sizeof(characters_)); memset(styles_, 0, sizeof(styles_)); }
+void UiFrame::clear() { memset(characters_, ' ', sizeof(characters_)); memset(styles_, 0, sizeof(styles_)); outlineCount_ = 0; }
 void UiFrame::invalidate() { memset(characters_, 0, sizeof(characters_)); memset(styles_, 0xff, sizeof(styles_)); }
-UiCell UiFrame::cell(uint16_t i) const { return {characters_[i], uint8_t((styles_[i / 2] >> (i % 2 * 4)) & 15)}; }
+bool UiFrame::sameText(const UiFrame& other) const {
+  return !memcmp(characters_,other.characters_,sizeof(characters_)) && !memcmp(styles_,other.styles_,sizeof(styles_));
+}
+UiCell UiFrame::cell(uint16_t i) const {
+  const uint16_t bit = i * 3, index = bit / 8; const uint8_t shift = bit & 7;
+  uint16_t value = styles_[index];
+  if (shift > 5) value |= uint16_t(styles_[index + 1]) << 8;
+  return {characters_[i], uint8_t((value >> shift) & 7)};
+}
+void UiFrame::style(uint16_t i, uint8_t value) {
+  const uint16_t bit = i * 3, index = bit / 8; const uint8_t shift = bit & 7;
+  value &= 7;
+  styles_[index] = (styles_[index] & uint8_t(~(7 << shift))) | (value << shift);
+  if (shift > 5) styles_[index + 1] = (styles_[index + 1] & uint8_t(~(7 >> (8 - shift)))) | (value >> (8 - shift));
+}
 void UiFrame::cell(uint16_t i, UiCell v) {
-  characters_[i] = v.character;
-  const uint8_t shift = i % 2 * 4;
-  styles_[i / 2] = (styles_[i / 2] & uint8_t(~(15 << shift))) | ((v.style & 15) << shift);
+  characters_[i] = v.character; style(i, v.style);
+}
+bool UiFrame::outline(uint8_t r, uint8_t col, uint8_t w, uint8_t h, bool focused) {
+  if (!w || !h || r + h > ui::rows || col + w > ui::columns || outlineCount_ == maxOutlines) return false;
+  outlines_[outlineCount_++] = {uint8_t(r | (h << 4)), uint8_t(col | (w << 5)), uint8_t((w >> 3) | (focused ? 4 : 0))};
+  return true;
+}
+void UiFrame::outline(uint8_t i, UiOutline value) {
+  if (i >= maxOutlines) return;
+  while (outlineCount_ <= i) outlines_[outlineCount_++] = {};
+  outlines_[i] = value;
 }
 bool FrameChanges::next(const UiFrame& frame, const UiFrame& painted, uint8_t& budget,
                         uint16_t& index, UiCell& value) {
@@ -45,12 +68,15 @@ void UiFrame::put(uint8_t row, uint8_t col, uint8_t width, const char* value, bo
     characters_[start + pad + i] = c;
   }
   if (cut && width) characters_[start + width - 1] = '~';
-  // Style nibbles are contiguous. Fill pairs once instead of doing per-cell
-  // index arithmetic and read/modify/write for every blank in a filled panel.
-  uint16_t first = start; uint8_t left = width; style &= 15;
-  if (left && (first & 1)) { styles_[first / 2] = (styles_[first / 2] & 15) | (style << 4); ++first; --left; }
-  memset(styles_ + first / 2, style | (style << 4), left / 2);
-  if (left & 1) styles_[(first + left - 1) / 2] = (styles_[(first + left - 1) / 2] & 0xf0) | style;
+  // Eight three-bit colours occupy three bytes. Compact colours pay for the
+  // bounded outline list without increasing either scene cache's RAM usage.
+  uint16_t first = start; uint8_t left = width; style &= 7;
+  while (left && (first & 7)) { this->style(first++, style); --left; }
+  const uint8_t repeated[] = {uint8_t(style | (style << 3) | (style << 6)),
+      uint8_t((style >> 2) | (style << 1) | (style << 4) | (style << 7)),
+      uint8_t((style >> 1) | (style << 2) | (style << 5))};
+  while (left >= 8) { memcpy(styles_ + first * 3 / 8, repeated, 3); first += 8; left -= 8; }
+  while (left--) this->style(first++, style);
 }
 void UiFrame::text(uint8_t r, uint8_t c, uint8_t w, const char* s, uint8_t style, bool right) { put(r, c, w, s, false, style, right); }
 void UiFrame::text(uint8_t r, uint8_t c, uint8_t w, FlashText s, uint8_t style, bool right) { put(r, c, w, s.data, true, style, right); }

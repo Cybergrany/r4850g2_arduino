@@ -26,8 +26,8 @@ assert len(font) == 1280
 frames = {}
 for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")):
     lines = (args.frames / (name + ".txt")).read_bytes().decode("latin1").rstrip("\n").split("\n")
-    assert len(lines) == 16 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
-    frames[name] = {"rows": lines[:15], "styles": lines[15]}
+    assert len(lines) == 17 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
+    frames[name] = {"rows": lines[:15], "styles": lines[15], "outlines": json.loads(lines[16])}
 
 html = """<!doctype html>
 <!-- Bitmap font license:
@@ -45,7 +45,7 @@ __FONT_LICENSE__
 <p>These frames come from the implemented layout exercised by host tests. The display is 320×240 pixels; the preview is enlarged. Example readings are simulated, not measurements from hardware.</p>
 <nav aria-label="Preview screen"></nav>
 <figure><canvas width="320" height="240" role="img" aria-label="Firmware display preview"></canvas>
-<figcaption>Three group columns, two chargers per detail page, shared V/A/W header. Selection uses a coloured background; errors also have text. Requested current is the authorized profile; PENDING includes missing acknowledgements.</figcaption></figure>
+<figcaption>Three group columns, two chargers per detail page, shared V/A/W header. Selection uses a bright cyan outline; other controls have dim outlines. Errors retain their text and colours. Requested current is the authorized profile; PENDING includes missing acknowledgements.</figcaption></figure>
 <p><strong>Controls:</strong> turn to select, click to open/edit/apply, hold to configure a group or return. A flashing value indicates editing; hold cancels the uncommitted edit. Touch builds use visible buttons and a fullscreen value editor. SIM captures come from the CAN-free debug build. This preview switches between captured frames and does not simulate commands.</p>
 <p><a href="LOCAL_UI.md">Wiring, controls, commissioning and failure behavior</a></p>
 <details><summary>Accessible text of the selected frame</summary><pre id="text"></pre></details>
@@ -57,7 +57,15 @@ function rgb(v){return 'rgb('+[(v>>11)*255/31,((v>>5)&63)*255/63,(v&31)*255/31].
 const c=document.querySelector('canvas'),ctx=c.getContext('2d');
 const labels={'groups':'Groups','groups-page2':'Groups · page 2','chargers':'Chargers','details':'Error details','config':'Group config','confirmation':'Missing member'};
 function show(name){const frame=frames[name];ctx.fillStyle=rgb(0x10c2);ctx.fillRect(0,0,320,240);
-for(let r=0;r<15;r++)for(let col=0;col<26;col++){const style=parseInt(frame.styles[r*26+col],16),x=4+col*12,y=r*16,ch=frame.rows[r].charCodeAt(col);ctx.fillStyle=rgb(style&8?0x21e5:0x10c2);ctx.fillRect(x,y,12,16);ctx.fillStyle=rgb(palette[style&7]||palette[0]);let letter=ch,scale=2,ox=0,oy=0;if(ch>=128&&ch<176){const n=Math.floor((ch-128)/4),q=(ch-128)%4;letter=n<10?48+n:n===10?46:45;scale=4;ox=-(q%2)*12;oy=-Math.floor(q/2)*16}ctx.save();ctx.beginPath();ctx.rect(x,y,12,16);ctx.clip();for(let gx=0;gx<5;gx++)for(let gy=0;gy<8;gy++)if(font[letter*5+gx]&(1<<gy))ctx.fillRect(x+ox+gx*scale,y+oy+gy*scale,scale,scale);ctx.restore()}
+for(const focused of [0,1])for(const [r,col,w,h,focus] of frame.outlines){if(focus!==focused)continue;
+const x=2+col*12,y=Math.max(0,r*16-2),width=w*12+4,height=Math.min(240,(r+h)*16+2)-y;
+ctx.fillStyle=rgb(focus?0x07ff:0x528a);ctx.fillRect(x,y,width,2);ctx.fillRect(x,y+height-2,width,2);ctx.fillRect(x,y+2,2,height-4);ctx.fillRect(x+width-2,y+2,2,height-4)}
+for(let r=0;r<15;r++)for(let col=0;col<26;col++){const style=parseInt(frame.styles[r*26+col],16),x=4+col*12,y=r*16,ch=frame.rows[r].charCodeAt(col);
+let letter=ch,scale=2,ox=0,oy=0;if(ch>=128&&ch<176){const n=Math.floor((ch-128)/4),q=(ch-128)%4;letter=n<10?48+n:n===10?46:45;scale=4;ox=-(q%2)*12;oy=-Math.floor(q/2)*16}
+const ink=Array.from({length:16},()=>Array(12).fill(false));
+for(let py=0;py<16;py++)for(let px=0;px<12;px++)for(let gx=0;gx<5;gx++)for(let gy=0;gy<8;gy++)if((font[letter*5+gx]&(1<<gy))&&px>=ox+gx*scale&&px<ox+(gx+1)*scale&&py>=oy+gy*scale&&py<oy+(gy+1)*scale)ink[py][px]=true;
+for(let py=0;py<16;py++)for(let px=0;px<12;px++){if(ink[py][px])ctx.fillStyle=rgb(palette[style&7]||palette[0]);else if((px&&ink[py][px-1])||(px<11&&ink[py][px+1])||(py&&ink[py-1][px])||(py<15&&ink[py+1][px]))ctx.fillStyle=rgb(0x10c2);else continue;ctx.fillRect(x+px,y+py,1,1)}}
+
 const readable=frame.rows.map(row=>Array.from(row,ch=>{const n=ch.charCodeAt(0);if(n<128||n>=176)return ch;const d=Math.floor((n-128)/4);return (n-128)%4?' ':d<10?String(d):d===10?'.':'-'}).join(''));
 document.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.name===name)));c.setAttribute('aria-label',(labels[name]||name)+': '+readable.join('; '));document.getElementById('text').textContent=readable.join('\\n')}
 for(const name of Object.keys(frames)){const b=document.createElement('button');b.textContent=labels[name]||name.replaceAll("-"," ");b.dataset.name=name;b.type='button';b.addEventListener('click',()=>show(name));document.querySelector('nav').appendChild(b)}show('groups');

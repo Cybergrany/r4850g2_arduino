@@ -249,9 +249,9 @@ recomputing all members on every idle loop. Commands, ACK processing, alert
 broadcasts and the protective state machines retain their existing scheduling.
 
 The local UI is separated into `UiModel` (navigation, editing, confirmations and
-operation ownership), `UiView` (320x240 layout), `UiFrame` (585-byte text/style
+operation ownership), `UiView` (320x240 layout), `UiFrame` (565-byte text/colour/outline
 scene), and the injected `Display` interface. `Ili9341Display` keeps a second
-585-byte scene cache and a 32-byte glyph raster. There is no full pixel buffer,
+565-byte scene cache, a 16-byte glyph raster and 16 bytes of changed-column masks. There is no full pixel buffer,
 heap-allocated canvas, or String-based menu. A future display can replace the
 renderer; a different resolution can also replace the layout without changing
 navigation/backend policy. SSD1306 support and its dependency are removed.
@@ -266,26 +266,42 @@ observation recycling and address changes. It resets for reboot/reset-ah or a
 changed identity, removed slot or deployment, and is never stored in EEPROM.
 
 Display initialization and the only full-screen clear run before CAN starts.
-Runtime drawing retains 8 MHz with a separate 1 MHz read cap. The renderer uses
-visible RGB565 row comparisons, ignores blank foreground changes and batches
-up to four changed scanlines per SPI transaction at 8 MHz, two at 4 MHz, one
-below. It prepares each strip before starting SPI and closes every transaction
-before continuing. Uniform strips use the driver's solid-colour writer; blank
-filled cells skip glyph expansion. A 750 us cooperative service budget bounds repeated work,
-with eight transfers maximum above 2 MHz, two at 2 MHz/below. Interrupts and one
-work unit can overrun the budget; `diag ui` reports observed maximum durations.
-Once a first strip is prepared, it may finish even if preparation consumed the
-budget, avoiding repeated discard of the same work. Subsequent strips yield.
-At 500 kHz the fallback remains one 12-pixel row and at most two transfers.
+Runtime drawing retains 8 MHz with a separate 1 MHz read cap. All selection
+indicators use two-pixel cyan outlines; unfocused controls have dim outlines.
+`UiFrame` stores nine grid rectangles in three bytes each. Three-bit text colours
+pay for that list: each scene is 565 bytes, smaller than the former 585-byte
+text/style scene. There is no additional full-scene or pixel framebuffer.
 
-`Display::invalidate()` schedules a comparison pass. `FrameChanges` compares
-cells in batches of eight with a time-budget check between batches, removing
-the old 32-cell-per-loop cap. Completed scenes require no idle scanning. A cell
-enters the painted cache only when complete; invalidation during a partial glyph
-retains a full new pass.
-The production rasterizer is tested against an independent pixel image and
-recorded SPI boundaries at five clocks. Missing display ID disables local
-controls while serial/CAN remain available. The boot clear runs before CAN RX.
+The outline renderer updates edges directly in at most 48-pixel transactions at
+8 MHz, 24 at 4 MHz, and 12 below. Moving focus recolours the old and new edges
+without changing the card/button text or interiors. Focus wins at shared edges.
+Outlines extend into the surrounding gutters; every glyph retains its original
+foreground colour and a one-pixel dark clearance wherever it meets an edge.
+
+The painted cache tracks each completed outline. An in-flight edge operation
+finishes its captured geometry before switching to a newer scene; it never
+paints untracked rectangles from transient input. A changed layout erases old
+edges, updates text, then draws the new outlines. A focus-only change prioritizes
+edges and can skip the text scan using a bounded packed-scene comparison. A
+partial glyph always finishes before an outline operation can use its text.
+These rules cover rapid reversals, overlapping controls and page replacement.
+
+Text still uses visible row/column comparisons and ignores empty foreground changes.
+Each text strip is cropped to its changed horizontal span; the 2x/4x fonts
+share identical row pairs, making room for column masks without more static RAM.
+Unchanged interiors keep the normal fast glyph path; only cells touching a
+painted outline need edge compositing. Pixels are prepared before SPI opens,
+and every transaction closes before yielding. Uniform strips use the driver's
+solid-colour writer. The 750 us cooperative budget and eight-transfer ceiling
+above 2 MHz (two below) remain. One bounded work unit or interrupt can overrun;
+`diag ui` reports the observed maximum. A prepared strip makes progress even
+if preparation consumed the budget.
+
+A cell enters the painted cache only after its required strips complete.
+Invalidation during drawing schedules another comparison; completed scenes need
+no idle scanning. The production renderer is checked against an independent
+full-pixel reference and recorded SPI boundaries at all five clocks. Missing
+display ID disables local controls while serial/CAN remain available.
 
 Foreground navigation, initial pages and notifications can use an additional
 **8 ms cooperative drawing window**, capped at twelve extra service calls.
@@ -303,8 +319,7 @@ or hard real-time guarantee. Periodic telemetry keeps one render service per
 main loop, and composition waits for an existing periodic paint to finish.
 The UI phase maximum includes the CAN/protection work performed during drawing.
 
-Text composition fills contiguous character/style ranges, preserving nibble
-neighbours and truncation. The group-current maximum is calculated exactly from
+Text composition fills contiguous character/style ranges, preserving neighbouring packed colours and truncation. The group-current maximum is calculated exactly from
 each member's ceiling and allocation rank (`ceiling * member_count + rank`),
 avoiding a binary search on every configuration-screen composition. It retains
 the same allocation rounding and limits used by `checkCurrent`.

@@ -13,8 +13,9 @@ void drawAlerts(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t) 
       if (source >= AlertManager::Count) continue;
       const auto a=c.alerts().at(source); const auto color=alertLevel(a.code)==AlertLevel::Error ? Error : Warning;
       PSU_SNPRINTF(text,sizeof(text),"%u %s %s",unsigned(a.id),source<c.count() ? "PSU" : "SYS",a.active ? "ACTIVE" : "CLEARED");
-      f.text(2+i*3,0,26,text,color | (rank==m.alertSelection() ? selectedStyle : 0));
-      f.wrap(3+i*3,5+i*3,flash(alertCause(a.code)),color);
+      f.text(2+i*3,0,26,text,color);
+      f.outline(2+i*3,0,26,3,rank==m.alertSelection());
+      f.wrap(3+i*3,4+i*3,flash(alertCause(a.code)),color);
     }
     if (!c.alerts().count()) f.text(5,0,26,UI_TEXT("No incidents"),Good);
     return;

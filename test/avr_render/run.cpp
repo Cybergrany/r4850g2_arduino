@@ -31,11 +31,12 @@ int main(int argc, char** argv) {
   }
   if (phase != 15) return 5;
   const char* names[] = {"Group highlight", "Charger highlight", "Tools highlight", "Group to charger page"};
+  const double maximumMs[] = {125, 125, 75, 900};
   for (unsigned i = 0; i < 4; ++i) {
     const auto old = 2 + i * 2, current = old + 1;
     const double oldMs = elapsed[old] / 16000.0, currentMs = elapsed[current] / 16000.0;
     std::printf("%s: one-slice=%.1f ms priority=%.1f ms (AVR CPU + nominal SPI)\n", names[i], oldMs, currentMs);
-    if (counts[old] != 1 || counts[current] != 1 || currentMs > oldMs / 3 || currentMs > (i == 2 ? 100 : 900)) return 6;
+    if (counts[old] != 1 || counts[current] != 1 || currentMs > oldMs / 3 || currentMs > maximumMs[i]) return 6;
   }
   std::puts("PASS: complete redraws; physical loaded-bus latency remains a bench check");
 }

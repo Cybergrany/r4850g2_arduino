@@ -47,7 +47,8 @@ void drawAvailability(UiFrame& f, const UiModel& m, const PsuController& c, uint
   } else if (m.page() == UiPage::AvailabilityUnits) {
     for (uint8_t p = 0; p < 2 && m.unitRank()/2*2+p < m.unitCount(); ++p) {
       const uint8_t slot = m.unitAt(m.unitRank()/2*2+p), row = 2 + p*3;
-      const uint8_t style = m.availabilitySelection() == p ? selectedStyle | Accent : Text;
+      const uint8_t style = Text;
+      f.outline(row,0,26,2,m.availabilitySelection()==p);
       PSU_SNPRINTF(text, sizeof(text), "[%c] PSU%u   %u.%02uA", (m.availabilitySelected() & (1U << slot)) ? 'x' : ' ',
           unsigned(slot+1), c.configuration().operating.current[slot]/100, c.configuration().operating.current[slot]%100);
       f.text(row, 0, 26, text, style);

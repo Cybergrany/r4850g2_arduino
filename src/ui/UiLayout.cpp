@@ -164,8 +164,10 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
         (m.page()==UiPage::AlertDetail && i==m.alertSelection()) ||
         ((m.page()==UiPage::Recovery || m.page()==UiPage::RecoveryConfirm || m.page()==UiPage::Result ||
           (m.recovering() && m.page()==UiPage::Detail)) && i==m.recoverySelection()) ||
-        (m.page()==UiPage::Config && m.field()==UiField::Tools && b[i].action.kind==ActionKind::Tools);
-    const uint8_t style=selectedStyle | (selected ? Accent : Text);
+        (m.page()==UiPage::Config && m.field()==UiField::Tools && b[i].action.kind==ActionKind::Tools) ||
+        (m.page()==UiPage::Confirm && (b[i].action.kind==ActionKind::ConfirmYes)==m.confirmingYes());
+    const uint8_t style=Text;
+    f.outline(b[i].row,b[i].col,b[i].width,b[i].height,selected);
     for (uint8_t r=b[i].row;r<b[i].row+b[i].height;++r) f.text(r,b[i].col,b[i].width,UI_TEXT(""),style);
     f.text(b[i].row+b[i].height/2,b[i].col,b[i].width,b[i].label,style);
   }
@@ -193,7 +195,8 @@ void UiLayout::extras(UiFrame& f,const UiModel& m,const PsuController& c,uint32_
     f.text(2,0,26,UI_TEXT("SIMULATION SCENARIO"),Accent);
     const auto i=m.scenarioSelection();
     f.text(5,0,26,i==uint8_t(DebugScenario::Count) ? UI_TEXT("restart: reload RAM save") :
-        i>uint8_t(DebugScenario::Count) ? UI_TEXT("reset: erase RAM saves") : scenarioName(DebugScenario(i)),selectedStyle|Accent);
+        i>uint8_t(DebugScenario::Count) ? UI_TEXT("reset: erase RAM saves") : scenarioName(DebugScenario(i)),Accent);
+    f.outline(5,0,26,1,true);
     f.text(6,0,26,PSU_ENABLE_ENCODER ? UI_TEXT("Wheel:choose Click:run") : UI_TEXT("Choose with Prev / Next"),Muted);
   }
 #endif

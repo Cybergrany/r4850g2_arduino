@@ -136,11 +136,23 @@ void simulationTests() {
   r.can.scenario(DebugScenario::Conflict); for(unsigned i=0;i<200;++i) r.step(); CHECK(r.controller.issue(0,clockNow)==Issue::Conflict);
 }
 void snapshot(const char* name,const UiFrame& frame) {
+  unsigned focused=0;
+  for (uint8_t i=0;i<frame.outlineCount();++i) { const auto o=frame.outline(i);
+    CHECK(o.valid() && o.row()+o.height()<=ui::rows && o.column()+o.width()<=ui::columns);
+    focused += o.focused();
+  }
+  CHECK(focused<=1);
+
   const char* folder=std::getenv("PSU_UI_SNAPSHOTS"); if(!folder) return;
   std::ofstream f(std::string(folder)+"/"+name+".txt",std::ios::binary); CHECK(bool(f));
   for(uint8_t row=0;row<ui::rows;++row) { for(uint8_t col=0;col<ui::columns;++col) f<<frame.cell(uint16_t(row)*ui::columns+col).character; f<<'\n'; }
   for(uint16_t i=0;i<UiFrame::cells;++i) f<<"0123456789abcdef"[frame.cell(i).style];
-  f<<'\n';
+  f<<"\n[";
+  for(uint8_t i=0;i<frame.outlineCount();++i) { const auto o=frame.outline(i);
+    if(i) f<<',';
+    f<<'['<<unsigned(o.row())<<','<<unsigned(o.column())<<','<<unsigned(o.width())<<','<<unsigned(o.height())<<','<<o.focused()<<']';
+  }
+  f<<"]\n";
 }
 struct FakeDisplay : Display {
   UiFrame shown; uint8_t remaining=0; bool dimmed=false;
@@ -248,6 +260,7 @@ void localCalibrationAndDiagnostics() {
   auto tick=[&]() { r.step(); ui.storageTick(); ui.tick(clockNow); };
   for(int i=0;i<5;++i) tick();
   snapshot("touch-calibration",display.shown);
+  CHECK(display.shown.outlineCount()==1 && display.shown.outline(0).focused());
   for(uint8_t i=0;i<5;++i) {
     const auto p=CalibrationWizard::target(i);
     input={int16_t(p.x*8),int16_t(p.y*8),1000,true};

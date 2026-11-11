@@ -4,6 +4,63 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the parallel
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Outline selection throughout the UI (2026-11-11)
+
+Groups, charger cards, settings, alerts, availability choices, recovery controls,
+buttons and calibration targets now use two-pixel outlines. The selected control
+is cyan; other controls have dim outlines. Text and status colours stay unchanged
+when focus moves. There are no filled selection backgrounds. Existing confirmation,
+acknowledgement, editor, touch-hit and CAN/protection semantics are retained.
+
+The production-renderer fixture measures these complete selection moves at 8 MHz:
+
+| Selection | Former filled pixels / transfers | Outline pixels / transfers |
+| --- | ---: | ---: |
+| Group cards | 36,864 / 768 | 2,336 / 52 |
+| Charger cards | 49,920 / 1,040 | 3,168 / 72 |
+| Two small buttons | text-colour change: 56 transfers | 1,440 / 36 |
+
+Those are transfer counts and pixel volumes, not hardware latency. Complete AVR
+instruction-level runs with nine simulated PSUs and nominal SPI costs give:
+
+| Change | Filled UI at `0d24d39` | Outline UI |
+| --- | ---: | ---: |
+| Group selection | 415.0 ms | 88.4 ms |
+| Charger selection | 552.0 ms | 85.3 ms |
+| Tools selection | 50.0 ms | 50.3 ms |
+| Group-to-charger page | 602.5 ms | 766.2 ms |
+
+Large selection moves improve substantially; small-button latency is essentially
+unchanged in this model. Full-page replacement is **slower** than the previous
+filled implementation and remains a limitation. It erases tracked old edges,
+updates text and adds the new outlines. These figures exclude physical CAN,
+encoder and serial interrupt costs; software results do not establish loaded-bus
+latency or zero receive loss. No firmware upload was performed.
+
+Validation includes:
+
+- Independent final-pixel comparisons at 500 kHz, 1, 2, 4 and 8 MHz, including
+  all **61** exported UI screens, glyphs under edges, overlapping controls, changing
+  text during drawing, rapid focus reversals, outline removal/reordering, page
+  replacement, large digits, time rollover and expensive preparation.
+- Transfers retain the same 48/24/12-pixel caps, closed SPI transactions and
+  cooperative budgets. Foreground CAN RX/thermal servicing is unchanged.
+- Compact three-bit colours, arbitrary-width writes across byte boundaries,
+  outline packing/capacity and at most one focused control in captured scenes.
+- Existing controller/storage/serial tests (**1,874,546 checks**), touch/simulator
+  workflows (**1,276 checks**), real wheel/alert input (**19,652 checks**),
+  route-search budgets, all nineteen builds and debug isolation.
+- Complete redraw AVR limits: group/charger selection below 125 ms, Tools below
+  75 ms and page replacement below 900 ms in the model. The priority path must
+  still beat one-slice scheduling by at least threefold.
+
+Two scenes now occupy **1,130 bytes**, down from 1,170. Extra renderer state fits
+within that saving: display builds use **28 fewer static RAM bytes**. Colour
+packing and the outline list do not affect EEPROM or configuration migration.
+The generated [UI preview](ui-preview.html) shows the new controls. Repeat the
+[bench comparison](#ui-redraw-bench-comparison), including selection reversals and
+full-page changes, and compare CAN receive-loss and timeout counters separately.
+
 ## Foreground redraw scheduling (2026-11-10)
 
 The next nine-responder bench log confirms a **17,854 ms** completed redraw,
@@ -246,32 +303,32 @@ A clean build retains ClickEncoder's existing constructor member-order warnings.
 
 | Profile | Static RAM (bytes / 8192) | Flash (bytes / 253952) | Static RAM headroom |
 | --- | ---: | ---: | ---: |
-| `mega2560` | 6927 | 165606 | 1265 |
+| `mega2560` | 6899 | 170768 | 1293 |
 | `mega2560_serial` | 5108 | 104796 | 3084 |
-| `mega2560_display` | 6896 | 156572 | 1296 |
-| `mega2560_local` | 5947 | 121310 | 2245 |
+| `mega2560_display` | 6868 | 161880 | 1324 |
+| `mega2560_local` | 5919 | 126690 | 2273 |
 | `mega2560_minimal` | 4144 | 50402 | 4048 |
-| `mega2560_touch` | 7129 | 174404 | 1063 |
-| `mega2560_touch_wheel` | 7160 | 175840 | 1032 |
-| `mega2560_ui_debug` | 6949 | 168324 | 1243 |
-| `mega2560_touch_debug` | 7151 | 177298 | 1041 |
-| `mega2560_touch_local` | 6149 | 127644 | 2043 |
-| `mega2560_touch_debug_local` | 6171 | 128050 | 2021 |
-| `mega2560_touch_enable` | 7129 | 174736 | 1063 |
-| `mega2560_touch_fan` | 7134 | 175382 | 1058 |
+| `mega2560_touch` | 7101 | 179702 | 1091 |
+| `mega2560_touch_wheel` | 7132 | 181148 | 1060 |
+| `mega2560_ui_debug` | 6921 | 173600 | 1271 |
+| `mega2560_touch_debug` | 7123 | 182520 | 1069 |
+| `mega2560_touch_local` | 6121 | 132892 | 2071 |
+| `mega2560_touch_debug_local` | 6143 | 133422 | 2049 |
+| `mega2560_touch_enable` | 7101 | 179914 | 1091 |
+| `mega2560_touch_fan` | 7106 | 180612 | 1086 |
 | `mega2560_serial_fan` | 5113 | 105186 | 3079 |
 | `mega2560_serial_cutoff` | 5109 | 104884 | 3083 |
-| `mega2560_touch_cutoff` | 7135 | 175546 | 1057 |
+| `mega2560_touch_cutoff` | 7107 | 180776 | 1085 |
 | `mega2560_serial_alerts` | 5110 | 105070 | 3082 |
-| `mega2560_touch_alerts` | 7137 | 175464 | 1055 |
-| `mega2560_wheel_alerts` | 6930 | 165876 | 1262 |
+| `mega2560_touch_alerts` | 7109 | 180672 | 1083 |
+| `mega2560_wheel_alerts` | 6902 | 171262 | 1290 |
 
-Compared with `8cae35c`, priority redraws add **no static RAM**. The wheel/alert build leaves **1,262 bytes** free;
-the largest profile uses **7,160 bytes**, leaving **1,032 bytes** for stack/runtime
+Compared with `0d24d39`, outline rendering saves **28 static RAM bytes** in display builds. The wheel/alert build leaves **1,290 bytes** free;
+the largest profile uses **7,132 bytes**, leaving **1,060 bytes** for stack/runtime
 use. All profiles pass the existing 1 KiB static-headroom requirement.
 
 Static RAM excludes stack/interrupt nesting. No full colour framebuffer is used;
-two text/style scenes occupy 1170 bytes. Worst-case stack and loaded display/CAN
+two text/colour/outline scenes occupy 1130 bytes. Worst-case stack and loaded display/CAN
 timing still require a hardware check. EEPROM remains within 512 bytes: two
 256-byte slots with **211-byte schema-5 records**. Calibration still uses the
 40-byte tails at 216 and 472. Schemas 2–4 remain readable with their profiles
@@ -315,7 +372,7 @@ through later telemetry refreshes; `scene-ms(last/max)` includes those refreshes
    Omit `reset` on older firmware that does not support it.
 2. Move one highlight, let it finish and capture `diag ui` / `diag bus`. Then
    turn between Tools menu choices for 30 seconds, including quick reversals.
-   Check that filled highlights move cleanly. Also exercise group-page changes,
+   Check that cyan outlines move cleanly without fragments or overwritten text. Also exercise group-page changes,
    PSU details, and editing `54.10 V` / fractional current without applying unless
    intended. Use touch release/press and wheel clicks after each navigation.
 3. While repeating highlights, sample `diag ui` and `diag bus`. Record a second
@@ -325,8 +382,8 @@ through later telemetry refreshes; `scene-ms(last/max)` includes those refreshes
    loop/receive high-water maxima are historical and are not reset by `diag ui reset`.
    Trace drops alone are diagnostic-output congestion, not CAN receive loss.
 4. Repeat the same sequence on the patched firmware. Aim for ordinary menu
-   highlight completion **below 100 ms at 8 MHz**. Large filled group tiles and
-   full-page transitions move more pixels; measure those separately. A phone
+   highlight completion **below 100 ms at 8 MHz**. Measure group/charger outlines and full-page transitions separately; page
+   replacement does substantially more work than moving focus. A phone
    video can corroborate input-to-highlight time; scene/change timings start
    after composition and end at completed drawing. Check that telemetry stays fresh and
    the established bench apply/stop cycle has no command timeouts.

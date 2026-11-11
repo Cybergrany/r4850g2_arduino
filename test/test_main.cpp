@@ -1693,11 +1693,23 @@ void presentationAndSessions() {
   CHECK(!wrap.c.freshMetric(0, protocol::OutputCurrent, old, wrap.now + 6000));
 }
 void snapshot(const char* name, const UiFrame& frame) {
+  unsigned focused=0;
+  for (uint8_t i=0;i<frame.outlineCount();++i) { const auto o=frame.outline(i);
+    CHECK(o.valid() && o.row()+o.height()<=ui::rows && o.column()+o.width()<=ui::columns);
+    focused += o.focused();
+  }
+  CHECK(focused<=1);
+
   const char* path = std::getenv("PSU_UI_SNAPSHOTS"); if (!path) return;
   std::ofstream file(std::string(path) + "/" + name + ".txt"); CHECK(bool(file));
   for (uint8_t row = 0; row < ui::rows; ++row) file << rowText(frame, row) << '\n';
   for (uint16_t i = 0; i < UiFrame::cells; ++i) file << "0123456789abcdef"[frame.cell(i).style];
-  file << '\n';
+  file << "\n[";
+  for (uint8_t i=0;i<frame.outlineCount();++i) { const auto o=frame.outline(i);
+    if (i) file << ',';
+    file << '[' << unsigned(o.row()) << ',' << unsigned(o.column()) << ',' << unsigned(o.width()) << ',' << unsigned(o.height()) << ',' << o.focused() << ']';
+  }
+  file << "]\n";
 }
 void uiLayouts() {
   char text[9]; formatValue(text, sizeof(text), 123456.7f, "W"); CHECK(std::strlen(text) <= 8 && std::strstr(text, "W"));
@@ -1724,6 +1736,7 @@ void uiLayouts() {
   while (!r.can.incoming.empty()) r.c.tick(r.now);
   r.can.incoming.push_back(broadcast(4, false)); r.c.tick(r.now);
   u.turn(1); UiView::compose(frame, u.ui, r.c, r.now); snapshot("groups", frame);
+  CHECK(frame.outlineCount()==3 && frame.outline(1).focused() && !frame.outline(0).focused());
   CHECK(rowText(frame, 0).find("40.0A") != std::string::npos && rowText(frame, 0).find("2160W") != std::string::npos);
   CHECK(rowText(frame, 2).find("GROUP1") != std::string::npos && rowText(frame, 2).find("GROUP3") != std::string::npos);
   CHECK(rowText(frame, 12).find("ERR 1/2") != std::string::npos);

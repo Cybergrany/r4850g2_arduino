@@ -15,10 +15,10 @@ void number(UiFrame& f, uint8_t row, uint8_t col, uint8_t width, float value, co
   char b[ui::columns + 1]; formatValue(b, width + 1, value, unit, decimals); f.text(row, col, width, b, style, true);
 }
 void reading(UiFrame& f, uint8_t row, uint8_t col, uint8_t width, Reading r, const char* unit, uint8_t style = Text, uint8_t decimals = 1) {
-  if (!r.valid()) { f.text(row, col, width, UI_TEXT("--"), (style & selectedStyle) | Warning, true); return; }
+  if (!r.valid()) { f.text(row, col, width, UI_TEXT("--"), Warning, true); return; }
   char b[ui::columns + 1]; formatValue(b, width + 1 - r.partial(), r.value, unit, decimals);
   if (r.partial()) strcat(b, "*");
-  f.text(row, col, width, b, r.partial() ? uint8_t((style & selectedStyle) | Warning) : style, true);
+  f.text(row, col, width, b, r.partial() ? uint8_t(Warning) : style, true);
 }
 Reading measurement(const PsuController& c, uint8_t unit, protocol::Metric metric, uint32_t now) {
   return summarize(c, 1U << unit, metric, Aggregate::Sum, now);
@@ -108,8 +108,8 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   for (uint8_t pos = 0; pos < ui::groupsPerPage; ++pos) {
     const int8_t g = m.groupAt(first + pos); if (g < 0) continue;
     const auto& group = c.configuration().groups[g]; const uint8_t col = pos * 9;
-    const uint8_t bg = g == m.group() ? selectedStyle : 0;
-    for (uint8_t row = 2; row <= (PSU_ENABLE_TOUCH ? 11 : 13); ++row) f.text(row, col, 8, UI_TEXT(""), bg);
+    const uint8_t bg = Text;
+    f.outline(2, col, 8, PSU_ENABLE_TOUCH ? 10 : 12, g == m.group());
     f.text(2, col, 8, group.name, bg | Accent);
     f.text(3, col, 8, UI_TEXT("LIVE/REQ"), bg | Muted);
     reading(f, 4, col, 8, summarize(c, group.members, protocol::OutputCurrent, Aggregate::Sum, now), "A", bg);
@@ -144,8 +144,8 @@ void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const uint8_t first = m.unitRank() / ui::unitsPerPage * ui::unitsPerPage;
   for (uint8_t pos = 0; pos < ui::unitsPerPage && first + pos < count; ++pos) {
     const uint8_t slot = m.unitAt(first + pos), row = 2 + pos * (PSU_ENABLE_TOUCH ? 5 : 6);
-    const uint8_t bg = slot == m.unit() ? selectedStyle : 0;
-    for (uint8_t r = row; r < row + 5; ++r) line(f, r, UI_TEXT(""), bg);
+    const uint8_t bg = Text;
+    f.outline(row, 0, 26, 5, slot == m.unit());
     char b[27]; PSU_SNPRINTF(b, sizeof(b), "PSU%u", unsigned(slot + 1)); f.text(row, 0, 8, b, bg | Accent);
     if (pendingSettings(c, 1U << slot)) f.text(row, 16, 10, UI_TEXT("PENDING"), bg | Warning, true);
     reading(f, row + 1, 0, 6, measurement(c, slot, protocol::OutputVoltage, now), "V", bg);
@@ -220,11 +220,12 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
 void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const auto& cfg = c.configuration(); const UnitMask mask = cfg.groups[m.group()].members;
   f.text(1, 0, 8, cfg.groups[m.group()].name, Accent); f.text(1, 9, 17, UI_TEXT("CONFIG"), Accent);
-  line(f, 3, UI_TEXT("BUS VOLTAGE - ALL GROUPS"), m.field() == UiField::Voltage ? selectedStyle | Accent : Accent);
-  line(f, 7, UI_TEXT("GROUP TOTAL CURRENT"), m.field() == UiField::Current ? selectedStyle | Accent : Accent);
+  line(f, 3, UI_TEXT("BUS VOLTAGE - ALL GROUPS"), Accent);
+  line(f, 7, UI_TEXT("GROUP TOTAL CURRENT"), Accent);
   for (uint8_t i = 0; i < 2; ++i) {
     const bool voltage = i == 0, chosen = m.field() == (voltage ? UiField::Voltage : UiField::Current);
-    const uint8_t row = voltage ? 4 : 8; const uint8_t style = chosen ? selectedStyle : 0;
+    const uint8_t row = voltage ? 4 : 8; const uint8_t style = Text;
+    f.outline(row - 1, 0, 26, 3, chosen);
     f.text(row, 0, 4, UI_TEXT("Set"), style);
     const uint16_t value = chosen && m.editing() ? m.editValue() : voltage ? cfg.voltage : cfg.groups[m.group()].current;
     if (!chosen || !m.editing() || (now / ui::blinkMs) % 2 == 0) number(f, row, 4, 8, value / 100.0f, voltage ? "V" : "A", style, 2);
@@ -237,7 +238,10 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     f.text(row + 1, 14, 1, UI_TEXT("-"), Muted);
     number(f, row + 1, 15, 11, (voltage ? limits::maxVoltage : c.groupCurrentMaximum(m.group())) / 100.0f, voltage ? "V" : "A", Muted, 2);
   }
-  if (!PSU_ENABLE_TOUCH) line(f, 11, m.recovering() ? UI_TEXT("Hold: back to incident") : UI_TEXT("Tools: turn then click"), m.field() == UiField::Tools ? selectedStyle | Accent : Muted);
+  if (!PSU_ENABLE_TOUCH) {
+    line(f, 11, m.recovering() ? UI_TEXT("Hold: back to incident") : UI_TEXT("Tools: turn then click"), Muted);
+    f.outline(11, 0, 26, 1, m.field() == UiField::Tools);
+  }
   else if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
   line(f, 12, UI_TEXT("EEPROM saved after ACKs"), Muted);
   line(f, 14, m.editing() ? UI_TEXT("Click:Apply  Hold:Cancel") : UI_TEXT("Click:Edit  Hold:Groups"), Muted);
@@ -249,7 +253,10 @@ void confirmation(UiFrame& f, const UiModel& m) {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (m.plan().missing & (1U << i))
     n += PSU_SNPRINTF(b + n, sizeof(b) - n, " %u", unsigned(i + 1));
   f.text(10, 0, 26, b);
-  line(f, 12, m.confirmingYes() ? UI_TEXT("No   > YES, APPLY PARTIAL") : UI_TEXT("> NO   Yes, apply partial"), selectedStyle | Warning);
+  if (!PSU_ENABLE_TOUCH) {
+    f.text(12, 0, 12, UI_TEXT("No / Cancel")); f.text(12, 14, 12, UI_TEXT("Yes, partial"));
+    f.outline(12, 0, 12, 1, !m.confirmingYes()); f.outline(12, 14, 12, 1, m.confirmingYes());
+  }
   line(f, 14, UI_TEXT("Click:Choose Hold:Cancel"), Muted);
 }
 void result(UiFrame& f, const UiModel& m) {

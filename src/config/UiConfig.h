@@ -7,6 +7,8 @@ constexpr uint32_t monitorPageMs = 5000, backlightIdleMs = 60000;
 constexpr uint8_t dimBrightness = 24, fullBrightness = 255;
 constexpr uint8_t groupsPerPage = 3, unitsPerPage = 2;
 constexpr uint8_t columns = 26, rows = 15, cellWidth = 12, cellHeight = 16;
+constexpr uint8_t outlineWidth = 2;
+constexpr uint16_t backgroundColor = 0x10c2, outlineColor = 0x528a, focusColor = 0x07ff;
 // Short SPI transactions, with a cooperative time budget between work units.
 // The 500 kHz fallback retains one row/burst and at most two bursts/call.
 constexpr uint16_t renderBudgetUs = 750;
