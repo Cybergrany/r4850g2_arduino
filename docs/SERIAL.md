@@ -1,5 +1,8 @@
 # Serial lifecycle on the Mega 2560
 
+See [scoped settings and profiles](PROFILES.md) for `set`, `preview`, `apply`,
+`profiles`, `profile save/load/show`, optional participation and `diag memory`.
+
 For `diag startup`, whole-group/individual absence acceptance, remembered
 exceptions, returned-unit inclusion, commissioning probe and immediate AC stop,
 see [STARTUP.md](STARTUP.md). `startup accept/include/require GROUP|slots

@@ -25,12 +25,11 @@ Reading sessionTotal(const PsuController& c, UnitMask mask) {
 }
 bool pendingSettings(const PsuController& c, UnitMask mask) {
   const auto& cfg = c.configuration();
-  if (!cfg.operating.voltageAuthorized || cfg.voltage != cfg.operating.voltage) return true;
   for (uint8_t i = 0; i < c.count(); ++i) if (mask & (1U << i)) {
     const int8_t group = groupFor(cfg, i);
-    if (!c.voltageSynchronized(i) || !c.currentSynchronized(i) ||
+    if (!(cfg.operating.voltageMask & (1U << i)) || cfg.voltage[i] != cfg.operating.voltage[i] || !c.voltageSynchronized(i) || !c.currentSynchronized(i) ||
         !(cfg.operating.currentMask & (1U << i)) || group < 0 ||
-        allocation(cfg.groups[group], i) != cfg.operating.current[i]) return true;
+        cfg.current[i] != cfg.operating.current[i]) return true;
   }
   return false;
 }

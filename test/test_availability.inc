@@ -125,7 +125,7 @@ void availabilityDecisionsAndStorage() {
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
   while(memory.saving()) { memory.stepSave(); r.step(1); }
   r.step(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.acceptedAbsent==0);
-  CHECK(loaded.groups[0].current==5000 && loaded.operating.current[0]==1000);
+  CHECK(groupCurrent(loaded, 0)==5000 && loaded.operating.current[0]==1000);
   // Session permission does not leak into an ordinary save.
   p=r.c.previewAvailability(AvailabilityAction::Accept,2,false,r.now); CHECK(p.blocker==Issue::None);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
@@ -150,14 +150,14 @@ void availabilityDecisionsAndStorage() {
   // Every interrupted byte preserves either the old complete decision or the new one.
   FakeEeprom journal; MemoryManager journalMemory(journal); auto old=authorized(); old.acceptedAbsent=1;
   CHECK(journalMemory.save(old)==StorageResult::Ok); const auto baseline=journal.bytes;
-  auto next=old; next.acceptedAbsent=2; next.groups[0].current=4400;
+  auto next=old; next.acceptedAbsent=2; draftGroupCurrent(next, 0, 4400);
   for(int cut=0;cut<218;++cut) {
     journal.bytes=baseline; journal.stopAfter=cut; journal.calls=0;
     try { MemoryManager writing(journal); writing.save(next); } catch(const PowerCut&) {}
     journal.stopAfter=-1; MemoryManager reading(journal); Configuration value=defaultConfiguration();
     CHECK(reading.load(value)==StorageResult::Ok);
-    CHECK((value.acceptedAbsent==1 && value.groups[0].current==old.groups[0].current) ||
-          (value.acceptedAbsent==2 && value.groups[0].current==4400));
+    CHECK((value.acceptedAbsent==1 && groupCurrent(value, 0)==groupCurrent(old, 0)) ||
+          (value.acceptedAbsent==2 && groupCurrent(value, 0)==4400));
   }
   // Schema 2 migrates without an absence exception; reserved bits stay validated.
   journal.bytes=parallelRecord(old,2).bytes;

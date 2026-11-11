@@ -87,10 +87,9 @@ not an import command.
 Production calibration is independent of PSU/group/deployment configuration.
 Two 40-byte records occupy EEPROM addresses **216–255** and **472–511**, the
 unused tails of the existing slots. Version, CRC, sequence, panel profile and
-rotation validate the records. The charger record is schema 5, 211 bytes at nine
-PSU slots, within the existing 216-byte reservation; old charger records remain readable. Compile-time bounds prevent
-future overlap. Both writers share one readiness-aware byte-write scheduler.
-This still uses only the first **512 EEPROM bytes**.
+rotation validate the records. Schema-6 charger records and named profiles use
+separate locations from address 512 onward. All writers share the same readiness-
+aware byte-write gate. [Full EEPROM map and migration](PROFILES.md).
 
 Change `touch::profile` when replacing the panel, or explicitly recalibrate.
 Changing display rotation invalidates the saved transform. A firmware update
@@ -145,7 +144,10 @@ with its MIT notice retained in `Xpt2046Input.cpp`.
 
 ## Simulation scenarios
 
-Debug startup seeds nine bound units across four groups (3/2/2/2 members).
+AVR debug builds seed four bound units across two groups (3/1 members), leaving
+RAM for all eight profile slots. Host tests use nine units across four groups.
+Production Mega profiles continue to support nine units. Serial regrouping can
+exercise four one-unit groups and overview pagination in the AVR simulator.
 It performs normal simulated identity checks and restores the fixture's
 operating settings, including output-readiness qualification, before introducing
 a scenario. Reconciliation includes
@@ -186,7 +188,7 @@ starts from the same commissioned fixture. Names and expected exercises:
 | `unbound`, `unassigned` | Missing binding or source-group assignment |
 | `conflict`, `replacement` | Duplicated identity or a different identity at PSU 2's address |
 | `not-ready` | PSU 2 broadcasts a not-ready status |
-| `voltage-unsynced` | Loaded draft with no runtime voltage ACKs; apply global voltage before group current |
+| `voltage-unsynced` | Loaded draft with no runtime voltage ACKs; OFF apply prepares for the next ON |
 | `reject`, `timeout`, `identity-timeout`, `transport` | Rejected settings, missing setting/identity ACKs or failed sends; submit an apply |
 | `partial-failure` | PSU 2 rejects while other members can accept |
 | `save-failed` | PSUs accept; RAM storage fails verification |
@@ -220,13 +222,17 @@ commands accept `all` or a group and change runtime power without rebuilding.
 including local Apply & save. There is no automatic rollback of accepted simulated
 writes, just as with real PSUs.
 
-`save` and local Apply & save use the real storage manager against a **512-byte
-RAM-backed byte device**. `load` and `ui-debug restart` exercise readback;
-restart falls back to fixtures if no valid saved configuration exists. `reset`
-erases RAM saves and restores fixtures (the current in-memory touch transform
-remains usable until hardware reset). Physical reset/power loss discards all
-simulated saves, including calibration. Production EEPROM is never read or
-written by a debug build. Calibrate again after first switching to production.
+`save`, profile operations and local Apply & save use the real storage manager
+against volatile RAM. AVR debug storage retains the latest copy of each controller
+or profile record and both calibration copies. This compact adapter supports all
+eight profiles but does **not** model survival of interrupted journal replacement;
+the host tests use the full 4096-byte device for that guarantee. The compact
+mapping has its own host test (`tools/test_sim_storage.py`).
+
+`load` and `ui-debug restart` exercise readback; reset restores fixtures and erases
+RAM saves. Physical reset/power loss discards all simulated saves and calibration.
+No physical EEPROM, CAN or power-output backend is linked in debug builds.
+Calibrate again after first switching to production.
 
 ## Validation and limits
 

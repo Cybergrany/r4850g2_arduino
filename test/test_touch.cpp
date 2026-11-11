@@ -1,3 +1,4 @@
+#include "config_helpers.h"
 #include "ui/LocalUi.h"
 #include "ui/UiLayout.h"
 #include "debug/Simulator.h"
@@ -71,7 +72,7 @@ void calibrationStorage() {
   CHECK(mem.startSave(cfg)==StorageResult::Busy);
   while(store.saving()) { const auto before=bytes.writes; store.step(); CHECK(bytes.writes-before<=1); }
   CHECK(store.result()==StorageResult::Ok); TouchCalibration loaded; CHECK(store.load(loaded));
-  Configuration after; CHECK(mem.load(after)==StorageResult::Ok); CHECK(after.voltage==cfg.voltage);
+  Configuration after; CHECK(mem.load(after)==StorageResult::Ok); CHECK(after.voltage[0]==cfg.voltage[0]);
   for(uint16_t i=0;i<512;++i) if(i<216 || (i>=256 && i<472)) CHECK(bytes.read(i)==original.read(i));
   const auto baseline=bytes;
   c.coefficient[2]=65536*3;
@@ -84,7 +85,7 @@ void calibrationStorage() {
     try { while(trial.saving()) trial.step(); } catch(int) {}
     bytes.remaining=-1; MemoryManager reboot(bytes); CalibrationStore reader(bytes,reboot);
     TouchCalibration value; CHECK(reader.load(value)); CHECK(value.coefficient[2]==0 || value.coefficient[2]==3*65536);
-    CHECK(reboot.load(after)==StorageResult::Ok && after.voltage==cfg.voltage);
+    CHECK(reboot.load(after)==StorageResult::Ok && after.voltage[0]==cfg.voltage[0]);
   }
   bytes=baseline; MemoryManager brokenMem(bytes); CalibrationStore broken(bytes,brokenMem); bytes.failWrites=true;
   CHECK(broken.start(c)==StorageResult::Ok); while(broken.saving()) broken.step(); CHECK(broken.result()==StorageResult::WriteFailed);
@@ -107,7 +108,7 @@ void gestures() {
 struct Rig {
   SimulatedCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
   Rig():controller(can),memory(bytes) { can.reset(); CHECK(controller.configure(debugConfiguration(),true)==Result::Ok); CHECK(controller.begin()); }
-  void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); controller.serviceProtection(memory,clockNow); memory.stepSave(); controller.serviceProtection(memory,clockNow); }
+  void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); controller.serviceProtection(memory,clockNow); memory.stepSave(); controller.profileTick(memory); controller.serviceProtection(memory,clockNow); }
   void ready() {
     for(unsigned i=0;i<4000 && (controller.report().succeeded!=membersMask(controller.count()) || controller.busy() ||
         controller.controlStatus(clockNow).activity!=Activity::Running);++i) step();
@@ -195,11 +196,11 @@ void layoutAndLocalUi() {
   model.action(a,clockNow); UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-chargers",frame);
   model.action({ActionKind::Next},clockNow); CHECK(model.unitRank()==2);
   model.action({ActionKind::Configure},clockNow); model.action({ActionKind::EditCurrent},clockNow);
-  CHECK(model.page()==UiPage::Editor && model.editing()); const auto old=r.controller.configuration().groups[0].current;
+  CHECK(model.page()==UiPage::Editor && model.editing()); const auto old=groupCurrent(r.controller.configuration(), 0);
   model.action({ActionKind::Adjust,32000},clockNow); CHECK(model.editValue()==model.maximum());
   UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-editor",frame);
-  CHECK(r.controller.configuration().groups[0].current==old);
-  model.action({ActionKind::Cancel},clockNow); CHECK(!model.editing() && r.controller.configuration().groups[0].current==old);
+  CHECK(groupCurrent(r.controller.configuration(), 0)==old);
+  model.action({ActionKind::Cancel},clockNow); CHECK(!model.editing() && groupCurrent(r.controller.configuration(), 0)==old);
   model.action({ActionKind::Tools},clockNow); UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-tools",frame);
   model.action({ActionKind::Scenarios},clockNow); UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-scenarios",frame);
   CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
@@ -208,15 +209,17 @@ void layoutAndLocalUi() {
   auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; for(int i=0;i<5;++i) tick(); input={}; for(int i=0;i<12;++i) tick(); };
   for(int i=0;i<10;++i) tick();
   tap(40,80); // group -> chargers
-  tap(112,216); // config
+  tap(112,216); // config menu
+  tap(80,80); // configure group
+  tap(40,48); // selected group
   tap(80,128); // current -> editor
   CHECK(ui.editing());
   // A held opening touch must not flow into the +/- control of the editor.
   tap(280,100); // plus
   input={280*8,100*8,1000,true}; for(int i=0;i<35;++i) tick(); input={}; for(int i=0;i<5;++i) tick();
-  CHECK(r.controller.configuration().groups[0].current==old);
+  CHECK(groupCurrent(r.controller.configuration(), 0)==old);
   tap(50,216); // cancel
-  CHECK(r.controller.configuration().groups[0].current==old);
+  CHECK(groupCurrent(r.controller.configuration(), 0)==old);
   CHECK(!ui.editing());
   snapshot("touch-local",display.shown);
   tap(80,128); CHECK(ui.editing()); tap(280,100);
@@ -226,7 +229,7 @@ void layoutAndLocalUi() {
   tap(230,216); CHECK(!ui.editing());
   for(int i=0;i<400;++i) tick();
   Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok);
-  CHECK(saved.groups[0].current==old+100);
+  CHECK(groupCurrent(saved, 0)==old+100);
   CHECK(r.controller.report().failed==0 && r.controller.report().succeeded==7);
   snapshot("touch-saved",display.shown);
   // Actual touch hit boxes: whole-source acceptance, verified save and rejoin.
@@ -274,9 +277,9 @@ void localCalibrationAndDiagnostics() {
   Capture out; char cmd[]="touch", debug[]="debug", on[]="on"; char* argv[]={cmd,debug,on};
   CHECK(ui.command(3,argv,out,clockNow)); for(int i=0;i<5;++i) tick();
   input={40*8,145*8,1000,true}; for(int i=0;i<30;++i) tick();
-  const auto before=r.controller.configuration().groups[0].current;
+  const auto before=groupCurrent(r.controller.configuration(), 0);
   snapshot("touch-diagnostics",display.shown);
-  input={}; for(int i=0;i<5;++i) tick(); CHECK(r.controller.configuration().groups[0].current==before);
+  input={}; for(int i=0;i<5;++i) tick(); CHECK(groupCurrent(r.controller.configuration(), 0)==before);
   char status[]="status"; char* stat[]={cmd,status}; out.value.clear(); CHECK(ui.command(2,stat,out,clockNow));
   CHECK(out.value.find("calibrated=1")!=std::string::npos && out.value.size()<256);
   // A local apply continues to its save/result even if calibration is requested.
@@ -292,13 +295,51 @@ bool hasText(const UiFrame& f,const char* text) {
   for(uint16_t i=0;i<UiFrame::cells;++i) all+=f.cell(i).character;
   return all.find(text)!=std::string::npos;
 }
+void scopedProfileTouchWorkflow() {
+  Rig r; r.ready(); CHECK(r.controller.setAutoResume(false)==Result::Ok);
+  for (unsigned i=0;i<1200;++i) r.step();
+  r.controller.alerts().acknowledgeAll();
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; wheel={}; ui.begin();
+  auto tick=[&](unsigned n) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
+  auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
+  tick(20); tap(40,80); tap(112,216); // Chargers -> config menu.
+  CHECK(hasText(display.shown,"Configure individual"));
+  tap(100,176); tap(40,48); // Save Config -> slot 1.
+  CHECK(hasText(display.shown,"No (targets only)"));
+  tap(150,96); CHECK(hasText(display.shown,"[X] Yes"));
+  tap(150,144); tap(240,160); // Edit name, increment first character.
+  CHECK(hasText(display.shown,"QROFILE 1"));
+  tap(50,216); CHECK(hasText(display.shown,"PROFILE 1")); // Cancel restores it.
+  tap(150,144); tap(240,160); tap(230,216); tap(230,216); // Name Done, review.
+  CHECK(hasText(display.shown,"Store participation: YES"));
+  snapshot("touch-profile-save-review",display.shown);
+  tap(230,216); CHECK(r.memory.saving());
+  // An alert arriving during the named save cannot replace its completion owner.
+  r.controller.alerts().set(AlertManager::Receive,AlertCode::ReceiveLoss,clockNow);
+  ui.tick(clockNow); tick(8); CHECK(hasText(display.shown,"Acknowledge"));
+  tap(75,216); tick(200);
+  CHECK(hasText(display.shown,"PROFILE SAVED"));
+  ProfileInfo info; CHECK(r.memory.profileInfo(0,info)==StorageResult::Ok && info.hasInclusion && !std::strcmp(info.name,"QROFILE 1"));
+  tap(75,216); tap(150,216); // Result -> slots -> menu.
+  tap(100,144); tap(40,48); // Load Config -> slot 1.
+  CHECK(hasText(display.shown,"No (targets only)")); // Restore remains opt-in.
+  tap(230,216); snapshot("touch-profile-load-review",display.shown);
+  CHECK(r.controller.set({ScopeKind::Unit,0},SettingFields::Voltage,5500)==Result::Ok);
+  tap(230,216); tick(10); CHECK(hasText(display.shown,"CHANGED")); // Serial edit invalidated the review.
+  CHECK(!r.memory.saving() && r.controller.configuration().voltage[0]==5500);
+  tap(75,216); tap(40,48); tap(230,216); tap(230,216); tick(350);
+  CHECK(!r.controller.enableControl().enabled());
+  CHECK(r.controller.configuration().voltage[0]==5400);
+  Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok && saved.voltage[0]==5400);
+}
 void thermalTouchWorkflow() {
   Rig r; r.ready(); CHECK(r.memory.save(r.controller.configuration())==StorageResult::Ok);
   CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
   FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; ui.begin();
   auto tick=[&](unsigned n) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
   auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
-  tick(20); tap(40,80); tap(112,216); tap(80,128); CHECK(ui.editing());
+  tick(20); tap(40,80); tap(112,216); tap(80,80); tap(40,48); tap(80,128); CHECK(ui.editing());
   input={230*8,216*8,1000,true}; tick(1); // Captured Apply must not become Acknowledge.
   r.can.temperatures(30,70); tick(130); input={}; tick(15);
   CHECK(ui.editing() && r.controller.thermalStatus().percent==30);
@@ -417,7 +458,9 @@ void applicationScenarios() {
     // preserve the page rather than consume the next tap as navigation.
     command("alerts ack all"); tap(40,80); command("alerts ack all");
     tap(112,216); command("alerts ack all");
-    CHECK(hasText(appFrame,"BUS VOLTAGE - ALL GROUPS"));
+    CHECK(hasText(appFrame,"Configure group"));
+    tap(80,80); command("alerts ack all"); tap(40,48); command("alerts ack all");
+    CHECK(hasText(appFrame,"GROUP VOLTAGE"));
     tap(80,128); command("alerts ack all");
   };
   tick(1600); CHECK(Serial.output.find("SIM:")!=std::string::npos);
@@ -441,7 +484,7 @@ void applicationScenarios() {
     if (Serial.output.find("ERR ")!=std::string::npos) throw std::runtime_error(std::string("Scenario ")+scenarioName(DebugScenario(s)).data+": "+Serial.output);
     CHECK(hasText(appFrame,"SIM"));
     if (DebugScenario(s)==DebugScenario::Empty) {
-      CHECK(hasText(appFrame,"No groups configured")); wheel={0,false,true}; tick(5); CHECK(hasText(appFrame,"TOOLS"));
+      CHECK(hasText(appFrame,"No groups configured")); wheel={0,false,true}; tick(5); CHECK(hasText(appFrame,"CONFIGURATION"));
     } else if (DebugScenario(s)==DebugScenario::Missing) CHECK(hasText(appFrame,"ERR 1/3"));
     else if (DebugScenario(s)==DebugScenario::BusOffline) CHECK(hasText(appFrame,"ERR 3/3"));
     else if (DebugScenario(s)==DebugScenario::Extremes) CHECK(hasText(appFrame,"LONGGRP1"));
@@ -460,7 +503,7 @@ void applicationScenarios() {
         snapshot("touch-confirm",appFrame); tap(230,216); tick(600);
         CHECK(hasText(appFrame,"PARTIAL APPLY SAVED")); snapshot("touch-partial",appFrame); break;
       case DebugScenario::VoltageUnsynced:
-        editCurrent(); tap(230,216); tick(100); CHECK(hasText(appFrame,"APPLY BLOCKED")); break;
+        editCurrent(); tap(230,216); tick(600); CHECK(hasText(appFrame,"PREPARED FOR NEXT ON")); break;
       case DebugScenario::SaveChanged: case DebugScenario::SaveFailed:
       case DebugScenario::Reject: case DebugScenario::Timeout: case DebugScenario::Transport: case DebugScenario::Partial:
         editCurrent(); tap(280,100); tap(230,216); tick(600); command("alerts ack all");
@@ -539,6 +582,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

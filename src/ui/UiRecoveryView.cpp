@@ -74,14 +74,14 @@ void drawRecovery(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t
     if (m.availableRecoveryCommand() == RecoveryCommand::None) line(f, 10, UI_TEXT("Both sensors must be fresh"), Muted);
   } else if (kind == RecoveryKind::Storage) {
     line(f, 1, UI_TEXT("REVIEW RAM BEFORE SAVE"), Accent);
-    PSU_SNPRINTF(text, sizeof(text), "Draft V %u.%02u", cfg.voltage/100, cfg.voltage%100); f.text(2, 0, 26, text);
-    if (cfg.operating.voltageAuthorized) {
-      PSU_SNPRINTF(text, sizeof(text), "Auth V %u.%02u", cfg.operating.voltage/100, cfg.operating.voltage%100); f.text(3, 0, 26, text);
+    PSU_SNPRINTF(text, sizeof(text), "Draft V %u.%02u", cfg.voltage[slot]/100, cfg.voltage[slot]%100); f.text(2, 0, 26, text);
+    if ((cfg.operating.voltageMask & (1U << slot))) {
+      PSU_SNPRINTF(text, sizeof(text), "Auth V %u.%02u", cfg.operating.voltage[slot]/100, cfg.operating.voltage[slot]%100); f.text(3, 0, 26, text);
     } else line(f, 3, UI_TEXT("Voltage not authorized"), Warning);
     PSU_SNPRINTF(text, sizeof(text), "Enable %s Excluded 0x%02X", cfg.autoResume ? "ON" : "OFF", cfg.acceptedAbsent); f.text(4, 0, 26, text);
     const int8_t group = groupFor(cfg, slot);
     PSU_SNPRINTF(text, sizeof(text), "PSU %u / %.8s", unsigned(slot+1), group >= 0 ? cfg.groups[group].name : "no group"); f.text(5, 0, 26, text);
-    const auto draft = group >= 0 ? allocation(cfg.groups[group], slot) : 0;
+    const auto draft = cfg.current[slot];
     PSU_SNPRINTF(text, sizeof(text), "Draft A %u.%02u", draft/100, draft%100); f.text(6, 0, 26, text);
     if (cfg.operating.currentMask & (1U << slot)) {
       PSU_SNPRINTF(text, sizeof(text), "Auth A %u.%02u", cfg.operating.current[slot]/100, cfg.operating.current[slot]%100); f.text(7, 0, 26, text);

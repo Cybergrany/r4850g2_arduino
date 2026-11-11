@@ -1,10 +1,10 @@
 // Real-controller regressions for the G2 bench trace: fresh CAN/AC, zero current,
 // 0x0183 = 0x400/0x600, with an output-ready flag that drops while held at zero.
 Configuration zeroHoldConfiguration(bool resume = false) {
-  auto c = installation(1); c.groups[0].current = 500;
+  auto c = installation(1); draftGroupCurrent(c, 0, 500);
   c.autoResume = resume;
   if (resume) {
-    c.operating.voltageAuthorized = true; c.operating.voltage = 5400;
+     authorizedVoltage(c, 5400);
     c.operating.voltageMask = c.operating.currentMask = 1; c.operating.current[0] = 500;
   }
   return c;

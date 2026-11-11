@@ -60,7 +60,7 @@ UnitMask PsuController::availabilityAttention(uint32_t now) const {
     if (g < 0 || !availabilitySettled(g, now)) continue;
     const auto reason = availabilityReason(i, now); const UnitMask bit = UnitMask(1U << i);
     if (((reason == AvailabilityReason::NoCan || reason == AvailabilityReason::NoAc) && !(acceptedAbsences() & bit)) ||
-        (reason == AvailabilityReason::Ready && (excluded_ & bit))) attention |= bit;
+        (reason == AvailabilityReason::Ready && (excluded_ & bit) && !(config_.disabled & bit))) attention |= bit;
   }
   return attention;
 }
@@ -129,7 +129,7 @@ void PsuController::applyAvailability(const AvailabilityPlan& p) {
     sessionAccepted_ |= p.selected; sessionRequired_ &= UnitMask(~p.selected); excluded_ |= p.selected;
     if (p.remember) config_.acceptedAbsent |= p.selected;
   } else if (p.action == AvailabilityAction::Include) {
-    excluded_ &= UnitMask(~p.selected);
+    excluded_ &= UnitMask(~p.selected); config_.disabled &= UnitMask(~p.selected);
     restorePending_ |= p.selected & config_.operating.voltageMask;
     running_ |= p.selected & config_.operating.voltageMask;
   } else if (p.action == AvailabilityAction::Require) {
@@ -154,10 +154,8 @@ Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManag
   ++availabilityReport_.sequence; availabilityReport_.remembered = false;
   availabilityReport_.storage = StorageResult::Ok; availabilityReport_.result = Result::Ok;
   if (!p.remember) { applyAvailability(p); return Result::Ok; }
-  Configuration snapshot = config_;
-  if (p.action == AvailabilityAction::Accept) snapshot.acceptedAbsent |= p.selected;
-  else snapshot.acceptedAbsent &= UnitMask(~p.selected);
-  availabilityReport_.storage = memory.startSave(snapshot);
+  const UnitMask accepted = p.action == AvailabilityAction::Accept ? config_.acceptedAbsent | p.selected : config_.acceptedAbsent & UnitMask(~p.selected);
+  availabilityReport_.storage = memory.startAvailabilitySave(config_, accepted);
   if (availabilityReport_.storage != StorageResult::Ok) {
     storageStatus(availabilityReport_.storage);
     availabilityReport_.result = Result::Blocked; return Result::Blocked;

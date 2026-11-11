@@ -11,11 +11,11 @@ sources = [
     'src/psu/PsuAvailability.cpp', 'src/io/ChargeAllowOutput.cpp', 'src/io/PsuActiveOutput.cpp',
     'src/ui/UiAvailability.cpp',
     'src/config/ChargerConfig.cpp', 'src/protocol/HuaweiProtocol.cpp',
-    'src/psu/PsuControl.cpp', 'src/psu/Psu.cpp', 'src/psu/Discovery.cpp', 'src/psu/PsuController.cpp',
+    'src/psu/PsuControl.cpp', 'src/psu/Psu.cpp', 'src/psu/Discovery.cpp', 'src/psu/PsuController.cpp', 'src/psu/PsuProfiles.cpp',
     'src/psu/Presentation.cpp', 'src/storage/MemoryManager.cpp',
-    'src/ui/UiModel.cpp', 'src/ui/UiFrame.cpp', 'src/ui/UiView.cpp',
-    'src/ui/UiLayout.cpp', 'src/ui/Touch.cpp', 'src/ui/LocalUi.cpp',
-    'src/debug/Simulator.cpp', 'src/ui/SerialConsole.cpp', 'src/ui/SerialAlerts.cpp', 'src/io/FanOutput.cpp', 'src/app/Application.cpp', 'test/test_touch.cpp',
+    'src/ui/UiModel.cpp', 'src/ui/UiSettings.cpp', 'src/ui/UiFrame.cpp', 'src/ui/UiView.cpp',
+    'src/ui/UiLayout.cpp', 'src/ui/UiSettingsView.cpp', 'src/ui/Touch.cpp', 'src/ui/LocalUi.cpp',
+    'src/debug/Simulator.cpp', 'src/ui/SerialConsole.cpp', 'src/ui/SerialProfiles.cpp', 'src/ui/SerialAlerts.cpp', 'src/io/FanOutput.cpp', 'src/app/Application.cpp', 'test/test_touch.cpp',
 ]
 with tempfile.TemporaryDirectory(prefix='r4850-touch-') as folder:
     binary = str(Path(folder) / 'test')

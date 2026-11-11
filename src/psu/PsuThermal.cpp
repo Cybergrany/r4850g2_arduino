@@ -168,8 +168,7 @@ void PsuController::serviceProtection(MemoryManager& memory, uint32_t now) {
   if (memory.completedToken() != storageSeenToken_) {
     storageSeenToken_ = memory.completedToken(); storageStatus(memory.completedResult());
     if (protectionFailed_ && memory.completedResult() == StorageResult::Ok && !memory.saving()) {
-      Configuration saved;
-      if (memory.load(saved) == StorageResult::Ok && saved.thermalStop == config_.thermalStop && !saved.autoResume)
+      if (memory.persistedProtection(config_.thermalStop))
         protectionFailed_ = false;
     }
   }
@@ -186,6 +185,7 @@ void PsuController::serviceProtection(MemoryManager& memory, uint32_t now) {
       protectionDirty_ = savingStop_ != config_.thermalStop || resumePending_;
     }
   }
+  if (!protectionToken_ && protectionDirty_) memory.cancelProfileSave();
   if (!protectionToken_ && protectionDirty_ && !memory.saving()) {
     savingStop_ = resumePending_ && cool_ ? ThermalStop::None : config_.thermalStop;
     const auto result = memory.startProtectionSave(savingStop_);

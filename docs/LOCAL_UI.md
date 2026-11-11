@@ -72,10 +72,9 @@ Reads temporarily use the lower of `displaySpiHz` and `displayReadMaxSpiHz`
 (default cap 1 MHz), then restore the drawing speed even if the ID is wrong.
 This lets drawing run faster without exceeding the stricter read timing.
 
-A missing-members alert has one **Acknowledge** button, so rotating the wheel
-does not change its selection. Release the wheel button, then short-press and
+A missing-members alert offers **Acknowledge** and **Config**. Acknowledge starts selected; Config opens the relevant availability review. Release the wheel button, then short-press and
 release to dismiss the notification. This does not accept missing PSUs or enable
-charging; those decisions remain in Tools → Startup. A press already in progress
+charging; those decisions remain explicit confirmations in Config or Tools → Startup. A press already in progress
 when an alert appears is discarded until the button has been released for 50 ms
 and a new press begins.
 
@@ -89,22 +88,24 @@ discover devices, bind stable identities/ratings, and create disjoint groups.
 The UI deliberately does not adopt replacement identities or edit membership.
 An empty installation shows `No groups configured` with a serial setup prompt.
 
-For initial local operation, enter a group's configuration and apply **bus
-voltage first**, with every required participant ready. Review unavailable
-members through the startup workflow below. Then apply that group's total
-current. Alternatively, complete the initial `apply all` using serial. Applying
-bus voltage alone never activates staged currents from other groups.
+For initial local operation, use the configuration menu to prepare voltage and
+current for all required participants. OFF preparation keeps zero hold; the next
+explicit ON still requires valid authorization, reconciliation and availability.
+Field-only edits do not activate other drafts. See [scoped settings](PROFILES.md).
 
 ## Controls
 
 | Screen | Turn | Short press | Hold (about 1.2 seconds) |
 | --- | --- | --- | --- |
-| Groups | Select group, paging after three | Open its chargers | Group configuration |
+| Groups | Select group, paging after three | Open its chargers | Five-choice configuration menu |
 | Chargers | Select PSU, paging after two | Details / error explanation | Return to groups |
 | Details | No action | Return to charger list | Return to groups |
+| Configuration menu / selectors | Select scope, group, PSU or profile | Open selection | Back |
 | Configuration | Select voltage, current or Tools | Begin editing / open Tools | Return to groups |
 | Tools / startup | Select an action | Open / review / confirm | Back |
-| Editing | Adjust the flashing value | Apply and save | Discard uncommitted edit; return to groups |
+| Editing | Adjust the flashing value | Apply and save; global edits open a review | Discard uncommitted edit |
+| Profile name | Select character or Done/Cancel; adjust selected character | Toggle character editing / Done / Cancel | Discard name edits |
+| Profile options / review | Select inclusion, name or review / Cancel or confirm | Activate selection | Back |
 | Missing-member warning | Select No / Yes | Confirm choice | Cancel and return to groups |
 | Operation/result | No action | Return to configuration when finished | Return to groups; submitted work continues |
 
@@ -112,8 +113,9 @@ The original group selection is retained when returning. Holding does not also
 emit a short-click action. Edit steps default to 0.1 V and 0.5 A; wheel adjustment
 stops at backend limits, including the exact group capacity for its commissioned
 member ratings and equal-share rounding. Values are revalidated before applying.
-When no groups exist yet, holding on the group screen opens Tools for startup
-diagnostics and commissioning power.
+When no groups exist yet, the menu still opens; the group selector explains
+that group creation is a serial operation. Tools remains available from the
+overview for startup diagnostics and commissioning power.
 
 Serial remains available throughout navigation. A configuration change during
 an edit invalidates it, rather than applying an obsolete value. A confirmation
@@ -122,8 +124,9 @@ also expires after 15 seconds or a topology/configuration change.
 ## Reading the screens
 
 The top bar is **measured V, measured total A, measured total output W** across
-all configured slots, not just the visible group/page. Voltage is the mean of
-fresh PSU output-voltage readings, not a separate bus sensor or the setpoint.
+all configured slots, not just the visible group/page. Voltage shows the common
+fresh reading, or `V:MIX` when readings differ; individual details show each
+unit's voltage. It is not a separate bus sensor or the setpoint.
 Current and output power are sums of their respective telemetry registers;
 power is not reconstructed from V x A. Unconfigured/unbound responders are not
 silently added to these totals; use `diag bus` when commissioning.
@@ -159,15 +162,16 @@ No Ah history is written to EEPROM. The approximation is not a battery fuel gaug
 
 ## Apply, failure and persistence
 
-The editor explicitly labels **BUS VOLTAGE - ALL GROUPS**. A voltage commit sends
-the shared voltage to participating PSUs and authorizes it for excluded members'
-approved return; it has no one-operation partial-voltage override.
-A current commit stages the group's total and applies its original equal shares.
+Long-press a group for global, group, individual, Load Config and Save Config
+choices. The editor labels the scope; global current is **TOTAL PER GROUP**.
+Mixed values and custom shares are explicit. A field commit changes only that
+field. OFF prepares targets for the next ON. Global application and profile
+save/load have Cancel-first reviews. See [the settings/profile guide](PROFILES.md).
 
 The UI shows `APPLYING` while the backend verifies identities and waits for ACKs.
 After every intended recipient accepts, it snapshots configuration and shows
-`SAVING EEPROM`, then `APPLIED AND SAVED`. The save uses the existing 512-byte
-journal/schema and progresses one byte per service step. Serial and CAN can
+`SAVING EEPROM`, then `APPLIED AND SAVED`. The save uses the schema-6 controller
+journal in the Mega EEPROM and progresses one byte per service step. Serial and CAN can
 continue between writes. It saves the whole configuration, including other
 staged drafts; that does not apply those drafts. Serial `apply` still requires a
 separate serial `save`.

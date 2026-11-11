@@ -55,7 +55,7 @@ FlashText shortIssue(Issue issue) {
     case Issue::Cutoff: return UI_TEXT("AC INHIBITED / FAULT");
     case Issue::NoParticipants: return UI_TEXT("NO ACTIVE UNITS");
     case Issue::ReadinessPending: return UI_TEXT("VERIFYING OUTPUT READY");
-    case Issue::VoltageUnsynced: return UI_TEXT("APPLY BUS VOLTAGE FIRST");
+    case Issue::VoltageUnsynced: return UI_TEXT("APPLY PSU VOLTAGE FIRST");
     case Issue::DeploymentMismatch: return UI_TEXT("WRONG DEPLOYMENT");
     case Issue::Busy: return UI_TEXT("BUSY");
     case Issue::Capacity: return UI_TEXT("CURRENT LIMIT");
@@ -78,7 +78,7 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   const Issue issue = displayIssue(c, slot, now);
   const auto state = c.report().units[slot].state;
   if ((c.excluded() & (1U << slot)) && c.availabilityReason(slot, now) != AvailabilityReason::Fault)
-    line(f, row, c.availabilityReason(slot, now) == AvailabilityReason::Ready ? UI_TEXT("RETURNED: APPROVAL NEEDED") : UI_TEXT("ACCEPTED ABSENCE"), background | Warning);
+    line(f, row, (c.configuration().disabled & (1U << slot)) ? UI_TEXT("EXCLUDED BY PROFILE") : c.availabilityReason(slot, now) == AvailabilityReason::Ready ? UI_TEXT("RETURNED: APPROVAL NEEDED") : UI_TEXT("ACCEPTED ABSENCE"), background | Warning);
   else if (issue != Issue::None) line(f, row, shortIssue(issue), background | Warning);
   else if (commandFailed(state)) line(f, row, shortCommand(state), background | Error);
   else if (commandActive(state)) line(f, row, UI_TEXT("APPLYING"), background | Warning);
@@ -87,7 +87,14 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
 }
 void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const UnitMask mask = membersMask(c.count());
-  reading(f, 0, 0, 6, summarize(c, mask, protocol::OutputVoltage, Aggregate::Mean, now), "V");
+  float lo=0,hi=0,value=0; bool any=false;
+  for (uint8_t i=0;i<c.count();++i) if ((mask & (1U<<i)) && c.freshMetric(i,protocol::OutputVoltage,value,now)) {
+    if (!any || value<lo) lo=value;
+    if (!any || value>hi) hi=value;
+    any=true;
+  }
+  if (any && hi-lo>0.1f) f.text(0,0,6,UI_TEXT("V:MIX"),Warning);
+  else reading(f,0,0,6,summarize(c,mask,protocol::OutputVoltage,Aggregate::Mean,now),"V");
   reading(f, 0, 7, 7, summarize(c, mask, protocol::OutputCurrent, Aggregate::Sum, now), "A");
   reading(f, 0, 15, 7, summarize(c, mask, protocol::OutputPower, Aggregate::Sum, now), "W", Text, 0);
   uint8_t page = m.groupRank() / ui::groupsPerPage + 1;
@@ -218,33 +225,34 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
 void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
-  const auto& cfg = c.configuration(); const UnitMask mask = cfg.groups[m.group()].members;
-  f.text(1, 0, 8, cfg.groups[m.group()].name, Accent); f.text(1, 9, 17, UI_TEXT("CONFIG"), Accent);
-  line(f, 3, UI_TEXT("BUS VOLTAGE - ALL GROUPS"), Accent);
-  line(f, 7, UI_TEXT("GROUP TOTAL CURRENT"), Accent);
-  for (uint8_t i = 0; i < 2; ++i) {
-    const bool voltage = i == 0, chosen = m.field() == (voltage ? UiField::Voltage : UiField::Current);
-    const uint8_t row = voltage ? 4 : 8; const uint8_t style = Text;
-    f.outline(row - 1, 0, 26, 3, chosen);
-    f.text(row, 0, 4, UI_TEXT("Set"), style);
-    const uint16_t value = chosen && m.editing() ? m.editValue() : voltage ? cfg.voltage : cfg.groups[m.group()].current;
-    if (!chosen || !m.editing() || (now / ui::blinkMs) % 2 == 0) number(f, row, 4, 8, value / 100.0f, voltage ? "V" : "A", style, 2);
-    else f.text(row, 4, 8, UI_TEXT(""), style);
-    f.text(row, 13, 4, UI_TEXT("Live"), Muted);
-    reading(f, row, 17, 9, summarize(c, voltage ? membersMask(c.count()) : mask,
-        voltage ? protocol::OutputVoltage : protocol::OutputCurrent, voltage ? Aggregate::Mean : Aggregate::Sum, now), voltage ? "V" : "A");
-    f.text(row + 1, 0, 6, UI_TEXT("Range"), Muted);
-    number(f, row + 1, 6, 8, (voltage ? limits::minVoltage : 0) / 100.0f, voltage ? "V" : "A", Muted, 2);
-    f.text(row + 1, 14, 1, UI_TEXT("-"), Muted);
-    number(f, row + 1, 15, 11, (voltage ? limits::maxVoltage : c.groupCurrentMaximum(m.group())) / 100.0f, voltage ? "V" : "A", Muted, 2);
+  const auto scope = m.scope(); const UnitMask mask = m.settingsMembers();
+  if (scope.kind == ScopeKind::Group) f.text(1,0,8,c.configuration().groups[scope.index].name,Accent);
+  else if (scope.kind == ScopeKind::Unit) { char b[12]; PSU_SNPRINTF(b,sizeof(b),"PSU %u",unsigned(scope.index+1)); f.text(1,0,8,b,Accent); }
+  else f.text(1,0,8,UI_TEXT("GLOBAL"),Accent);
+  f.text(1,9,17,UI_TEXT("CONFIG"),Accent);
+  line(f,2,scope.kind==ScopeKind::Global ? UI_TEXT("Overrides ALL PSUs") : UI_TEXT("Selected members only"),Warning);
+  line(f,3,scope.kind==ScopeKind::Group ? UI_TEXT("GROUP VOLTAGE") : scope.kind==ScopeKind::Unit ? UI_TEXT("PSU VOLTAGE") : UI_TEXT("GLOBAL VOLTAGE"),Accent);
+  line(f,7,scope.kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : scope.kind==ScopeKind::Group ? UI_TEXT("GROUP TOTAL CURRENT") : UI_TEXT("CURRENT TOTAL PER GROUP"),Accent);
+  for (uint8_t i=0;i<2;++i) {
+    const bool voltage=i==0,chosen=m.field()==(voltage ? UiField::Voltage : UiField::Current);
+    const uint8_t row=voltage ? 4 : 8; const auto summary=m.configured(voltage ? SettingFields::Voltage : SettingFields::Current);
+    f.outline(row-1,0,26,3,chosen); f.text(row,0,4,UI_TEXT("Set"));
+    if (summary.minimum!=summary.maximum && !(chosen && m.editing())) f.text(row,4,8,UI_TEXT("MIXED"),Warning);
+    else if (!chosen || !m.editing() || (now/ui::blinkMs)%2==0) number(f,row,4,8,(chosen && m.editing() ? m.editValue() : summary.minimum)/100.0f,voltage ? "V" : "A",Text,2);
+    if (!voltage && summary.custom) f.text(row+1,0,26,UI_TEXT("CUSTOM SHARES; edit splits"),Warning);
+    else {
+      f.text(row+1,0,6,UI_TEXT("Range"),Muted);
+      number(f,row+1,6,8,(summary.minimum!=summary.maximum ? summary.minimum : voltage ? limits::minVoltage : 0)/100.0f,"",Muted,2);
+      f.text(row+1,14,1,UI_TEXT("-"),Muted);
+      number(f,row+1,15,11,(summary.minimum!=summary.maximum ? summary.maximum : c.settingMaximum(scope,voltage ? SettingFields::Voltage : SettingFields::Current))/100.0f,voltage ? "V" : "A",Muted,2);
+    }
+    f.text(row,13,4,UI_TEXT("Live"),Muted);
+    if (voltage && population(mask)>1) f.text(row,17,9,UI_TEXT("Per PSU"),Muted);
+    else reading(f,row,17,9,summarize(c,mask,voltage ? protocol::OutputVoltage : protocol::OutputCurrent,Aggregate::Sum,now),voltage ? "V" : "A");
   }
-  if (!PSU_ENABLE_TOUCH) {
-    line(f, 11, m.recovering() ? UI_TEXT("Hold: back to incident") : UI_TEXT("Tools: turn then click"), Muted);
-    f.outline(11, 0, 26, 1, m.field() == UiField::Tools);
-  }
-  else if (pendingSettings(c, mask)) line(f, 11, UI_TEXT("Pending changes / ACKs"), Warning);
-  line(f, 12, UI_TEXT("EEPROM saved after ACKs"), Muted);
-  line(f, 14, m.editing() ? UI_TEXT("Click:Apply  Hold:Cancel") : UI_TEXT("Click:Edit  Hold:Groups"), Muted);
+  if (!PSU_ENABLE_TOUCH) { line(f,11,UI_TEXT("Tools: turn then click"),Muted); f.outline(11,0,26,1,m.field()==UiField::Tools); }
+  line(f,12,c.enableControl().enabled() ? UI_TEXT("EEPROM saved after ACKs") : UI_TEXT("Apply prepares next ON"),Muted);
+  line(f,14,m.editing() ? UI_TEXT("Click:Apply Hold:Cancel") : UI_TEXT("Click:Edit Hold:Back"),Muted);
 }
 void confirmation(UiFrame& f, const UiModel& m) {
   line(f, 2, UI_TEXT("MISSING MEMBER - BLOCKED"), Error);
@@ -266,12 +274,14 @@ void result(UiFrame& f, const UiModel& m) {
     case UiNotice::Busy: title = UI_TEXT("OPERATION BUSY"); body = UI_TEXT("Wait for the current apply or EEPROM save to finish."); break;
     case UiNotice::Blocked: title = UI_TEXT("APPLY BLOCKED"); body = {reinterpret_cast<const char*>(issueName(m.blocker()))}; break;
     case UiNotice::Applying: title = UI_TEXT("APPLYING - WAIT FOR ACKS"); body = UI_TEXT("You may return to groups. The operation continues in the background."); break;
-    case UiNotice::Saving: title = UI_TEXT("APPLIED - SAVING EEPROM"); body = UI_TEXT("CAN and serial remain active. Wait for save confirmation."); break;
+    case UiNotice::Saving: title = m.profileOperation() && m.savingProfile() ? UI_TEXT("SAVING NAMED PROFILE") : UI_TEXT("SAVING EEPROM"); body = UI_TEXT("CAN and serial remain active. Wait for verified completion."); break;
     case UiNotice::Saved: title = UI_TEXT("APPLIED AND SAVED"); body = UI_TEXT("PSUs acknowledged settings. Output measurements show actual delivery."); color = Good; break;
     case UiNotice::PartialSaved: title = UI_TEXT("PARTIAL APPLY SAVED"); body = UI_TEXT("Only responding units accepted their original shares. Missing outputs remain unknown."); break;
     case UiNotice::ApplyFailed: title = UI_TEXT("APPLY FAILED - NOT SAVED"); body = UI_TEXT("Some units may have accepted settings. Inspect PSU details; there is no automatic rollback."); color = Error; break;
-    case UiNotice::SaveFailed: title = UI_TEXT("APPLIED / EEPROM FAILED"); body = UI_TEXT("Live settings were accepted, but not saved. Retry serial save after checking EEPROM."); color = Error; break;
+    case UiNotice::SaveFailed: title = m.profileOperation() && m.savingProfile() ? UI_TEXT("PROFILE SAVE FAILED") : UI_TEXT("APPLIED / EEPROM FAILED"); body = m.profileOperation() && m.savingProfile() ? UI_TEXT("No settings applied. Inspect the profile slot before retrying its save.") : UI_TEXT("Live settings were accepted, but not saved. Review EEPROM before retrying save."); color = Error; break;
     case UiNotice::SavedOlder: title = UI_TEXT("EARLIER SNAPSHOT SAVED"); body = UI_TEXT("Configuration changed while saving. Current RAM edits remain unsaved; review serial config."); break;
+    case UiNotice::ProfileSaved: title = UI_TEXT("PROFILE SAVED"); body = UI_TEXT("Named snapshot verified. Saving a profile does not apply its targets."); color = Good; break;
+    case UiNotice::Prepared: title = UI_TEXT("PREPARED FOR NEXT ON"); body = UI_TEXT("Targets authorized and saved. Output remains at zero until an explicit ON request."); color = Good; break;
     case UiNotice::ConfigSaved: title = UI_TEXT("CONFIG SAVED"); body = UI_TEXT("Reviewed RAM snapshot verified. Saving did not apply staged changes."); color = Good; break;
     case UiNotice::Cancelled: title = UI_TEXT("CANCELLED - DRAFT RETAINED"); body = UI_TEXT("No partial apply sent. Review the staged request before applying again."); break;
     default: break;
@@ -348,7 +358,7 @@ void UiView::compose(UiFrame& f, const UiModel& m, const PsuController& c, uint3
 #if PSU_ENABLE_TOUCH
   UiLayout::controls(f,m);
 #else
-  if (m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage() || m.recovering() ||
+  if (m.settingsPage() || m.page()==UiPage::Tools || m.page()==UiPage::Scenarios || m.availabilityPage() || m.recovering() ||
       (m.page()==UiPage::Result && !m.working() && m.recoveryLink().kind != RecoveryKind::None)) UiLayout::controls(f,m);
 #endif
   controlBanner(f, m, c, now);

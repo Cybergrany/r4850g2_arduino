@@ -60,14 +60,31 @@ Configuration debugConfiguration() {
   for (uint8_t i = 0; i < c.count; ++i) {
     const uint8_t g = i < 3 ? 0 : i < 5 ? 1 : i < 7 ? 2 : 3;
     PSU_SNPRINTF(c.groups[g].name, sizeof(c.groups[g].name), "GROUP%u", unsigned(g + 1));
-    c.groups[g].members |= 1U << i; c.groups[g].current += 1000;
+    c.groups[g].members |= 1U << i; c.current[i] = 1000;
     c.units[i].identity = simIdentity(i); c.units[i].ratedCurrent = 5000;
     c.operating.current[i] = 1000;
   }
-  c.operating.voltage = c.voltage; c.operating.voltageAuthorized = true;
+  for (uint8_t i = 0; i < c.count; ++i) c.operating.voltage[i] = c.voltage[i];
   c.operating.voltageMask = c.operating.currentMask = membersMask(c.count);
   return c;
 }
+#if PSU_DEBUG_COMPACT_STORAGE
+int16_t RamStorage::address(uint16_t at) {
+  constexpr uint16_t configEnd = MemoryManager::recordSize;
+  constexpr uint16_t profileEnd = configEnd + 8 * 128;
+  if (at == 0 || at == 256) return profileEnd + 80 + (at != 0);
+  if ((at >= 216 && at < 256) || (at >= 472 && at < 512))
+    return profileEnd + (at >= 472 ? 40 + at - 472 : at - 216);
+  if (at >= 512 && at < 1536) {
+    const uint16_t offset = (at - 512) % 512;
+    return offset < configEnd ? int16_t(offset) : -1;
+  }
+  if (at >= 1536 && at < 3584) return configEnd + ((at - 1536) / 256) * 128 + (at % 128);
+  return -1;
+}
+#endif
+uint8_t RamStorage::read(uint16_t at) const { const auto i = address(at); return i < 0 ? 0xff : bytes_[i]; }
+void RamStorage::update(uint16_t at, uint8_t value) { const auto i = address(at); if (i >= 0 && !failWrites) bytes_[i] = value; }
 void RamStorage::clear() { memset(bytes_, 0xff, sizeof(bytes_)); failWrites = false; }
 void SimulatedCan::reset() {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { voltage_[i] = 5400; current_[i] = 1000; }

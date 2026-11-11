@@ -118,7 +118,7 @@ void readinessDeadlineAndLatch() {
     CHECK(p.blocker == Issue::ReadinessPending && p.issues[0] == Issue::ReadinessPending);
     CHECK(r.c.queue(p,false,r.now) == Result::Blocked);
   }
-  CHECK(r.c.configuration().operating.voltage == 5400 && r.c.configuration().operating.current[0] == 500);
+  CHECK(r.c.configuration().operating.voltage[0] == 5400 && r.c.configuration().operating.current[0] == 500);
   CHECK(r.c.setPollInterval(10000) == Result::Ok); // Even changing pollMs cannot extend this attempt.
   for (unsigned n=0; uint32_t(r.now-since)<control::startupReadyMs-250; ++n) {
     r.notReady = n%2; r.step(250); pendingReadiness(r,since);
@@ -200,8 +200,8 @@ void readinessSafetyEdges() {
   }
 }
 void readinessMultiUnitAndWrap() {
-  auto config = installation(2); config.groups[0].members = 1; config.groups[0].current = 1000;
-  std::strcpy(config.groups[1].name,"GROUP2"); config.groups[1].members = 2; config.groups[1].current = 1000;
+  auto config = installation(2); config.groups[0].members = 1; draftGroupCurrent(config, 0, 1000);
+  std::strcpy(config.groups[1].name,"GROUP2"); config.groups[1].members = 2; draftGroupCurrent(config, 1, 1000);
   Rig r(config); r.reportAc = true; r.notReady = 2; r.step();
   CHECK(r.c.queue(r.c.preview(Operation::All,-1,r.now),false,r.now) == Result::Ok);
   for (unsigned n=0; n<60 && (r.c.busy() || r.c.unitControl(0).outputDemand!=OutputDemand::Active); ++n) r.step();

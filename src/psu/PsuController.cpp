@@ -17,7 +17,7 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   if (config_.thermalStop != ThermalStop::None) for (uint8_t i=0; i<c.count; ++i)
     if (identified(c.units[i].identity)) hotContributors_ |= 1U << i;
   ++revision_; voltageSynced_ = restoreBlocked_ = 0;
-  excluded_ = c.acceptedAbsent; sessionAccepted_ = sessionRequired_ = 0;
+  excluded_ = c.acceptedAbsent | c.disabled; sessionAccepted_ = sessionRequired_ = 0;
   ++availabilityRevision_;
   memset(groupChanged_, 0, sizeof(groupChanged_)); memset(groupEpisode_, 0, sizeof(groupEpisode_));
   memset(refreshed_, 0, sizeof(refreshed_)); controlRefresh_ = refreshCurrent_ = false;
@@ -27,18 +27,17 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   if (config_.thermalStop != ThermalStop::None) enable_.request(false, EnableSource::Protection);
   config_.autoResume = enable_.enabled();
   currentSynced_ = acknowledgedMask_ = validTemperatures_ = 0;
-  voltageCommissioned_ = verifying_ = identityChecked_ = false;
+  verifying_ = identityChecked_ = false;
   report_ = {};
-  running_ = resume && c.autoResume && c.operating.voltageAuthorized && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
+  running_ = resume && c.autoResume && c.operating.voltageMask && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
   restorePending_ = running_;
   memset(observedEpoch_, 0, sizeof(observedEpoch_));
   return Result::Ok;
 }
-Result PsuController::change(const Configuration& next, UnitMask invalidate) {
+Result PsuController::change(Configuration& c, UnitMask invalidate) {
   if (busy() || availabilitySaving()) return Result::Busy;
-  Configuration c = next;
   c.operating.currentMask &= UnitMask(~invalidate);
-  c.acceptedAbsent &= UnitMask(~invalidate);
+  c.acceptedAbsent &= UnitMask(~invalidate); c.disabled &= UnitMask(~invalidate);
   if (!validConfig(c)) return Result::Invalid;
   reconcileSessions(c);
   config_ = c; clearRoutes(); ++revision_; running_ &= UnitMask(~invalidate);
@@ -53,9 +52,7 @@ Result PsuController::setCount(uint8_t n) {
   // Shrinking through existing membership is rejected; remove it explicitly first.
   c.operating.currentMask &= membersMask(n);
   c.operating.voltageMask &= membersMask(n);
-  const bool changed = n != count();
   const auto result = change(c, UnitMask(membersMask(config_.count) ^ membersMask(n)));
-  if (result == Result::Ok && changed) voltageCommissioned_ = false;
   return result;
 }
 int8_t PsuController::groupIndex(const char* name) const {
@@ -72,8 +69,8 @@ Result PsuController::setGroup(const char* name, UnitMask mask) {
   auto c = config_; auto& g = c.groups[index];
   const UnitMask changed = g.members == mask ? 0 : g.members | mask;
   memset(g.name, 0, sizeof(g.name)); strcpy(g.name, name); g.members = mask;
-  // Preserve the requested totals; membership changes invalidate authorization.
-  // A new explicit apply previews the new shares; no live writes happen here.
+  // Preserve individual targets; membership changes invalidate authorization.
+  // Group totals are derived from those targets; no live writes happen here.
   return change(c, changed);
 }
 Result PsuController::removeGroup(uint8_t g) {
@@ -90,7 +87,6 @@ Result PsuController::bind(uint8_t slot, const Identity& id, uint16_t rating, ui
   const auto r = change(c, UnitMask(1U << slot));
   if (r == Result::Ok) {
     voltageSynced_ &= UnitMask(~(1U << slot)); observedEpoch_[slot] = 0;
-    voltageCommissioned_ = false;
     report_.units[slot] = {};
   }
   return r;
@@ -103,28 +99,66 @@ Result PsuController::unbind(uint8_t slot) {
   if (result == Result::Ok) {
     voltageSynced_ &= UnitMask(~(1U << slot)); observedEpoch_[slot] = 0;
     report_.units[slot] = {};
-    if (slot < count()) voltageCommissioned_ = false;
   }
   return result;
 }
 Result PsuController::setVoltage(uint16_t v, bool offline) {
-  auto c = config_; if (offline) c.offlineVoltage = v; else c.voltage = v; return change(c);
+  if (!offline) return set({}, SettingFields::Voltage, v);
+  if (busy() || availabilitySaving()) return Result::Busy;
+  if (v < limits::minOfflineVoltage || v > limits::maxVoltage) return Result::Invalid;
+  config_.offlineVoltage = v; ++revision_; return Result::Ok;
 }
 Result PsuController::setCurrent(uint8_t g, uint16_t total, bool offline) {
+  if (!offline) return set({ScopeKind::Group, g}, SettingFields::Current, total);
+  if (busy() || availabilitySaving()) return Result::Busy;
   if (checkCurrent(g, total).issue != Issue::None) return Result::Invalid;
-  auto c = config_; if (offline) c.groups[g].offlineCurrent = total; else c.groups[g].current = total;
-  return change(c);
+  config_.groups[g].offlineCurrent = total; ++revision_; return Result::Ok;
 }
 CurrentCheck PsuController::checkCurrent(uint8_t g, uint16_t total) const {
   CurrentCheck result = {};
   if (g >= limits::maxGroups || !config_.groups[g].members) { result.issue = Issue::Invalid; return result; }
-  auto group = config_.groups[g]; group.current = total;
-  for (uint8_t i = 0; i < count(); ++i) if (group.members & (1U << i)) {
+  for (uint8_t i = 0; i < count(); ++i) if (config_.groups[g].members & (1U << i)) {
     const uint16_t maximum = currentMaximum(config_.units[i].ratedCurrent);
-    const uint16_t share = allocation(group, i);
+    const uint16_t share = allocation(config_.groups[g].members, total, i);
     if (share > maximum) return {Issue::Capacity, i, share, maximum};
   }
   return result;
+}
+uint16_t PsuController::settingMaximum(SettingScope scope, SettingFields field) const {
+  if (!scopeMembers(config_, scope)) return 0;
+  if (field == SettingFields::Voltage) return limits::maxVoltage;
+  if (scope.kind == ScopeKind::Unit) return currentMaximum(config_.units[scope.index].ratedCurrent);
+  if (scope.kind == ScopeKind::Group) return groupCurrentMaximum(scope.index);
+  uint16_t maximum = UINT16_MAX; UnitMask assigned = 0;
+  for (uint8_t g = 0; g < limits::maxGroups; ++g) if (config_.groups[g].members) {
+    assigned |= config_.groups[g].members; const uint16_t m = groupCurrentMaximum(g); if (m < maximum) maximum = m;
+  }
+  return assigned == membersMask(count()) ? maximum : 0;
+}
+Result PsuController::set(SettingScope scope, SettingFields field, uint16_t value) {
+  if (busy() || availabilitySaving()) return Result::Busy;
+  const auto members = scopeMembers(config_, scope);
+  if (!members || (field != SettingFields::Voltage && field != SettingFields::Current)) return Result::Invalid;
+  if (field == SettingFields::Voltage) {
+    if (value < limits::minVoltage || value > limits::maxVoltage) return Result::Invalid;
+  } else {
+    if (scope.kind == ScopeKind::Unit) { if (!allowedCurrent(value, config_.units[scope.index].ratedCurrent)) return Result::Invalid; }
+    else {
+      UnitMask assigned = 0;
+      for (uint8_t g = 0; g < limits::maxGroups; ++g) if (config_.groups[g].members & members) {
+        assigned |= config_.groups[g].members;
+        if (checkCurrent(g, value).issue != Issue::None) return Result::Invalid;
+      }
+      if (assigned != members) return Result::Invalid;
+    }
+  }
+  // Validation is complete; mutate only the requested fields, without a full snapshot.
+  for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
+    if (field == SettingFields::Voltage) config_.voltage[i] = value;
+    else if (scope.kind == ScopeKind::Unit) config_.current[i] = value;
+    else config_.current[i] = allocation(config_.groups[groupFor(config_, i)].members, value, i);
+  }
+  ++revision_; return Result::Ok;
 }
 uint16_t PsuController::groupCurrentMaximum(uint8_t group) const {
   if (group >= limits::maxGroups || !config_.groups[group].members) return 0;
@@ -149,7 +183,11 @@ void PsuController::reconcileSessions(const Configuration& next) {
       hotContributors_ &= keep; sensorFaults_ &= keep; thermalIgnored_ &= keep; energized_ &= keep; activeLost_ &= keep; identityLost_ &= keep;
     }
 }
-Result PsuController::setPollInterval(uint16_t ms) { auto c = config_; c.pollMs = ms; return change(c); }
+Result PsuController::setPollInterval(uint16_t ms) {
+  if (busy() || availabilitySaving()) return Result::Busy;
+  if (ms < limits::minPollMs || ms > limits::maxPollMs) return Result::Invalid;
+  config_.pollMs = ms; ++revision_; return Result::Ok;
+}
 void PsuController::clearRoutes() const {
   memset(routes_, unknownRoute, sizeof(routes_)); validSources_ = 0;
 }
@@ -193,7 +231,7 @@ Issue PsuController::issue(uint8_t i, uint32_t now) const {
 GroupStatus PsuController::groupStatus(uint8_t g, uint32_t now) const {
   GroupStatus s = {};
   if (g >= limits::maxGroups) return s;
-  s.members = config_.groups[g].members; s.requestedCurrent = config_.groups[g].current;
+  s.members = config_.groups[g].members; s.requestedCurrent = groupCurrent(config_, g);
   for (uint8_t i = 0; i < count(); ++i) if (s.members & (1U << i)) {
     const auto* d = deviceForSlot(i, now);
     if (d && d->fresh(now, staleMs())) s.responding |= 1U << i;
@@ -233,91 +271,95 @@ bool PsuController::freshMetric(uint8_t slot, protocol::Metric m, float& value, 
   return true;
 }
 ApplyPlan PsuController::preview(Operation op, int8_t group, uint32_t now, bool partial) const {
-  ApplyPlan p = {}; p.operation = op; p.group = group; p.created = now;
+  const SettingScope scope = op == Operation::GroupCurrent || op == Operation::Restore ? SettingScope(ScopeKind::Group, group) : SettingScope();
+  return buildPlan(op, scope, op == Operation::Voltage ? SettingFields::Voltage : op == Operation::GroupCurrent ? SettingFields::Current : SettingFields::Both, now, partial);
+}
+ApplyPlan PsuController::preview(SettingScope scope, SettingFields fields, uint32_t now, bool partial,
+    const uint16_t* voltage, const uint16_t* current) const {
+  return buildPlan(fields == SettingFields::Voltage ? Operation::Voltage : fields == SettingFields::Current ? Operation::GroupCurrent : Operation::All,
+      scope, fields, now, partial, voltage, current);
+}
+ApplyPlan PsuController::buildPlan(Operation op, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
+    const uint16_t* voltage, const uint16_t* current) const {
+  ApplyPlan p = {}; p.operation = op; p.scope = scope; p.fields = fields;
+  p.group = scope.kind == ScopeKind::Group ? int8_t(scope.index) : -1; p.created = now;
   p.configurationRevision = revision_; p.topologyRevision = discovery_.revision(); p.partial = partial;
-  if (!ready_) p.blocker = Issue::Invalid;
+  p.prepared = !enable_.enabled() && op != Operation::Offline;
+  p.members = scopeMembers(config_, scope);
+  if (!p.members || (!p.prepared && !ready_) || (partial && fields != SettingFields::Current)) p.blocker = Issue::Invalid;
   if (busy() || availabilitySaving()) p.blocker = Issue::Busy;
-  if (!powerAvailable() && op != Operation::Offline) p.blocker = Issue::Cutoff;
+  if (!p.prepared && !powerAvailable() && op != Operation::Offline) p.blocker = Issue::Cutoff;
   if (config_.deploymentId != deployment::id) p.blocker = Issue::DeploymentMismatch;
-  p.members = membersMask(count()); p.voltage = op == Operation::Offline ? config_.offlineVoltage : config_.voltage;
-  if (op == Operation::GroupCurrent || op == Operation::Restore) {
-    if (group < 0 || group >= limits::maxGroups || !config_.groups[group].members) { p.blocker = Issue::Invalid; return p; }
-    p.members = config_.groups[group].members; p.voltage = config_.operating.voltage;
-    if (!config_.operating.voltageAuthorized || (op == Operation::GroupCurrent && participants() && !voltageCommissioned_)) p.blocker = Issue::VoltageUnsynced;
-  } else if (partial) p.blocker = Issue::Invalid;
   for (uint8_t i = 0; i < count(); ++i) if (p.members & (1U << i)) {
-    const int8_t g = groupFor(config_, i);
-    p.current[i] = op == Operation::Restore ? config_.operating.current[i] :
-        g >= 0 ? allocation(config_.groups[g], i, op == Operation::Offline) : 0;
+    const int8_t g = groupFor(config_, i); const UnitMask bit = UnitMask(1) << i;
+    p.voltage[i] = op == Operation::Offline ? config_.offlineVoltage : voltage ? voltage[i] : fields == SettingFields::Current ? config_.operating.voltage[i] : config_.voltage[i];
+    p.current[i] = op == Operation::Offline ? (g >= 0 ? allocation(config_.groups[g].members, config_.groups[g].offlineCurrent, i) : 0) : current ? current[i] : config_.current[i];
     p.issues[i] = issue(i, now);
-    if (op != Operation::Offline && (excluded_ & (1U << i))) {
-      if (availabilityReason(i, now) == AvailabilityReason::Fault) {
-        p.blocker = p.issues[i] == Issue::None ? Issue::ControlFault : p.issues[i]; continue;
-      }
-      if (acceptedAbsences() & (1U << i)) {
-        p.excluded |= 1U << i; continue;
-      }
+    if (!identified(config_.units[i].identity)) { p.blocker = Issue::Unbound; continue; }
+    if (g < 0) { p.blocker = Issue::Unassigned; continue; }
+    if (fields == SettingFields::Current && !(config_.operating.voltageMask & bit)) { p.blocker = Issue::VoltageUnsynced; continue; }
+    if (p.voltage[i] < limits::minVoltage || p.voltage[i] > limits::maxVoltage || !allowedCurrent(p.current[i], config_.units[i].ratedCurrent)) { p.blocker = Issue::Capacity; continue; }
+    // OFF authorizes targets only. Presence, faults, thermal and release checks
+    // are evaluated again on the next explicit ON; no CAN writes occur here.
+    if (p.prepared) { if (excluded_ & bit) p.excluded |= bit; continue; }
+    if (op != Operation::Offline && (excluded_ & bit)) {
+      if (availabilityReason(i, now) == AvailabilityReason::Fault) { p.blocker = Issue::ControlFault; continue; }
+      if (acceptedAbsences() & bit) { p.excluded |= bit; continue; }
       p.blocker = Issue::ApprovalRequired; continue;
     }
-    if (p.issues[i] == Issue::Missing) p.missing |= 1U << i;
-    // Staging remains available. A new live voltage/positive-current apply
-    // must not replace an outstanding startup observation; a zero group apply
-    // (and the independent OFF path) can still stop it.
+    if (p.issues[i] == Issue::Missing) p.missing |= bit;
     if (p.issues[i] == Issue::None && control_[i].outputDemand == OutputDemand::Starting &&
-        op != Operation::Offline && (op != Operation::GroupCurrent || p.current[i])) p.issues[i] = Issue::ReadinessPending;
-    if (p.issues[i] == Issue::None && op == Operation::GroupCurrent && !(voltageSynced_ & (1U << i))) p.issues[i] = Issue::VoltageUnsynced;
+        op != Operation::Offline && (fields != SettingFields::Current || p.current[i])) p.issues[i] = Issue::ReadinessPending;
+    if (p.issues[i] == Issue::None && fields == SettingFields::Current && !(voltageSynced_ & bit)) p.issues[i] = Issue::VoltageUnsynced;
     if (p.issues[i] != Issue::None) {
-      if (!(partial && op == Operation::GroupCurrent && p.issues[i] == Issue::Missing)) p.blocker = p.issues[i];
+      if (!(partial && p.issues[i] == Issue::Missing)) p.blocker = p.issues[i];
       continue;
     }
-    const Psu* d = deviceForSlot(i, now);
-    p.addresses[i] = d->address; p.epochs[i] = d->epoch; p.recipients |= 1U << i;
+    p.recipients |= bit;
   }
-  if (!p.recipients && p.excluded != p.members && p.blocker == Issue::None) p.blocker = Issue::Missing;
-  if (p.blocker == Issue::None) {
-    for (uint8_t i = 0; i < count(); ++i) if (p.recipients & (1U << i)) {
-      if (control_[i].fault != CommandState::Idle) { p.blocker = Issue::ControlFault; break; }
-      if (control_[i].phase != ControlPhase::Held && control_[i].phase != ControlPhase::Online)
-        p.blocker = Issue::Reconciling;
-      if (op == Operation::GroupCurrent && control_[i].phase != ControlPhase::Online) p.blocker = Issue::Reconciling;
-    }
+  if (!p.prepared && !p.recipients && p.excluded != p.members && p.blocker == Issue::None) p.blocker = Issue::Missing;
+  if (!p.prepared && p.blocker == Issue::None) for (uint8_t i = 0; i < count(); ++i) if (p.recipients & (1U << i)) {
+    if (control_[i].fault != CommandState::Idle) { p.blocker = Issue::ControlFault; break; }
+    if (control_[i].phase != ControlPhase::Held && control_[i].phase != ControlPhase::Online) p.blocker = Issue::Reconciling;
   }
-  if (!enable_.enabled() && op != Operation::Offline) p.blocker = Issue::Disabled;
   return p;
 }
 Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   if (busy() || availabilitySaving()) return Result::Busy;
-  if (p.operation == Operation::Restore) return Result::Invalid; // Internal only.
+  if (p.operation == Operation::Restore) return Result::Invalid;
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       uint32_t(now - p.created) > limits::confirmationMs) return Result::Changed;
-  const ApplyPlan fresh = preview(p.operation, p.group, now, p.partial);
+  // Revalidation uses the same scope and field selection as the review.
+  const ApplyPlan fresh = buildPlan(p.operation, p.scope, p.fields, now, p.partial);
   if (fresh.blocker != Issue::None) return Result::Blocked;
-  if (fresh.recipients != p.recipients || fresh.missing != p.missing || fresh.excluded != p.excluded) return Result::Changed;
+  if (fresh.recipients != p.recipients || fresh.missing != p.missing || fresh.excluded != p.excluded || fresh.prepared != p.prepared) return Result::Changed;
   if (p.partial && p.missing && !confirmed) return Result::ConfirmRequired;
   job_ = fresh;
-  if (p.operation == Operation::All || p.operation == Operation::Voltage) {
-    config_.operating.voltage = fresh.voltage; config_.operating.voltageAuthorized = true;
-    config_.operating.voltageMask = fresh.members;
-    voltageCommissioned_ = false;
-    voltageSynced_ = 0; running_ |= fresh.recipients;
-  }
-  if (p.operation == Operation::All || p.operation == Operation::GroupCurrent) {
+  if (p.operation != Operation::Offline) {
     const UnitMask authorized = p.partial ? fresh.recipients : fresh.members;
-    currentSynced_ &= UnitMask(~authorized);
-    for (uint8_t i = 0; i < count(); ++i) if (authorized & (1U << i)) config_.operating.current[i] = fresh.current[i];
-    config_.operating.currentMask |= authorized; running_ |= authorized;
+    for (uint8_t i = 0; i < count(); ++i) if (authorized & (1U << i)) {
+      if (includes(p.fields, SettingFields::Voltage)) config_.operating.voltage[i] = fresh.voltage[i];
+      if (includes(p.fields, SettingFields::Current)) config_.operating.current[i] = fresh.current[i];
+    }
+    if (includes(p.fields, SettingFields::Voltage)) { config_.operating.voltageMask |= authorized; voltageSynced_ &= UnitMask(~authorized); }
+    if (includes(p.fields, SettingFields::Current)) { config_.operating.currentMask |= authorized; currentSynced_ &= UnitMask(~authorized); }
+    running_ |= authorized;
   }
-  for (uint8_t i = 0; i < count(); ++i) if (fresh.recipients & (1U << i)) observedEpoch_[i] = fresh.epochs[i];
-  ++revision_; restoreBlocked_ &= UnitMask(~fresh.recipients); restorePending_ &= UnitMask(~fresh.recipients);
+  for (uint8_t i = 0; i < count(); ++i) if (fresh.recipients & (1U << i)) {
+    const auto* d = deviceForSlot(i, now); jobAddresses_[i] = d->address; jobEpochs_[i] = observedEpoch_[i] = d->epoch;
+  }
+  ++revision_;
+  if (!fresh.prepared) { restoreBlocked_ &= UnitMask(~fresh.recipients); restorePending_ &= UnitMask(~fresh.recipients); }
+  else restorePending_ |= fresh.members;
   beginReport(p.operation, fresh.members, fresh.recipients, fresh.missing | fresh.excluded);
-  if (!fresh.recipients) report_.active = false;
-  jobStarted_ = false;
-  pending_ = fresh.recipients; waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
+  report_.prepared = fresh.prepared;
+  if (!fresh.recipients || fresh.prepared) report_.active = false;
+  jobStarted_ = false; pending_ = fresh.recipients; waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
   return Result::Ok;
 }
 void PsuController::beginReport(Operation op, UnitMask requested, UnitMask recipients, UnitMask skipped) {
   report_.sequence = ++reportSequence_;
-  report_.active = true; report_.operation = op;
+  report_.active = true; report_.prepared = false; report_.operation = op;
   report_.requested = requested; report_.recipients = recipients; report_.skipped = skipped;
   report_.succeeded = report_.failed = 0;
   // Keep the last command result for units outside this operation. A later
@@ -389,17 +431,16 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
   if (verifying_ && slot == jobSlot_ && protocol::isReply(f) &&
       protocol::command(f.id) == protocol::infoCommand && f.data[0] == 0 && f.data[1] == 2) {
     const auto* d = deviceForSlot(jobSlot_, now);
-    if (d && d->epoch == job_.epochs[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None)
+    if (d && d->epoch == jobEpochs_[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None)
       identityChecked_ = true;
   }
   if (waiting_ && slot == jobSlot_ && protocol::settingReply(f, report_.units[jobSlot_].reg, expected_)) {
     const auto* d = deviceForSlot(jobSlot_, now);
-    if (d && d->epoch == job_.epochs[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None) {
+    if (d && d->epoch == jobEpochs_[jobSlot_] && d->verified(now) && issue(jobSlot_, now) == Issue::None) {
       const bool ok = f.data[0] == 1;
       report_.units[jobSlot_].state = ok ? CommandState::Success : CommandState::Rejected;
       if (ok && f.data[1] == protocol::OnlineVoltage) {
         voltageSynced_ |= 1U << jobSlot_;
-        if ((voltageSynced_ & participants()) == participants()) voltageCommissioned_ = true;
       }
       if (ok && f.data[1] == protocol::OnlineCurrent) {
         currentAccepted(jobSlot_, expected_);
@@ -436,7 +477,7 @@ void PsuController::runJob(uint32_t now) {
   }
   if (waiting_) {
     const auto* d = deviceForSlot(jobSlot_, now);
-    if (!d || d->epoch != job_.epochs[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
+    if (!d || d->epoch != jobEpochs_[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
       report_.units[jobSlot_].state = CommandState::Changed; advance(false);
     } else if (uint32_t(now - lastSend_) >= limits::ackTimeoutMs) {
       report_.units[jobSlot_].state = CommandState::Timeout; advance(false);
@@ -451,7 +492,7 @@ void PsuController::runJob(uint32_t now) {
       // the remaining voltage recipients were still being processed.
       for (uint8_t i = 0; i < count(); ++i) if (job_.recipients & (1U << i)) {
         const auto* d = deviceForSlot(i, now);
-        if (!d || d->epoch != job_.epochs[i] || issue(i, now) != Issue::None) {
+        if (!d || d->epoch != jobEpochs_[i] || issue(i, now) != Issue::None) {
           report_.units[i].state = CommandState::Changed;
           report_.failed |= 1U << i; report_.succeeded &= UnitMask(~(1U << i));
           restoreBlocked_ |= 1U << i;
@@ -460,7 +501,7 @@ void PsuController::runJob(uint32_t now) {
       if (!report_.failed) {
         secondPhase_ = true; pending_ = job_.recipients;
         if (job_.operation == Operation::Restore) pending_ &= config_.operating.currentMask;
-      } else if (job_.operation == Operation::All) voltageCommissioned_ = false;
+      }
     }
     if (!pending_) {
       report_.active = false;
@@ -473,7 +514,7 @@ void PsuController::runJob(uint32_t now) {
   if (controlActive_ || sentThisTick_ || txPending_ || uint32_t(now - lastSend_) < limits::commandGapMs) return;
   for (jobSlot_ = 0; !(pending_ & (1U << jobSlot_)); ++jobSlot_) {}
   const auto* d = deviceForSlot(jobSlot_, now);
-  if (!d || d->epoch != job_.epochs[jobSlot_] || d->address != job_.addresses[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
+  if (!d || d->epoch != jobEpochs_[jobSlot_] || d->address != jobAddresses_[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
     report_.units[jobSlot_].state = CommandState::Changed; advance(false); return;
   }
   const bool current = secondPhase_ || job_.operation == Operation::GroupCurrent;
@@ -482,7 +523,7 @@ void PsuController::runJob(uint32_t now) {
       control_[jobSlot_].fanAcknowledged != FanMode::Max) return;
   const uint8_t reg = current ? (offline ? protocol::OfflineCurrent : protocol::OnlineCurrent) :
       (offline ? protocol::OfflineVoltage : protocol::OnlineVoltage);
-  expected_ = current ? protocol::encodeCurrent(offline ? job_.current[jobSlot_] : limitedCurrent(jobSlot_, job_.current[jobSlot_]), config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage);
+  expected_ = current ? protocol::encodeCurrent(offline ? job_.current[jobSlot_] : limitedCurrent(jobSlot_, job_.current[jobSlot_]), config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage[jobSlot_]);
   if (!verifying_) {
     jobStarted_ = true;
     report_.units[jobSlot_] = {CommandState::VerifyingIdentity, reg, expected_};
@@ -508,21 +549,21 @@ void PsuController::restore(uint32_t now) {
       !participants() || !controlsOnline(requiredMembers() & UnitMask(~sensorFaults_))) return;
   // Binding/adopting or adding slots never authorizes voltage by itself. Keep
   // the pending installation observable until an explicit complete voltage apply.
-  if (config_.operating.voltageMask != membersMask(count())) return;
-  // Global voltage is verified across the complete installation before restore.
+  if ((config_.operating.voltageMask & requiredMembers()) != requiredMembers()) return;
+  // Keep the existing availability barrier; voltage targets are per unit.
   for (uint8_t i = 0; i < count(); ++i) if ((requiredMembers() & UnitMask(~sensorFaults_) & (1U << i)) && issue(i, now) != Issue::None) return;
-  UnitMask recipients = restorePending_ & participants() & UnitMask(~(restoreBlocked_ | sensorFaults_));
+  UnitMask recipients = restorePending_ & participants() & config_.operating.voltageMask & UnitMask(~(restoreBlocked_ | sensorFaults_));
   for (uint8_t i = 0; i < count(); ++i)
     if (control_[i].outputDemand == OutputDemand::Starting) recipients &= UnitMask(~(1U << i));
   if (!recipients) return;
   // Restore the authorized profile, never staged edits. Voltage is acknowledged
   // by every returning recipient before any authorized current is restored.
-  job_ = {}; job_.operation = Operation::Restore; job_.voltage = config_.operating.voltage;
+  job_ = {}; job_.operation = Operation::Restore; job_.fields = SettingFields::Both;
   job_.recipients = job_.members = recipients;
   for (uint8_t i = 0; i < count(); ++i) if (recipients & (1U << i)) {
     const auto* d = deviceForSlot(i, now);
-    job_.addresses[i] = d->address; job_.epochs[i] = d->epoch;
-    job_.current[i] = config_.operating.current[i];
+    jobAddresses_[i] = d->address; jobEpochs_[i] = d->epoch;
+    job_.current[i] = config_.operating.current[i]; job_.voltage[i] = config_.operating.voltage[i];
   }
   pending_ = recipients; restorePending_ &= UnitMask(~recipients);
   beginReport(Operation::Restore, recipients, recipients);

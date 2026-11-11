@@ -73,7 +73,7 @@ void drawingReceiveService() {
   CHECK(c.serviceReceive(300 + limits::identityLeaseMs + 1) == 1);
   CHECK(!c.freshMetric(0, protocol::InputTemperature, value, 300 + limits::identityLeaseMs + 1));
 
-  auto cfg = installation(1); cfg.groups[0].current = 2000;
+  auto cfg = installation(1); draftGroupCurrent(cfg, 0, 2000);
   Rig r(cfg); r.temperature = 30; r.apply(); r.step(1000);
   CHECK(r.c.setCurrent(0, 3000) == Result::Ok);
   CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent, 0, r.now), false, r.now) == Result::Ok);
@@ -99,7 +99,7 @@ void exactGroupRange() {
   // Check the fast bound against the independent allocation/validation path,
   // including sparse memberships and every rank for the limiting PSU.
   for (uint8_t n=1; n<=PSU_MAX_UNITS; ++n) {
-    auto cfg = installation(PSU_MAX_UNITS); cfg.groups[0].members=0; cfg.groups[0].current=0;
+    auto cfg = installation(PSU_MAX_UNITS); cfg.groups[0].members=0; draftGroupCurrent(cfg, 0, 0);
     for (uint8_t k=0; k<n; ++k) cfg.groups[0].members |= 1U << ((2*k)%PSU_MAX_UNITS);
     for (uint8_t slot=0; slot<PSU_MAX_UNITS; ++slot) if (cfg.groups[0].members & (1U<<slot)) {
       auto mixed=cfg; mixed.units[slot].ratedCurrent=1001;

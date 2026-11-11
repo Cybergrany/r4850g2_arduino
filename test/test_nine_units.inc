@@ -2,9 +2,9 @@
 // migrate real historical layouts, rather than relabelling a new-schema record.
 void checkSameProfile(const Configuration& actual, const Configuration& expected) {
   CHECK(actual.deploymentId == expected.deploymentId && actual.count == expected.count);
-  CHECK(actual.voltage == expected.voltage && actual.offlineVoltage == expected.offlineVoltage && actual.pollMs == expected.pollMs);
+  CHECK(actual.voltage[0] == expected.voltage[0] && actual.offlineVoltage == expected.offlineVoltage && actual.pollMs == expected.pollMs);
   CHECK(actual.autoResume == expected.autoResume && actual.thermalStop == expected.thermalStop && actual.acceptedAbsent == expected.acceptedAbsent);
-  CHECK(actual.operating.voltage == expected.operating.voltage && actual.operating.voltageAuthorized == expected.operating.voltageAuthorized);
+  CHECK(actual.operating.voltage[0] == expected.operating.voltage[0] && (actual.operating.voltageMask != 0) == (expected.operating.voltageMask != 0));
   CHECK(actual.operating.voltageMask == expected.operating.voltageMask && actual.operating.currentMask == expected.operating.currentMask);
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
     CHECK(sameIdentity(actual.units[i].identity, expected.units[i].identity));
@@ -12,21 +12,21 @@ void checkSameProfile(const Configuration& actual, const Configuration& expected
   }
   for (uint8_t i = 0; i < limits::maxGroups; ++i) {
     CHECK(std::strcmp(actual.groups[i].name, expected.groups[i].name) == 0);
-    CHECK(actual.groups[i].members == expected.groups[i].members && actual.groups[i].current == expected.groups[i].current);
+    CHECK(actual.groups[i].members == expected.groups[i].members && groupCurrent(actual, i) == groupCurrent(expected, i));
     CHECK(actual.groups[i].offlineCurrent == expected.groups[i].offlineCurrent);
   }
 }
 void nineUnitMigration() {
   CHECK(PSU_MAX_UNITS == 9 && limits::maxGroups == 8 && Discovery::capacity == 12);
-  CHECK(MemoryManager::recordSize == 211 && touch::recordAddress[0] == 216 && touch::recordAddress[1] == 472);
+  CHECK(MemoryManager::recordSize == 247 && touch::recordAddress[0] == 216 && touch::recordAddress[1] == 472);
   auto old = installation(8); old.autoResume = true; old.acceptedAbsent = 0x80;
-  old.operating.voltageAuthorized = true; old.operating.voltage = 5510;
+   authorizedVoltage(old, 5510);
   old.operating.voltageMask = old.operating.currentMask = 0xff;
-  old.voltage = 5625; old.offlineVoltage = 5310; old.pollMs = 1234;
+  draftVoltage(old, 5625); old.offlineVoltage = 5310; old.pollMs = 1234;
   const char* names[] = {"AbCdEfGh", "IjKlMnOp", "QrStUvWx", "Yz_01234", "a56789_Z", "BCDEFGHI", "JKLMNOPQ", "RSTUVWXY"};
   for (uint8_t i = 0; i < 8; ++i) {
     std::strcpy(old.groups[i].name, names[i]); old.groups[i].members = 1U << i;
-    old.groups[i].current = 2000 + i; old.groups[i].offlineCurrent = 1000 + i;
+    draftGroupCurrent(old, i, 2000 + i); old.groups[i].offlineCurrent = 1000 + i;
     old.operating.current[i] = 700 + i; old.units[i].ratedCurrent = 5000 + i;
   }
   CHECK(validConfig(old));
@@ -36,7 +36,7 @@ void nineUnitMigration() {
     const auto before = bytes.bytes;
     CHECK(memory.load(loaded) == StorageResult::Ok); checkSameProfile(loaded, expected);
     CHECK(bytes.bytes == before && loaded.count == 8 && !identified(loaded.units[8].identity));
-    CHECK(memory.save(loaded) == StorageResult::Ok && bytes.bytes[257] == 5);
+    CHECK(memory.save(loaded) == StorageResult::Ok && bytes.bytes[513] == 6);
     CHECK(memory.load(loaded) == StorageResult::Ok); checkSameProfile(loaded, expected);
   }
   // A smaller historical compiled capacity also migrates without using the new
@@ -77,10 +77,10 @@ void nineUnitMigration() {
     }
     // New schema wins by generation; damage to its payload recovers the old
     // complete record, including a thermal stop. A second save replaces old v4.
-    bytes.bytes[256 + 36] ^= 1;
+    bytes.bytes[512 + 36] ^= 1;
     CHECK(memory.load(loaded) == StorageResult::Ok); checkSameProfile(loaded, baseline);
     CHECK(memory.save(nine) == StorageResult::Ok && memory.save(nine) == StorageResult::Ok);
-    CHECK(bytes.bytes[1] == 5 && bytes.bytes[257] == 5);
+    CHECK(bytes.bytes[513] == 6 && bytes.bytes[1025] == 6 && bytes.bytes[0] == 0 && bytes.bytes[256] == 0);
     CHECK(memory.load(loaded) == StorageResult::Ok); checkSameProfile(loaded, nine);
     if (stop != ThermalStop::None) {
       FakeCan can; PsuController reboot(can); CHECK(reboot.configure(loaded, true) == Result::Ok);
@@ -92,20 +92,20 @@ void nineUnitMigration() {
   FakeEeprom corrupt; MemoryManager memory(corrupt); auto nine = installation(9);
   CHECK(memory.save(nine) == StorageResult::Ok); const auto valid = corrupt.bytes;
   const auto rejects = [&](uint16_t offset, uint8_t value) {
-    corrupt.bytes = valid; corrupt.bytes[offset] = value;
-    recordCrc(corrupt.bytes.data(), MemoryManager::recordSize);
+    corrupt.bytes = valid; corrupt.bytes[512 + offset] = value;
+    recordCrc(corrupt.bytes.data() + 512, MemoryManager::recordSize);
     auto unchanged = old; CHECK(memory.load(unchanged) == StorageResult::NoValidRecord); checkSameProfile(unchanged, old);
   };
-  rejects(15, 10); // Unsupported encoded capacity.
-  rejects(26, 10); // Active count exceeds encoded slots.
-  rejects(206, 9); // Group indexes are 0..8.
-  rejects(210, 0xf1); // Unused high nibble must be zero.
-  rejects(29, 2); // Bit 9 in the absence mask is outside the configured slots.
-  rejects(14, 2); // Non-boolean authorization flag.
+  rejects(14, 10); // Unsupported encoded capacity.
+  rejects(15, 10); // Active count exceeds encoded slots.
+  rejects(242, 9); // Group indexes are 0..8.
+  rejects(246, 0xf1); // Unused high nibble must be zero.
+  rejects(27, 2); // Bit 9 in the absence mask is outside the configured slots.
+  rejects(25, 2); // Non-boolean authorization flag.
 }
 Configuration ninthGroup() {
-  auto cfg = installation(9); cfg.groups[0].members = 0xff; cfg.groups[0].current = 8000;
-  std::strcpy(cfg.groups[1].name, "NINTH"); cfg.groups[1].members = 0x100; cfg.groups[1].current = 1000;
+  auto cfg = installation(9); cfg.groups[0].members = 0xff; draftGroupCurrent(cfg, 0, 8000);
+  std::strcpy(cfg.groups[1].name, "NINTH"); cfg.groups[1].members = 0x100; draftGroupCurrent(cfg, 1, 1000);
   CHECK(validConfig(cfg)); return cfg;
 }
 void ninthProtectionAndControl() {
@@ -140,8 +140,8 @@ void ninthProtectionAndControl() {
   FakeEeprom bytes; MemoryManager memory(bytes); CHECK(memory.save(r.c.configuration()) == StorageResult::Ok);
   CHECK(r.c.setVoltage(5700) == Result::Ok); r.unitTemperature[8] = 76; r.step(1000); serviceThermal(r, memory);
   Configuration saved; CHECK(memory.load(saved) == StorageResult::Ok);
-  CHECK(saved.thermalStop == ThermalStop::Temperature && !saved.autoResume && saved.voltage != 5700);
-  CHECK(r.c.configuration().voltage == 5700 && r.c.thermalStatus().contributors == 0x100);
+  CHECK(saved.thermalStop == ThermalStop::Temperature && !saved.autoResume && saved.voltage[0] != 5700);
+  CHECK(r.c.configuration().voltage[0] == 5700 && r.c.thermalStatus().contributors == 0x100);
   // A failed group apply reports only bit 8; no truncated success/failed mask.
   Rig rejected(ninthGroup()); rejected.rejectRegister = protocol::OnlineCurrent;
   auto plan = rejected.c.preview(Operation::GroupCurrent, 1, rejected.now);

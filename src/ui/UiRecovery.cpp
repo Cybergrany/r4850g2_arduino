@@ -23,7 +23,8 @@ RecoveryLink UiModel::recoveryLink() const {
     code = displayedAlert_.code;
     if (displayedAlert_.source < c_.count()) link.slot = displayedAlert_.source;
   } else if (page_ == UiPage::Result && !working()) {
-    if (notice_ == UiNotice::SaveFailed || notice_ == UiNotice::SavedOlder) code = AlertCode::Storage;
+    if (notice_ == UiNotice::Prepared) link.kind = RecoveryKind::Enable;
+    else if (notice_ == UiNotice::SaveFailed || notice_ == UiNotice::SavedOlder) code = AlertCode::Storage;
     else if (notice_ == UiNotice::ApplyFailed) {
       code = AlertCode::Command;
       for (uint8_t i = 0; i < c_.count(); ++i) if (failed_ & (1U << i)) { link.slot = i; break; }
@@ -94,7 +95,7 @@ void UiModel::openRecovery(uint32_t now, RecoveryLink link) {
   if (!recovery_.active) {
     recovery_ = {};
     auto& r = recovery_;
-    r.page = page_; r.field = field_; r.group = group_; r.unit = unit_;
+    r.page = page_; r.field = field_; r.scope = scope_; r.group = group_; r.unit = unit_;
     r.edit = edit_; r.editRevision = editRevision_; r.editing = editing_;
     r.notice = notice_; r.blocker = blocker_; r.operation = operationSequence_;
     r.incident = alertOverlay_ ? displayedAlert_ : AlertState{};
@@ -110,7 +111,7 @@ void UiModel::openRecovery(uint32_t now, RecoveryLink link) {
     group_ = groupFor(c_.configuration(), r.slot); unit_ = r.slot;
   } else if (group_ < 0) { group_ = groupAt(0); unit_ = unitAt(0); }
   if (r.kind == RecoveryKind::Availability) action({ActionKind::Startup}, now);
-  else if (r.kind == RecoveryKind::Settings) { page_ = UiPage::Config; field_ = UiField::Voltage; }
+  else if (r.kind == RecoveryKind::Settings) { openSettings({ScopeKind::Group, uint8_t(group_)}); field_ = UiField::Voltage; }
   else if (r.kind == RecoveryKind::Unit) page_ = UiPage::Detail;
   else if (r.kind == RecoveryKind::Calibration) action({ActionKind::Calibrate}, now);
 }
@@ -119,7 +120,7 @@ void UiModel::returnFromRecovery() {
   // A deliberate apply in the recovery editor owns the new result; never
   // relabel it as the earlier failed apply or restore an obsolete confirmation.
   const bool newOperation = operationSequence_ != r.operation;
-  group_ = r.group; unit_ = r.unit; field_ = r.field;
+  group_ = r.group; unit_ = r.unit; field_ = r.field; scope_ = r.scope;
   if (!newOperation) {
     page_ = r.page; notice_ = r.notice; blocker_ = r.blocker;
     if (!r.overlay && page_ == UiPage::Result && r.saved && r.revision == c_.configurationRevision())

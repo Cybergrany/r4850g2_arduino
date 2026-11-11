@@ -1,5 +1,6 @@
 #include "../util/FlashString.h"
 #include "SerialConsole.h"
+#include "../util/StackMonitor.h"
 #if PSU_ENABLE_SERIAL
 #include "UiText.h"
 #include "AlertText.h"
@@ -82,7 +83,7 @@ void SerialConsole::resetSession() {
   cancelAlertBroadcast();
   length_ = 0; discard_ = afterCr_ = false; echo_ = true;
   view_ = View::None; watch_ = raw_ = confirmation_ = false; descriptionAddress_ = 0;
-  availabilityConfirmation_ = false;
+  availabilityConfirmation_ = false; profilePending_ = 0;
   traceHead_ = traceTail_ = traceCount_ = 0;
   submitted_ = redraw_ = trailingDiscard_ = false;
   backlogNotice_ = resetNotice_ = expiredNotice_ = false;
@@ -100,7 +101,7 @@ void SerialConsole::prompt() {
 void SerialConsole::begin(StorageResult loaded) {
   resetSession(); promptVisible_ = descriptionOpen_ = false;
   controller_.observeFrames(onFrame, this);
-  io_.println(F("R4850 parallel controller; help / help diagnostics")); storageReply(loaded);
+  io_.println(F("R4850 PSU controller; help / help diagnostics")); storageReply(loaded);
 #if PSU_UI_DEBUG
   io_.println(F("SIM: physical CAN excluded; EEPROM writes use volatile RAM only"));
 #else
@@ -120,12 +121,15 @@ void SerialConsole::storageReply(StorageResult r) {
   switch (r) {
     case StorageResult::Ok: io_.println(F("EEPROM OK; saved drafts and authorized profile are separate")); break;
     case StorageResult::NoValidRecord: io_.println(F("EEPROM empty/invalid; compiled template; fitted AC cutoff stays LOW. diag startup / startup probe")); break;
-    case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs 512 bytes")); break;
+    case StorageResult::TooSmall: io_.println(F("ERR EEPROM needs Mega 4096 bytes")); break;
     case StorageResult::InvalidConfig: io_.println(F("ERR invalid configuration")); break;
     case StorageResult::WriteFailed: io_.println(F("ERR EEPROM verification failed")); break;
+    case StorageResult::IdentityMismatch: io_.println(F("BLOCKED profile PSU identities differ; inspect bindings and resave")); break;
+    case StorageResult::Changed: io_.println(F("BLOCKED profile or configuration changed; review again")); break;
+    case StorageResult::Cancelled: io_.println(F("Profile save cancelled for protection; previous copy retained")); break;
     case StorageResult::Busy: io_.println(F("ERR EEPROM save in progress")); break;
     case StorageResult::Migrated: io_.println(F("Legacy settings migrated to RAM GROUP1; bind identities, apply, save. Auto-resume OFF.")); break;
-    case StorageResult::LegacyNeedsReview: io_.println(F("BLOCKED legacy per-unit settings differ: use legacy to inspect. EEPROM untouched. Commission parallel groups before save.")); break;
+    case StorageResult::LegacyNeedsReview: io_.println(F("BLOCKED legacy per-unit settings differ: use legacy to inspect. EEPROM untouched. Commission groups before save.")); break;
     case StorageResult::WrongDeployment: io_.println(F("BLOCKED wrong deployment: inspect config; defaults selects compiled deployment. EEPROM untouched.")); break;
   }
 }
@@ -144,6 +148,7 @@ void SerialConsole::startView(View view, UnitMask mask) {
   cancelAlertBroadcast(); view_ = view; row_ = field_ = 0; viewMask_ = mask;
 }
 void SerialConsole::execute() {
+  if (profileCommand(line_)) return;
   char* args[6] = {}; char* context = nullptr; uint8_t argc = 0;
   for (char* word = strtok_r(line_, " \t", &context); word; word = strtok_r(nullptr, " \t", &context)) {
     if (argc == 6) { reply(Result::Invalid); return; } args[argc++] = word;
@@ -248,33 +253,35 @@ void SerialConsole::execute() {
     else io_.println(F("Binding unchanged; diag bus must show a fresh verified unique identity. Check rating and existing bindings."));
     return;
   }
+  if (argc == 2 && !PSU_STRCMP(args[0], "diag") && !PSU_STRCMP(args[1], "memory")) {
+    const auto usage = stackUsage();
+    if (!usage.supported) io_.println(F("Stack watermark unavailable in this build"));
+    else {
+      io_.print(F("RAM static-free=")); io_.print(usage.staticFree); io_.print(F(" free-now=")); io_.print(usage.freeNow);
+      io_.print(F(" untouched-since-boot=")); io_.println(usage.untouched);
+      io_.println(F("Includes observed boot/interrupt use; exercise worst cases. Watermark is an estimate, not a proof."));
+    }
+    return;
+  }
   if (!PSU_STRCMP(args[0], "set")) {
     if (argc == 3 && decimal(args[2], value) && (!PSU_STRCMP(args[1], "voltage") || !PSU_STRCMP(args[1], "offline-voltage"))) {
       reply(controller_.setVoltage(value, !PSU_STRCMP(args[1], "offline-voltage"))); return;
     }
-    if (argc == 4 && decimal(args[3], value)) {
-      if (!PSU_STRCMP(args[1], "voltage") || !PSU_STRCMP(args[1], "offline-voltage")) {
-        io_.println(F("ERR parallel voltage is global: set voltage <V> (no group)")); return;
-      }
-      const int8_t g = controller_.groupIndex(args[2]);
-      if (g >= 0 && (!PSU_STRCMP(args[1], "current") || !PSU_STRCMP(args[1], "offline-current"))) {
-        const bool offline = !PSU_STRCMP(args[1], "offline-current");
-        const auto r = controller_.setCurrent(g, value, offline); reply(r);
-        if (r == Result::Ok) {
-          const auto& group = controller_.configuration().groups[g];
-          io_.print(F("STAGED total A=")); io_.print(value / 100.0f); io_.print(F(" across slots ")); printMembers(group.members);
-          io_.println(F("; apply sends the previewed per-unit shares"));
-        } else {
-          const auto check = controller_.checkCurrent(g, value);
-          if (check.issue == Issue::Capacity) {
-            io_.print(F("PSU ")); io_.print(check.slot + 1); io_.print(F(" share A=")); io_.print(check.share / 100.0f);
-            io_.print(F(" exceeds configured maximum A=")); io_.println(check.maximum / 100.0f);
-          }
-          io_.println(F("No staging change or clamping; inspect config/ratings."));
-        }
-        return;
-      }
+    SettingScope scope;
+    if (argc == 4 && decimal(args[3], value) && parseScope(args[2], scope)) {
+      if (!PSU_STRCMP(args[1], "offline-current") && scope.kind == ScopeKind::Group) { reply(controller_.setCurrent(scope.index, value, true)); return; }
+      const auto field = !PSU_STRCMP(args[1], "voltage") ? SettingFields::Voltage : SettingFields::Current;
+      if (field == SettingFields::Current && PSU_STRCMP(args[1], "current")) { reply(Result::Invalid); return; }
+      const auto r = controller_.set(scope, field, value); reply(r);
+      if (r == Result::Ok) {
+        io_.print(F("STAGED ")); io_.print(value / 100.0f);
+        io_.println(field == SettingFields::Voltage ? F(" V; selected PSUs only") : scope.kind == ScopeKind::Unit ? F(" A for this PSU") :
+          scope.kind == ScopeKind::Global ? F(" A TOTAL PER GROUP; each group splits this total") : F(" A TOTAL; equal configured-member shares"));
+        io_.print(F("across slots ")); printMembers(scopeMembers(controller_.configuration(), scope)); io_.println();
+      } else io_.println(F("No staging changes or clamping; inspect target/rating limits."));
+      return;
     }
+    reply(Result::Invalid); return;
   }
   if (!PSU_STRCMP(args[0], "autoresume") && argc == 2 && (!PSU_STRCMP(args[1], "on") || !PSU_STRCMP(args[1], "off"))) {
     reply(controller_.setAutoResume(!PSU_STRCMP(args[1], "on")));
@@ -334,22 +341,28 @@ void SerialConsole::execute() {
   }
   if (!PSU_STRCMP(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
   if ((!PSU_STRCMP(args[0], "apply") || !PSU_STRCMP(args[0], "preview") || !PSU_STRCMP(args[0], "offline")) && argc >= 2 && argc <= 3) {
-    const bool offline = !PSU_STRCMP(args[0], "offline");
-    const bool partial = argc == 3 && !PSU_STRCMP(args[2], "partial");
-    if ((argc == 3 && !partial) || (offline && PSU_STRCMP(args[1], "all"))) { reply(Result::Invalid); return; }
-    int8_t g = controller_.groupIndex(args[1]);
-    Operation op = offline ? Operation::Offline : !PSU_STRCMP(args[1], "all") ? Operation::All :
-        !PSU_STRCMP(args[1], "voltage") ? Operation::Voltage : Operation::GroupCurrent;
-    plan_ = controller_.preview(op, g, now_, partial); confirmation_ = availabilityConfirmation_ = false;
+    const bool offline = !PSU_STRCMP(args[0], "offline"), partial = argc == 3 && !PSU_STRCMP(args[2], "partial");
+    SettingScope scope; SettingFields fields = SettingFields::Both;
+    if (!PSU_STRCMP(args[1], "voltage")) fields = SettingFields::Voltage;
+    else if (!parseScope(args[1], scope)) { reply(Result::Invalid); return; }
+    if (argc == 3) {
+      if (!PSU_STRCMP(args[2], "voltage")) fields = SettingFields::Voltage;
+      else if (!PSU_STRCMP(args[2], "current") || partial) fields = SettingFields::Current;
+      else { reply(Result::Invalid); return; }
+    }
+    if (offline && (argc != 2 || PSU_STRCMP(args[1], "all"))) { reply(Result::Invalid); return; }
+    plan_ = offline ? controller_.preview(Operation::Offline, -1, now_) : controller_.preview(scope, fields, now_, partial);
+    confirmation_ = availabilityConfirmation_ = false; profilePending_ = 0;
     if (!PSU_STRCMP(args[0], "preview")) io_.println(F("PREVIEW ONLY; no settings sent"));
     else {
       const auto r = controller_.queue(plan_, false, now_); reply(r);
-      if (r == Result::Ok) { io_.println(F("QUEUED; acknowledgements/results determine success")); wasBusy_ = true; }
+      if (r == Result::Ok) { io_.println(plan_.prepared ? F("Prepared for next ON; current remains OFF; save to persist") : F("QUEUED; acknowledgements/results determine success")); wasBusy_ = controller_.busy(); }
       if (r == Result::ConfirmRequired) confirmation_ = true;
     }
     startView(View::Plan); return;
   }
   if (!PSU_STRCMP(args[0], "confirm") && argc == 2) {
+    if (profilePending_ && (!PSU_STRCMP(args[1], "yes") || !PSU_STRCMP(args[1], "no"))) { profileConfirm(!PSU_STRCMP(args[1], "yes")); return; }
     if (!PSU_STRCMP(args[1], "no")) { confirmation_ = availabilityConfirmation_ = false; io_.println(F("Cancelled; no settings sent")); return; }
     if (!PSU_STRCMP(args[1], "yes") && availabilityConfirmation_) {
       availabilityConfirmation_ = false;
@@ -384,24 +397,31 @@ void SerialConsole::execute() {
     reply(Result::Ok); return;
   }
   if ((!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") || !PSU_STRCMP(args[0], "defaults")) && argc == 1) {
+    storageCommand(args[0]);
+    return;
+  }
+  io_.println(F("ERR syntax; help. set current GROUP1 55 / set voltage psu:1 54"));
+}
+void SerialConsole::storageCommand(const char* command) {
     if (controller_.busy()) { reply(Result::Busy); return; }
-    if (!PSU_STRCMP(args[0], "defaults")) { reply(controller_.configure(defaultConfiguration())); return; }
-    if (!PSU_STRCMP(args[0], "save")) {
+    if (!PSU_STRCMP(command, "save")) {
       const auto r = memory_.startSave(controller_.configuration());
       if (r == StorageResult::Ok) {
         waitingSave_ = true; saveToken_ = memory_.saveToken(); saveRevision_ = controller_.configurationRevision();
         io_.println(F("EEPROM save started; wait for EEPROM OK before power-off"));
       } else storageReply(r);
     }
-    else {
-      Configuration c = controller_.configuration(); const auto r = memory_.load(c);
-      if (r == StorageResult::Ok || r == StorageResult::Migrated || r == StorageResult::WrongDeployment) reply(controller_.configure(c));
-      storageReply(r);
-    }
-    return;
-  }
-  io_.println(F("ERR syntax; help. Parallel set syntax: set current GROUP1 55 / set voltage 54"));
+    else restoreCommand(!PSU_STRCMP(command, "defaults"));
 }
+void SerialConsole::restoreCommand(bool defaults) {
+  Configuration candidate;
+  if (defaults) { defaultConfiguration(candidate); reply(controller_.configure(candidate)); return; }
+  const auto result = memory_.loadCandidate(candidate);
+  if (result == StorageResult::Ok || result == StorageResult::Migrated || result == StorageResult::WrongDeployment)
+    reply(controller_.configure(candidate));
+  storageReply(result);
+}
+
 void SerialConsole::tick(uint32_t now) {
   now_ = now;
   io_.drain(stream_);
@@ -465,6 +485,14 @@ void SerialConsole::tick(uint32_t now) {
     beginOutput(); prompt(); redraw_ = false;
     if (submitted_) { io_.println(); promptVisible_ = false; }
     if (io_.free() < console::outputReserveBytes) return;
+  }
+  const auto& profile = controller_.profileLoad();
+  if (profile.operation != profileNotice_ && (profile.state == ProfileLoadState::Complete || profile.state == ProfileLoadState::Failed)) {
+    profileNotice_ = profile.operation; beginOutput();
+    io_.println(profile.state == ProfileLoadState::Failed ? F("PROFILE LOAD FAILED; inspect status/alerts") : profile.older ? F("Profile loaded; earlier snapshot saved, newer changes unsaved") :
+      profile.prepared ? F("PROFILE SAVED; prepared for next ON, charging remains OFF") : F("PROFILE APPLIED AND SAVED"));
+    if (profile.storage != StorageResult::Ok) storageReply(profile.storage);
+    prompt(); return;
   }
   if (waitingSave_ && memory_.completedToken() == saveToken_) {
     waitingSave_ = false; beginOutput(); storageReply(memory_.completedResult());
@@ -570,8 +598,10 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.print(F(" addr=")); if (d) io_.print(d->address); else io_.print('-');
     io_.print(' '); io_.println(issueName(controller_.issue(i, now)));
   } else if (field == 1) {
-    io_.print(F("  staged A=")); const int8_t g = groupFor(c, i);
-    if (g >= 0) io_.print(allocation(c.groups[g], i) / 100.0f); else io_.print('-');
+    io_.print(F("  staged V=")); io_.print(c.voltage[i] / 100.0f); io_.print(F(" auth V="));
+    if (c.operating.voltageMask & (1U << i)) io_.print(c.operating.voltage[i] / 100.0f); else io_.print('-');
+    io_.print(F(" staged A=")); const int8_t g = groupFor(c, i);
+    if (g >= 0) io_.print(c.current[i] / 100.0f); else io_.print('-');
     io_.print(F(" authorized A="));
     if (c.operating.currentMask & (1U << i)) io_.print(c.operating.current[i] / 100.0f); else io_.print('-');
     io_.print(F(" voltage-authorized=")); io_.print(bool(c.operating.voltageMask & (1U << i)));
@@ -640,6 +670,7 @@ void SerialConsole::printControl(uint32_t now) {
   }
 }
 void SerialConsole::outputRow(uint32_t now) {
+  if (view_ == View::Profiles || view_ == View::Profile) { profileRow(); return; }
   const auto& c = controller_.configuration();
   if (view_ == View::Alerts) {
     while (row_ < AlertManager::Count && !controller_.alerts().visible(row_)) ++row_;
@@ -700,7 +731,7 @@ void SerialConsole::outputRow(uint32_t now) {
         io_.print(controller_.availabilitySettled(g, now) ? F("SETTLED") : controller_.availabilityUnstable(g, now) ? F("UNSTABLE") : F("SETTLING"));
         uint16_t active = 0;
         for (uint8_t i = 0; i < c.count; ++i) if (group.members & controller_.participants() & (1U << i)) active += c.operating.current[i];
-        io_.print(F(" target-A=")); io_.print(group.current / 100.0f);
+        io_.print(F(" target-A=")); io_.print(groupCurrent(c, g) / 100.0f);
         io_.print(F(" participating-authorized-A=")); io_.println(active / 100.0f);
       }
     } else { io_.println(F("startup accept/include/require GROUP|slots [remember]; confirm yes/no. No current redistribution.")); view_ = View::None; }
@@ -773,18 +804,18 @@ void SerialConsole::outputRow(uint32_t now) {
     }
   } else if (view_ == View::Help) {
     switch (row_++) {
-      case 0: io_.println(F("Parallel: one global voltage; named source groups; current is TOTAL group A.")); break;
+      case 0: io_.println(F("Scopes: all / GROUP / psu:N. Global current = same TOTAL PER GROUP.")); break;
       case 1: io_.print(F("count <1..")); io_.print(PSU_MAX_UNITS); io_.println(F(">; group set <NAME> <1,2 or 1-2>; group delete <NAME>")); break;
       case 2: io_.println(F("discover; diag bus; diag group <NAME>; diag psu <slot>")); break;
       case 3: io_.println(F("bind <slot> <12-hex identity> <rated-A>; adopt replaces; unbind <slot> releases identity")); break;
-      case 4: io_.println(F("set voltage <V>; set offline-voltage <V> (global only)")); break;
+      case 4: io_.println(F("set voltage <all|GROUP|psu:N> V; set voltage V aliases all")); break;
       case 5: io_.println(F("set current <GROUP> <total-A>; set offline-current <GROUP> <total-A>")); break;
       case 6: io_.println(F("preview <all|voltage|GROUP>; apply <all|voltage|GROUP>")); break;
       case 7: io_.println(F("apply GROUP partial; then confirm yes/no (missing only; no redistribution)")); break;
       case 8: io_.println(F("offline all = explicit PSU nonvolatile defaults; never automatic")); break;
       case 9: io_.println(F("config / groups; status / telemetry [all|GROUP]; watch on/off; raw on/off")); break;
       case 10: io_.println(F("save / load = controller EEPROM; autoresume on/off; defaults = RAM template")); break;
-      case 11: io_.println(F("legacy = inspect preserved schema-1 records before migration/save")); break;
+      case 11: io_.println(F("profiles; profile show/save/load N; profile inclusion yes/no; confirm yes/no")); break;
       case 12: io_.println(F("poll <all|GROUP>; describe <CAN-address>; interval <1000..10000>; reset-ah")); break;
       case 14: io_.println(F("touch status/calibrate/debug on/off/calibration export (touch builds)")); break;
       case 15: io_.println(F("ui-debug status/scenario NAME/restart/reset (SIM builds; no physical CAN)")); break;
@@ -800,14 +831,15 @@ void SerialConsole::outputRow(uint32_t now) {
     if (row_ == 0) {
       io_.print(F("deployment=")); io_.print(c.deploymentId); io_.print(F(" compiled=")); io_.print(deployment::id);
       io_.print(F(" slots=")); io_.print(c.count); io_.print(F(" autoresume=")); io_.print(c.autoResume); io_.print(F(" thermal-stop=")); io_.println(uint8_t(c.thermalStop));
-      io_.print(F("draft global V=")); io_.print(c.voltage / 100.0f); io_.print(F(" offline V=")); io_.print(c.offlineVoltage / 100.0f);
-      io_.print(F(" authorized V=")); if (c.operating.voltageAuthorized) io_.println(c.operating.voltage / 100.0f); else io_.println(F("none"));
+      io_.print(F("configured V range=")); const auto v = settingSummary(c, {}, SettingFields::Voltage);
+      io_.print(v.minimum / 100.0f); io_.print('-'); io_.print(v.maximum / 100.0f);
+      io_.print(F(" offline V=")); io_.println(c.offlineVoltage / 100.0f);
       io_.print(F("voltage authorized slots=")); printMembers(c.operating.voltageMask); io_.println();
     } else if (row_ <= limits::maxGroups) {
       const auto& g = c.groups[row_ - 1];
       if (g.members) {
         io_.print(g.name); io_.print(F(" slots=")); printMembers(g.members);
-        io_.print(F(" total A=")); io_.print(g.current / 100.0f); io_.print(F(" offline total A=")); io_.println(g.offlineCurrent / 100.0f);
+        io_.print(F(" total A=")); io_.print(groupCurrent(c, row_ - 2) / 100.0f); io_.print(F(" offline total A=")); io_.println(g.offlineCurrent / 100.0f);
       }
     } else if (row_ <= limits::maxGroups + c.count) {
       const uint8_t i = row_ - limits::maxGroups - 1;
@@ -879,7 +911,7 @@ void SerialConsole::outputRow(uint32_t now) {
     } else if (row_ <= c.count) {
       const uint8_t i = row_ - 1;
       if (plan_.members & (1U << i)) {
-        io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" V=")); io_.print(plan_.voltage / 100.0f);
+        io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" V=")); io_.print(plan_.voltage[i] / 100.0f);
         io_.print(F(" share A=")); io_.print(plan_.current[i] / 100.0f); io_.print(' '); io_.println(issueName(plan_.issues[i]));
       }
     } else {

@@ -5,6 +5,7 @@
 #include <string.h>
 namespace psu {
 uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
+  if (m.settingsPage()) return settingsButtons(m, b);
   uint8_t n = 0;
   auto add = [&](uint8_t r,uint8_t c,uint8_t w,uint8_t h,ActionKind a,FlashText label,int16_t value=0) {
     if (n < capacity) b[n++] = {r,c,w,h,{a,value},label};
@@ -159,7 +160,9 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
 #else
     if (!*b[i].label.data) continue;
 #endif
-    const bool selected=(m.page()==UiPage::Tools && i==m.toolSelection()) ||
+    const bool selected=(m.settingsPage() && m.page()!=UiPage::ProfileName && i==m.settingsSelection()) ||
+        (m.page()==UiPage::ProfileName && ((m.nameCursor()==profiles::nameLength && b[i].action.kind==ActionKind::NameDone) || (m.nameCursor()>profiles::nameLength && b[i].action.kind==ActionKind::Back))) ||
+        (m.page()==UiPage::Tools && i==m.toolSelection()) ||
         (m.availabilityPage() && i==m.availabilitySelection()) ||
         (m.page()==UiPage::AlertDetail && i==m.alertSelection()) ||
         ((m.page()==UiPage::Recovery || m.page()==UiPage::RecoveryConfirm || m.page()==UiPage::Result ||
@@ -173,17 +176,19 @@ void UiLayout::controls(UiFrame& f,const UiModel& m) {
   }
 }
 void UiLayout::extras(UiFrame& f,const UiModel& m,const PsuController& c,uint32_t now) {
+  if (m.settingsPage()) { settingsExtras(f,m,c,now); return; }
   if (m.page()==UiPage::Editor) {
     const bool volts=m.field()==UiField::Voltage;
-    f.text(2,0,26,volts ? UI_TEXT("BUS VOLTAGE - ALL GROUPS") : UI_TEXT("GROUP TOTAL CURRENT"),Accent);
-    if (!volts) f.text(3,0,26,c.configuration().groups[m.group()].name,Accent);
+    f.text(2,0,26,volts ? UI_TEXT("SELECTED PSU VOLTAGE") : m.scope().kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : UI_TEXT("TOTAL CURRENT PER GROUP"),Accent);
+    if (m.scope().kind==ScopeKind::Group) f.text(3,0,26,c.configuration().groups[m.group()].name,Accent);
     char value[12]; formatValue(value,sizeof(value),m.editValue()/100.0f,"",1);
     f.largeNumber(6,value); f.text(8,12,2,volts ? UI_TEXT("V") : UI_TEXT("A"),Muted);
-    const auto live=summarize(c,volts ? membersMask(c.count()) : c.configuration().groups[m.group()].members,
+    const auto live=summarize(c,m.settingsMembers(),
         volts ? protocol::OutputVoltage : protocol::OutputCurrent,volts ? Aggregate::Mean : Aggregate::Sum,now);
     f.text(9,0,5,UI_TEXT("Live:"),Muted); formatValue(value,sizeof(value)-live.partial(),live.value,volts ? "V" : "A");
     if (live.partial()) strcat(value,"*");
-    f.text(9,6,12,live.valid() ? value : "--",live.partial() ? Warning : Text);
+    if (volts && population(m.settingsMembers()) > 1) f.text(9,6,18,UI_TEXT("See each PSU"),Muted);
+    else f.text(9,6,12,live.valid() ? value : "--",live.partial() ? Warning : Text);
     char lo[9],hi[9],range[27]; formatValue(lo,sizeof(lo),m.minimum()/100.0f,""); formatValue(hi,sizeof(hi),m.maximum()/100.0f,"");
     PSU_SNPRINTF(range,sizeof(range),"Range %.7s - %.7s %c",lo,hi,volts ? 'V' : 'A'); f.text(10,0,26,range,Muted);
   } else if (m.page()==UiPage::Tools) {

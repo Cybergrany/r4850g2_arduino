@@ -1,7 +1,11 @@
 # Serial commissioning and source groups
 
-This controller serves one parallel DC bus. Groups describe input sources, not
-separate packs. Each slot belongs to at most one group and has a globally unique
+[Profiles and scoped settings](PROFILES.md) documents the current global/group/PSU
+commands, OFF preparation, optional participation and schema-6 migration.
+
+Groups describe physical wiring or input sources. Per-unit voltage/current
+settings support parallel or separate outputs; enable and protection are shared.
+Each slot belongs to at most one group and has a globally unique
 slot number: GROUP1 might contain slots 1 and 2, GROUP2 slots 3 and 4.
 
 The examples use 54 V and two 50 A units to illustrate commands. Choose the
@@ -269,7 +273,8 @@ apply GROUP1
 ```
 
 This sends 20 A to each GROUP1 member. Other groups keep their settings.
-`apply GROUP1` never applies a pending global voltage draft. To change voltage:
+`apply GROUP1` applies both scoped voltage and current targets. Use
+`apply GROUP1 current` for a current-only change. To change all voltages:
 
 ```text
 set voltage 55
@@ -465,22 +470,19 @@ vendor safety status. See [protocol evidence and limits](PARITY.md).
 The serial command syntax intentionally changes from the earlier multi-pack
 firmware. Per-unit voltages, manual address mappings, enabled-slot skipping,
 `bootapply`, `modifySingle`/`modifyRange`, and the combined `persist` command are
-removed. Use global voltage, named groups, identity bindings, `autoresume`, and
+removed. Use scoped voltage/current, named groups, identity bindings, `autoresume`, and
 explicit online/offline operations. After serial commissioning, the
-[ILI9341/wheel UI](LOCAL_UI.md) monitors groups and edits global voltage/group
+[ILI9341/wheel UI](LOCAL_UI.md) monitors groups and edits scoped voltage/
 current through the same backend. A successful local apply also saves controller
 EEPROM; serial `apply` and `save` remain separate operations.
 
-EEPROM schema 5 uses two 256-byte journal slots, with a **211-byte record for
-nine PSUs and eight groups**. The rest of Mega EEPROM is untouched. Touch
-calibration keeps addresses 216–255 and 472–511. A save commits last with CRC
-verification; interrupted saves preserve the previous complete record.
-
-Existing parallel-controller schemas 2–4 load automatically, retaining the active
-count, bindings, ratings, group names/memberships, drafts, authorized profile and
-saved enable preference. Schema-3/4 absence permissions and schema-4 thermal stops
-are retained. Schema 2 has no absence permissions; schemas 2/3 have no thermal
-stop. Boot/load does not rewrite old records; the next verified save writes schema 5.
+EEPROM schema 6 uses two 512-byte controller slots from address 512, with a
+247-byte record for nine PSUs/eight groups. Profiles occupy 1536–3583;
+calibration keeps 216–255 and 472–511. Saves commit last and verify readback.
+Schemas 2–5 migrate automatically, retaining identity bindings, group membership,
+permissions, authorized targets and thermal stops. Shared voltage and group
+current drafts become individual targets. Boot/load do not rewrite old records;
+the next verified save retires legacy markers. See [migration details](PROFILES.md).
 
 ### Adding PSU 9 after upgrading an eight-slot controller
 
@@ -500,14 +502,14 @@ diag bus
 Wait for the new identity to be verified by two fresh INFO replies, then run
 `bind 9 <NEW_12_HEX_ID> <RATED_AMPS>` and add slot 9 to the appropriate group, for
 example `group set GROUP3 7-9`. Review the group's total current: changing its membership
-changes the staged per-unit split and invalidates affected current authorization.
+preserves individual targets and invalidates affected current authorization.
+Stage a new group total explicitly if equal redistribution is desired.
 Check `diag group GROUP3` and `preview all`; complete the usual enable/apply checks
 before expecting output. The new unit has no inherited authorization. `save` and
 wait for `EEPROM OK` to retain the expanded configuration.
 
-Older firmware cannot read schema 5 and may load a stale older journal with
-auto-resume ON. Export, inhibit charging and recommission deliberately before
-downgrading. An EEPROM reset is not needed for this upgrade.
+Older firmware cannot read schema 6. Export, inhibit charging and recommission
+deliberately before downgrading. An EEPROM reset is not needed for this upgrade.
 
 Schema 1 records are never rewritten just by boot/load:
 
@@ -538,7 +540,7 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `discover`, `diag bus` | Read-only sweep and responder/address/identity diagnostics |
 | `diag group NAME`, `diag psu N` | Group/member readiness, freshness, requested/authorized settings, failures |
 | `diag ui`, `diag ui reset` | Display clocks, render/SPI/scene/change timings and main-loop phase maxima; reset timings without changing operation |
-| `config`, `groups` | Deployment, global drafts, operating voltage, groups, bindings, ratings |
+| `config`, `groups` | Deployment, per-PSU configured/authorized targets, groups, bindings, ratings |
 | `count N` | Set configured slot count, 1–9; cannot shrink through existing membership |
 | `bind N ID RATING`, `adopt N ID RATING` | Explicit identity binding/replacement; rating in amps |
 | `unbind N` | Release an active or retained inactive binding; no physical output-disable command |
@@ -547,7 +549,9 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `set current NAME A`, `set offline-current NAME A` | Group total drafts; split against configured members/ratings |
 | `preview all`, `preview voltage`, `preview NAME [partial]` | Inspect proposed recipients, shares and blockers without applying |
 | `apply all`, `apply voltage`, `apply NAME [partial]` | Queue global or group online operations |
-| `confirm yes`, `confirm no` | Resolve the current missing-member confirmation |
+| `confirm yes`, `confirm no` | Resolve the current availability/profile/partial-apply review |
+| `profiles`, `profile show/save/load N` | Eight named target profiles; optional participation via `profile inclusion yes/no` |
+| `diag memory` | Static free RAM, current free space and observed stack watermark |
 | `offline all` | Explicit PSU nonvolatile voltage/current writes |
 | `status [all\|NAME]`, `telemetry [all\|NAME]` | Member summary or all decoded metrics and approximate Ah |
 | `watch on/off`, `raw on/off`, `echo on/off` | Console output preferences (not persistent) |

@@ -24,7 +24,7 @@ body = source.split("font[] PROGMEM = {", 1)[1].split("}", 1)[0]
 font = [int(n, 16) for n in re.findall(r"0x[0-9a-fA-F]+", body)]
 assert len(font) == 1280
 frames = {}
-for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")):
+for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")) + sorted(p.stem for p in args.frames.glob("settings-*.txt")) + sorted(p.stem for p in args.frames.glob("profile-*.txt")):
     lines = (args.frames / (name + ".txt")).read_bytes().decode("latin1").rstrip("\n").split("\n")
     assert len(lines) == 17 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
     frames[name] = {"rows": lines[:15], "styles": lines[15], "outlines": json.loads(lines[16])}
@@ -34,14 +34,14 @@ html = """<!doctype html>
 __FONT_LICENSE__
 -->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Parallel PSU controller — implemented UI</title>
+<title>PSU controller — implemented UI</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23213d2b'/%3E%3Cpath d='M6 9h20M6 16h20M6 23h20' stroke='%238cdbb2' stroke-width='3'/%3E%3C/svg%3E">
 <style>
 :root{--bg:#f2f5f1;--surface:#fff;--border:#c8d5ca;--text:#192b22;--text-dim:#52665a;--accent:#176843;--warn:#95561a}
 @media(prefers-color-scheme:dark){:root{--bg:#101a16;--surface:#192b22;--border:#4c6253;--text:#eaf4ed;--text-dim:#afc0b4;--accent:#8cdbb2;--warn:#f6bd73}}
 *{box-sizing:border-box}body{background:var(--bg);color:var(--text);font:16px/1.6 'DejaVu Sans',sans-serif;margin:0}main{max-width:850px;margin:auto;padding:34px 24px}h1{font-size:30px;line-height:1.2;letter-spacing:-.8px;margin:0 0 20px}p{max-width:70ch}nav{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0}button{padding:10px 14px;font:inherit;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer}button[aria-pressed=true]{background:var(--accent);color:var(--bg)}button:focus-visible,a:focus-visible{outline:3px solid var(--warn);outline-offset:3px}figure{margin:0}canvas{display:block;width:640px;max-width:100%;height:auto;image-rendering:pixelated;border:8px solid #26392d}figcaption{color:var(--text-dim);font-size:14px;margin-top:12px}a{color:var(--accent)}pre{overflow:auto;font:13px/1.4 'DejaVu Sans Mono',monospace;background:var(--surface);padding:16px}details{margin-top:28px}small{color:var(--text-dim)}
 </style></head><body><main>
-<h1>Parallel PSU controller · local UI</h1>
+<h1>PSU controller · local UI</h1>
 <p>These frames come from the implemented layout exercised by host tests. The display is 320×240 pixels; the preview is enlarged. Example readings are simulated, not measurements from hardware.</p>
 <nav aria-label="Preview screen"></nav>
 <figure><canvas width="320" height="240" role="img" aria-label="Firmware display preview"></canvas>

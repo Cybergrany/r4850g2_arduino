@@ -12,7 +12,8 @@ constexpr uint16_t pollMs = 1000;
 // ratings use the firmware default (50 A). Serial commissioning + save overrides
 // these defaults for this deployment. No profile starts automatically.
 // Example with initialSlots=2:
-//   groups = {{"GROUP1", 0x03, 5500, 0}}; // slots 1+2, total 55 A online
+//   groups = {{"GROUP1", 0x03, 0}}; // slots 1+2, zero offline current
+// Online targets start at the default voltage and zero current; stage/apply them.
 // Fill bindings only after checking the physical units with `diag bus`.
 constexpr UnitConfig units[PSU_MAX_UNITS] PSU_CONST_STORAGE = {};
 constexpr GroupConfig groups[limits::maxGroups] PSU_CONST_STORAGE = {};

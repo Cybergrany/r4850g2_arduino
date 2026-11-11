@@ -7,11 +7,12 @@
 namespace psu {
 struct UiInput { int16_t delta; bool clicked, held; };
 enum class UiPage : uint8_t { Groups, Units, Detail, Config, Confirm, Result, Editor, Tools, Calibration, TouchDebug, Scenarios,
-  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail, Recovery, RecoveryConfirm };
+  Availability, AvailabilityUnits, AvailabilityConfirm, AvailabilityResult, Alerts, AlertDetail, Recovery, RecoveryConfirm,
+  ConfigMenu, GroupSelect, UnitSelect, ProfileList, ProfileOptions, ProfileName, ProfileReview, ScopeConfirm };
 enum class UiField : uint8_t { Voltage, Current, Tools };
 enum class UiNotice : uint8_t {
   None, Changed, Busy, Blocked, Applying, Saving, Saved, PartialSaved,
-  ApplyFailed, SaveFailed, SavedOlder, Cancelled, ConfigSaved
+  ApplyFailed, SaveFailed, SavedOlder, Cancelled, ConfigSaved, ProfileSaved, Prepared
 };
 class UiModel {
  public:
@@ -54,7 +55,26 @@ class UiModel {
   bool confirmingYes() const { return confirmYes_; }
   uint16_t editValue() const { return edit_; }
   uint16_t minimum() const { return field_ == UiField::Voltage ? limits::minVoltage : 0; }
-  uint16_t maximum() const { return field_ == UiField::Voltage ? limits::maxVoltage : c_.groupCurrentMaximum(group_); }
+  uint16_t maximum() const { return c_.settingMaximum(scope_, field_ == UiField::Voltage ? SettingFields::Voltage : SettingFields::Current); }
+  SettingScope scope() const { return scope_; }
+  SettingSummary configured(SettingFields field) const { return settingSummary(c_.configuration(), scope_, field); }
+  UnitMask settingsMembers() const { return scopeMembers(c_.configuration(), scope_); }
+  bool settingsPage() const;
+  uint8_t settingsSelection() const { return settingsSelection_; }
+  uint8_t listPage() const { return listPage_; }
+  uint8_t listCount() const;
+  uint8_t listRows() const;
+  bool profileOperation() const { return profileFlow_; }
+  bool savingProfile() const { return saveProfileChoice_; }
+  bool profileInclusion() const { return profileReview_.restoreInclusion; }
+  bool storedInclusion() const;
+  bool profileSummary(uint16_t& minV, uint16_t& maxV, uint16_t& totalA) const;
+  uint8_t profileSlot() const { return profileReview_.slot; }
+  const char* profileName() const { return profileName_; }
+  uint8_t nameCursor() const { return nameCursor_; }
+  bool nameEditing() const { return nameEditing_; }
+  StorageResult profileInfo(uint8_t slot, ProfileInfo& info) const { return memory_.profileInfo(slot, info); }
+  const ProfileReview& profileReview() const { return profileReview_; }
   bool working() const { return notice_ == UiNotice::Applying || notice_ == UiNotice::Saving; }
   uint8_t groupCount() const;
   uint8_t groupRank() const;
@@ -79,7 +99,7 @@ class UiModel {
   bool recoverySaved() const { return recovery_.saved; }
  private:
   void openRecovery(uint32_t now, RecoveryLink link = {RecoveryKind::None, PSU_MAX_UNITS});
-  bool recoveryAction(UiAction action, uint32_t now);
+  __attribute__((noinline)) bool recoveryAction(UiAction action, uint32_t now);
   void returnFromRecovery();
   void reviewRecovery(RecoveryCommand command, uint32_t now);
   bool recoveryFresh(uint32_t now) const;
@@ -91,6 +111,7 @@ class UiModel {
     AlertState incident;
     UiPage page = UiPage::Groups, reviewPage = UiPage::Recovery;
     UiField field = UiField::Current;
+    SettingScope scope;
     UiNotice notice = UiNotice::None;
     Issue blocker = Issue::None;
     int8_t group = -1;
@@ -101,13 +122,23 @@ class UiModel {
     bool active = false, editing = false, saved = false;
   } recovery_;
   uint32_t uiNow_ = 0;
-  bool alertAction(UiAction action, uint32_t now);
+  __attribute__((noinline)) bool alertAction(UiAction action, uint32_t now);
   uint32_t alertSince_ = 0;
   AlertState displayedAlert_;
   Result alertResult_ = Result::Ok;
   uint8_t alertOverlay_ = 0, alertSelection_ = 0;
   void refresh(uint32_t now);
   void commit(uint32_t now);
+  // Keep mutually exclusive navigation/profile temporaries off each other's
+  // AVR stack paths, including when LTO is enabled.
+  __attribute__((noinline)) bool settingsAction(UiAction action, uint32_t now);
+  __attribute__((noinline)) void navigationAction(UiAction action, uint32_t now);
+  void settingsInput(UiInput input, uint32_t now);
+  void openSettings(SettingScope scope);
+  __attribute__((noinline)) void reviewProfile(uint32_t now);
+  __attribute__((noinline)) void confirmProfile(uint32_t now);
+  void chooseProfile(uint8_t slot, uint32_t now);
+  void settingsTick(uint32_t now);
   void queue(uint32_t now, bool confirmed);
   void result(UiNotice notice, Issue issue = Issue::None);
   void selectAvailability(uint32_t now);
@@ -137,5 +168,11 @@ class UiModel {
   uint32_t availabilitySequence_ = 0;
   Result availabilityResult_ = Result::Ok;
   bool availabilityWorking_ = false, availabilityRemembered_ = false;
+  SettingScope scope_{ScopeKind::Group, 0};
+  ProfileReview profileReview_;
+  char profileName_[profiles::nameLength + 1] = {};
+  char nameBefore_[profiles::nameLength + 1] = {};
+  uint8_t settingsSelection_ = 0, listPage_ = 0, nameCursor_ = 0;
+  bool saveProfileChoice_ = false, nameEditing_ = false, profileFlow_ = false, profileLoading_ = false;
 };
 }

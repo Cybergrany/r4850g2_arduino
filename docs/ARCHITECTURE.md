@@ -24,26 +24,25 @@ The MCP2515/arduino-CAN adapter currently serves one physical CAN interface.
 
 ## Persistent model versus observed hardware
 
-There is one parallel DC bus, one online voltage, one offline voltage, and up to
-nine configured PSU slots and eight disjoint named source groups. Group configuration contains membership,
-online total current, and offline total current. A member is a stable controller
-slot with a six-byte identity binding and an explicit rated current.
+There are up to nine identity-bound PSU slots and eight disjoint named groups.
+Configured and authorized voltage/current are per PSU. Offline voltage and group
+offline totals remain separate explicit defaults. A shared `SettingScope` and
+`SettingFields` interface validates, previews and applies global/group/unit edits.
+Global current sets the same total per group; group current replaces allocations
+with deterministic equal shares. Group totals are derived from member targets.
 
-`Configuration::operating` is separate from drafts: it contains the authorized
-voltage, per-slot authorized currents, and validity masks. Queueing a validated
-online apply authorizes its intended values; the asynchronous result separately
-reports what was acknowledged. The legacy one-operation partial apply authorizes
-only its recipients. A normal apply with explicitly accepted exclusions authorizes
-the latest shares for every selected member, including pending intent for
-excluded units; transmission and ACK masks include only participants.
-Saving drafts never authorizes them. Changing membership/bindings invalidates
-affected current authorization without redistributing live peers' currents. A new
-binding also makes that unit managed and starts background zero-current reconciliation.
-There is no hidden total-current ceiling or feedback redistribution loop.
-Voltage is still one shared value; its per-slot authorization mask prevents a
-replacement or newly added slot inheriting reboot permission from an old profile.
-Until all configured identities are explicitly authorized for that voltage,
-automatic restoration waits for a complete manual voltage/all apply.
+`Configuration::operating` contains per-unit authorized V/A and validity masks;
+configured drafts, thermally effective current and acknowledged values remain
+separate. Authorization does not claim physical delivery. Latest accepted field
+updates replace the affected members. Membership edits preserve individual drafts
+and invalidate affected current authorization without redistributing live current.
+
+OFF applies prepare targets for the next explicit ON and retain zero hold. Initial
+release still requires the required members' voltage authorization and ACKs;
+each target is compared with that PSU's authorized voltage. Identity changes,
+thermal stops, availability and readiness guards remain in force. Profiles map
+stable identities to configured targets; optional participation is a separate,
+explicit OFF operation. [Operator semantics and EEPROM map](PROFILES.md).
 
 `Discovery` holds twelve physical `Psu` observations at the default nine-slot
 capacity, including three spare entries for unbound devices/address changes.
@@ -81,12 +80,12 @@ controller.bind(0, id1, 5000, now);
 controller.bind(1, id2, 5000, now);
 controller.setGroup("GROUP1", 0x03);  // slots 0 and 1
 const int8_t group = controller.groupIndex("GROUP1");
-controller.setVoltage(5400);         // one global voltage
+controller.set({ScopeKind::Group, 0}, SettingFields::Voltage, 5400);
 controller.setCurrent(group, 5500);  // total 55 A, shares 27.50 A
 controller.setAutoResume(true);     // live enable; first wait for held-at-zero-awake
 
 const auto plan = controller.preview(psu::Operation::All, -1, now);
-// Render every plan.issues[i], its recipients, voltage and current[i].
+// Render every plan.issues[i], its recipients, voltage[i] and current[i].
 if (plan.blocker == psu::Issue::None) {
   const auto result = controller.queue(plan, false, now);
   // Check result, then poll report() until active is false. Queue != hardware success.
@@ -101,7 +100,7 @@ atomic in RAM and return Busy while a job runs. The old independent-pack
 
 | Hook | UI responsibility / data |
 | --- | --- |
-| `configuration()` | Global drafts, deployment, groups, bindings, ratings, authorized profile |
+| `configuration()` | Per-unit drafts, deployment, groups, bindings, ratings, authorized targets |
 | `setGroup`, `removeGroup`, `setCount`, `bind`, `unbind` | Commissioning/membership; binding starts background reconciliation; removal does not stop retired hardware |
 | `checkCurrent(group,total)` | Structured capacity error with limiting slot, requested share and maximum |
 | `setCurrent`, `setVoltage` | Stage validated online/offline drafts; no automatic clamping |
@@ -175,7 +174,7 @@ A 750 ms identity timeout sends no setting. A write then has a separate 750 ms
 ACK timeout; an ACK must match the original address/identity epoch, register,
 raw value, and recognized accepted/rejected status.
 
-Global online/offline operations have two phases: voltage for all recipients,
+Combined scoped online/offline operations have two phases: voltage for all recipients,
 then current for all recipients. Any voltage failure blocks the current phase.
 The full voltage recipient set is checked again at the phase boundary; losing an
 earlier recipient before the last voltage ACK also blocks current. Skipped
@@ -256,7 +255,7 @@ heap-allocated canvas, or String-based menu. A future display can replace the
 renderer; a different resolution can also replace the layout without changing
 navigation/backend policy. SSD1306 support and its dependency are removed.
 
-The header averages fresh configured-unit output voltages and sums fresh current
+The header shows a common voltage or explicit V:MIX and sums fresh current
 and output power. Per-metric timestamps and an expiring freshness mask prevent
 other replies from keeping an old measurement fresh, including across millis
 rollover. `metric()` retains its last-value API; `freshMetric()` is the stricter
@@ -378,72 +377,47 @@ the paced identity/ACK worker. Refreshes do not overwrite user operation reports
 or repeat persistent defaults/fan writes. AC-loss transitions and negotiation
 invalidate stale routing/setting proofs. [Operator sequence and limits](STARTUP.md).
 
-## EEPROM schema 5 and migration
+## EEPROM schema 6 and migration
 
-`ArduinoEeprom` wraps the standard `EEPROM.length/read/update` methods. Serial
-`save`, a successful local apply/save, remembered availability decisions and
-thermal protection write charger records. Two 256-byte journal slots occupy
-bytes 0–511; calibration retains its separate 40-byte records at 216 and 472.
-The default nine-slot record is **211 bytes**, with eight groups, regardless of
-how many slots are active. Integer encoding is explicit little-endian, independent
-of struct padding. Telemetry, sessions, pending jobs and ACK history are not saved.
+`ArduinoEeprom` uses standard Arduino EEPROM access. The Mega's 4096-byte map is
+specified in [PROFILES.md](PROFILES.md). Controller records use two 512-byte slots
+at 512/1024; eight profiles use two 128-byte copies each from 1536. Calibration
+retains its 40-byte records at 216 and 472. The default nine-unit controller record
+is 247 bytes, encoded explicitly in little-endian order.
 
-| Relative offset (9-slot build) | Contents |
+| Controller offset | Contents |
 | --- | --- |
-| 0 | Commit marker `A5`, written last |
-| 1 | Schema `5` |
-| 2–3 | Record length |
-| 4–7 | Generation, wrap-aware comparison |
-| 8–9 | CRC-16/CCITT-FALSE excluding bytes 0, 8, 9 |
-| 10–13 | Magic `R48C` |
-| 14 | Operating voltage authorization flag |
-| 15 | Encoded unit capacity (9 in supplied builds) |
-| 16–19 | Deployment ID |
-| 20–23 | Draft online/offline voltage |
-| 24–26 | Poll interval and active slot count |
-| 27 | Bit 0 auto-resume; bits 1–2 thermal-stop reason |
-| 28–29 | Accepted-absence mask |
-| 30–31 | Per-slot voltage authorization mask |
-| 32–33 | Per-slot current authorization mask |
-| 34–35 | Authorized voltage |
-| 36–115 | Eight groups: 6 packed name bytes, 2-byte online and offline totals |
-| 116–205 | Nine units: 6 identity bytes, 2-byte rating and authorized current |
-| 206–210 | One 4-bit group index per unit, low nibble first; 0 unassigned, 1–8 group |
+| 0–13 | Commit marker, schema 6, length, generation, CRC, R48C magic |
+| 14–19 | Encoded capacity, configured count, deployment ID |
+| 20–25 | Offline voltage, poll interval, auto-resume/thermal flags, reserved |
+| 26–33 | Absence permission, authorized V/A masks, explicit disabled mask |
+| 34–97 | Eight groups: six-byte packed name and offline total |
+| 98–241 | Nine units: identity, rating, configured V/A, authorized V/A |
+| 242–246 | Four-bit group index per slot; zero unassigned |
 
-Names retain their eight-character limit and letter case. Each character occupies
-six bits: NUL=0, A–Z=1–26, a–z=27–52, 0–9=53–62, underscore=63. Four characters
-form a little-endian 24-bit word; two words encode a name. The last membership
-byte's unused high nibble is zero. Group membership is reconstructed into the
-shared 16-bit `UnitMask`, as are all authorization, availability, result and
-thermal selections. Slot 9 is bit 8; counts and CAN addresses remain bytes.
+Profiles have R48P magic, version/generation/CRC, deployment, identity count,
+12-byte name and nine ten-byte identity/V/A entries. Offsets 122–123 hold optional
+participation in stored identity order, and byte 124 says whether it was captured.
+Profiles contain no enable preference, thermal marker or saved absence permission.
 
-Save invalidates the older destination slot, writes payload/checksum, commits
-last, then verifies. Load validates CRC, schema and semantic configuration,
-selecting the newest complete record. A failed read leaves caller RAM unchanged,
-except that WrongDeployment deliberately returns an inspectable, gated profile.
-No fallback case silently erases EEPROM. Runtime saves are incremental and
-disallowed by the serial UI during an apply.
+One cooperative writer snapshots once, writes commit last and verifies readback.
+Protection can cancel an uncommitted profile write; completion tokens distinguish
+its cancellation from a later protection save. Ordinary configuration and
+calibration retain the shared writer gate. Read scratch is reused only while idle.
+`load()` preserves caller data on failure; `loadCandidate()` uses a caller-owned
+temporary to validate candidates without a nested configuration copy. Its failure
+may modify that temporary. Only accepted results reach controller configuration.
+Save-only absence overrides alter the private serialized snapshot, not live RAM.
 
-Schemas 2–4 remain readable. Their capacity is derived from the historical
-record length (1–8 slots), not the new build capacity. Bindings, ratings, case-sensitive
-names, drafts, authorized profiles and enable preferences are retained. Schema 2
-has no absence permissions; schemas 2/3 have no thermal-stop marker. Schema 4
-retains both. Newly available capacity is unbound and unauthorized; load keeps
-the old active slot count. Boot/load alone do not rewrite a record. The first
-schema-5 save writes the other slot, so an interrupted migration still recovers
-the complete older record and leaves calibration intact.
+Schemas 2–5 expand shared online voltage and group totals into per-unit values,
+preserving identities, authorization, permissions and thermal stops. Schema 1
+retains explicit review for incompatible settings. The current count is preserved;
+extra capacity stays unbound. After verification of a new controller record, both
+legacy commit markers at 0/256 are retired. An interrupted migration retains a
+complete valid old/new record. Calibration bytes are never retired or overwritten.
 
-Schema 1 remains readable. Uniform enabled configurations migrate to unbound,
-unauthorized GROUP1 in RAM with auto-resume off. Incompatible per-unit drafts
-return LegacyNeedsReview unchanged and remain available through `legacy()`.
-All supplied builds use nine slots. Reduced-capacity builds can read records
-whose encoded capacity fits; they reject larger layouts rather than truncate
-identities or permissions. Export before deliberately reducing capacity.
-
-Older firmware cannot read schema 5: downgrading may select a stale schema-4
-journal record (possibly with auto-resume ON) or find no valid record. Export,
-inhibit charging and recommission deliberately before a downgrade. It is not a
-thermal-stop reset procedure.
+Older firmware cannot read schema 6. Export and recommission deliberately before
+downgrading; firmware downgrade is not a supported way to clear protection.
 
 ## Touch and simulation boundaries
 
@@ -459,9 +433,8 @@ across page changes or simultaneous wheel events.
 gesture handling and the separate two-record calibration journal. `Xpt2046Input`
 samples a fixed SPI burst in the main loop. `TouchConfig.h` owns wiring/timings.
 `MemoryManager::auxiliaryBusy` gates the one shared byte writer; application
-services both storage jobs, but at most one is active. Charger records occupy
-at most the first 216 bytes of each 256-byte slot; calibration owns the last 40.
-The charger schema is version 5 with a 211-byte footprint at nine slots. Calibration has its own version/CRC,
+services both storage jobs, but at most one is active. Charger records occupy their separate schema-6 slots at 512/1024; calibration
+retains its original locations. Calibration has its own version/CRC,
 sequence, hardware profile and rotation, independent of deployment identity.
 
 With `PSU_UI_DEBUG`, Application instantiates `SimulatedCan` and `RamStorage`.

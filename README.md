@@ -1,9 +1,15 @@
-# Huawei R4850G2 parallel CAN controller
+# Huawei R4850G2 CAN controller
 
-Arduino Mega 2560 firmware for **one parallel DC output bus**, with named groups
-of PSUs powered by different input sources. A group current is a **total**, split
-equally across its configured members. Voltage is global. Settings are staged,
-previewed, and explicitly applied; there is no automatic current redistribution.
+Arduino Mega 2560 firmware for up to **nine identity-bound PSUs**, with global,
+group and individual voltage/current targets and **eight named configuration
+profiles**. Global current means the same total in each group; group current is
+split across its configured members. Individual targets can then override those
+shares. Settings are staged, previewed and explicitly applied.
+
+See [scoped settings, profiles and optional participation](docs/PROFILES.md) for
+commands, the five-option configuration UI, migration and a bench sequence.
+For physically paralleled outputs, use matching voltages. Separate-output targets
+share the controller's enable and thermal-protection domain.
 
 **Start here: [serial commissioning and group operation](docs/GETTING_STARTED.md).**
 It covers checking a powered PSU without a battery, discovering identities,
@@ -90,8 +96,9 @@ CAN, ClickEncoder or TimerOne. It uses the same wheel pins as `mega2560_wheel_al
 Commission identities/groups using a serial-enabled build before using
 `mega2560_local`; voltage/current editing is then available on the display. Live enable/zero-current hold and saved restart policy are described in [CONTROL.md](docs/CONTROL.md). Dependencies
 are pinned in `platformio.ini`; EEPROM uses the standard Arduino library.
-The supported target is Mega 2560, with a **512-byte EEPROM budget** even though
-Mega provides more. All supplied builds support **nine PSU slots and eight source groups**. The original Nano was already at 99.7% flash.
+The supported target is Mega 2560, using its **4 KiB EEPROM** for controller
+configuration and eight profiles. Production builds support **nine PSU slots and
+eight groups**; AVR UI-debug builds simulate four units to leave RAM for profiles. The original Nano was already at 99.7% flash.
 
 Defaults: MCP2515 CS 10, INT 2, **8 MHz crystal**, 125 kbit/s; Mega SPI MISO 50,
 MOSI 51, SCK 52 (or ICSP). Use correctly terminated CAN wiring. Encoder CLK/DT/SW
@@ -115,6 +122,7 @@ under `src/`; it is built automatically and needs no separate installation.
 | [`ControlConfig.h`](src/config/ControlConfig.h) | Enable input, AC cutoff, PSU_ACTIVE pin, fan policy and reconciliation timing |
 | [`ChargerConfig.h`](src/config/ChargerConfig.h) | Configuration types, limits, discovery/apply timing |
 | [`TouchConfig.h`](src/config/TouchConfig.h) | XPT2046 wiring, calibration profile, sampling and gesture timings |
+| [`ProfileConfig.h`](src/config/ProfileConfig.h) | Eight profile slots, 12-character names and EEPROM locations |
 | [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–9) |
 | [`ConsoleConfig.h`](src/config/ConsoleConfig.h) | Serial input budget and idle expiry |
 | [`UiConfig.h`](src/config/UiConfig.h) | UI timing, edit increments, paging, dimming and drawing budget |
@@ -135,8 +143,9 @@ apply all
 With two already commissioned members, GROUP1 receives 27.50 A per PSU. `apply all`
 sends the common voltage to participating slots, waits for acknowledgements,
 then sends the current shares. **Wait for the final result**, not just `QUEUED`.
-Subsequent `apply GROUP1` sends only that group's currents, using the previously
-authorized common voltage; it does not activate a pending voltage edit.
+Subsequent `apply GROUP1` applies both that group's voltage and current targets.
+Use `apply GROUP1 current` to apply only current. While OFF, apply prepares the
+next explicit ON instead of sending positive current.
 
 Each slot is bound to a reported identity. Current CAN addresses are learned at
 runtime. An unknown replacement is never adopted merely because it occupies an
@@ -158,14 +167,14 @@ profile. `save` alone cannot activate drafts. A known returning unit can restore
 its authorized settings once required participants are identified and ready;
 previously excluded identities require explicit `startup include` approval.
 `autoresume on/off` controls live enable/zero-current hold; `save` persists the preference.
-Boot and returning units reconcile through zero current, checked fan mode, common
+Boot and returning units reconcile through zero current, checked fan mode, per-PSU authorized
 voltage and verified wake before restoring authorized current. Optional
 ENABLE_IN is a latching switch with latest-event-wins semantics. See
 [control policy and wiring](docs/CONTROL.md). PSU nonvolatile defaults are a separate, explicit `offline all` operation.
 
-Existing parallel-controller records (schemas 2–4) load with their bindings,
+Existing parallel-controller records (schemas 2–5) load with their bindings,
 groups, drafts and authorized profile intact; schema-4 thermal stops are retained.
-The next save uses compact schema 5. Original per-unit schema-1 records remain
+The next verified save writes schema 6 and retires legacy commit markers. Original per-unit schema-1 records remain
 inspectable with `legacy`: compatible uniform settings migrate to an unbound
 GROUP1 with auto-resume disabled; conflicting per-unit settings require review. See the migration section
 of the [commissioning guide](docs/GETTING_STARTED.md#upgrading-and-moving-installations).
@@ -215,4 +224,4 @@ Derived protocol software is GPL-3.0-or-later; see [LICENSE](LICENSE) and
 
 Operator protection: [alerts, thermal limits, GPIOs and bench procedure](docs/ALERTS.md).
 The new serial/touch alert example profiles use D28 WARNING and D29 ERROR; pins
-are otherwise disabled by default. Schema 5 preserves the 512-byte EEPROM budget with nine PSU slots and eight groups.
+are otherwise disabled by default. Schema 6 keeps calibration at its original addresses; see the full EEPROM map in [PROFILES.md](docs/PROFILES.md).

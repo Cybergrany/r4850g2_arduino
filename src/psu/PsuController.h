@@ -9,19 +9,19 @@ enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
   Operation operation;
   int8_t group;
+  SettingScope scope;
+  SettingFields fields;
   UnitMask members, recipients, missing, excluded;
-  uint16_t voltage, current[PSU_MAX_UNITS];
-  uint8_t addresses[PSU_MAX_UNITS];
-  uint32_t epochs[PSU_MAX_UNITS];
+  uint16_t voltage[PSU_MAX_UNITS], current[PSU_MAX_UNITS];
   Issue issues[PSU_MAX_UNITS], blocker;
   uint32_t configurationRevision, topologyRevision, created;
-  bool partial;
+  bool partial, prepared;
 };
 struct OperationReport {
   uint32_t sequence;
   Operation operation;
   UnitMask requested, recipients, succeeded, failed, skipped;
-  bool active;
+  bool active, prepared;
   CommandStatus units[PSU_MAX_UNITS];
 };
 struct GroupStatus {
@@ -35,6 +35,22 @@ struct CurrentCheck {
   uint16_t share, maximum;
 };
 struct ControlStatus { Activity activity; Issue blocker; uint8_t slot; };
+struct ProfileReview {
+  uint32_t generation = 0, revision = 0, topology = 0, availability = 0, created = 0;
+  UnitMask included = 0;
+  uint8_t slot = 0, mismatch = PSU_MAX_UNITS;
+  bool restoreInclusion = false;
+  Issue blocker = Issue::None;
+  StorageResult storage = StorageResult::Ok;
+};
+enum class ProfileLoadState : uint8_t { Idle, Applying, Saving, Complete, Failed };
+struct ProfileLoadStatus {
+  uint32_t operation = 0, revision = 0;
+  uint16_t saveToken = 0;
+  ProfileLoadState state = ProfileLoadState::Idle;
+  StorageResult storage = StorageResult::Ok;
+  bool prepared = false, older = false;
+};
 class PsuController {
  public:
   explicit PsuController(CanTransport& transport);
@@ -53,6 +69,8 @@ class PsuController {
   Result unbind(uint8_t slot);
   Result setVoltage(uint16_t voltage, bool offline = false);
   Result setCurrent(uint8_t group, uint16_t total, bool offline = false);
+  Result set(SettingScope scope, SettingFields field, uint16_t value);
+  uint16_t settingMaximum(SettingScope scope, SettingFields field) const;
   CurrentCheck checkCurrent(uint8_t group, uint16_t total) const;
   // Exact maximum accepted by checkCurrent, including unequal ratings/rounding.
   uint16_t groupCurrentMaximum(uint8_t group) const;
@@ -80,7 +98,7 @@ class PsuController {
   bool powerAvailable() const { return startup_.permit == PermitState::NotFitted || chargeAllowed(); }
   Result hardStop();
   UnitMask excluded() const { return excluded_; }
-  UnitMask acceptedAbsences() const { return (config_.acceptedAbsent | sessionAccepted_) & UnitMask(~sessionRequired_); }
+  UnitMask acceptedAbsences() const { return (config_.acceptedAbsent | config_.disabled | sessionAccepted_) & UnitMask(~sessionRequired_); }
   UnitMask participants() const { return membersMask(count()) & UnitMask(~excluded_); }
   UnitMask requiredMembers() const { return membersMask(count()) & UnitMask(~(excluded_ & acceptedAbsences())); }
   AvailabilityReason availabilityReason(uint8_t slot, uint32_t now) const;
@@ -105,8 +123,14 @@ class PsuController {
   float sessionAmpHours(uint8_t slot) const { return slot < count() ? sessionAh_[slot] : 0; }
   bool sessionObserved(uint8_t slot) const { return slot < count() && (sessionSeen_ & (1U << slot)); }
   ApplyPlan preview(Operation operation, int8_t group, uint32_t now, bool partial = false) const;
+  ApplyPlan preview(SettingScope scope, SettingFields fields, uint32_t now, bool partial = false,
+      const uint16_t* voltage = nullptr, const uint16_t* current = nullptr) const;
   // Plan expiry + config/topology checks apply to every queue, including confirmations.
   Result queue(const ApplyPlan& plan, bool confirmed, uint32_t now);
+  ProfileReview previewProfile(MemoryManager& memory, uint8_t slot, bool inclusion, uint32_t now) const;
+  Result loadProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
+  void profileTick(MemoryManager& memory);
+  const ProfileLoadStatus& profileLoad() const { return profileLoad_; }
   const OperationReport& report() const { return report_; }
   bool voltageSynchronized(uint8_t slot) const { return slot < count() && (voltageSynced_ & (1U << slot)); }
   bool currentSynchronized(uint8_t slot) const { return slot < count() && (currentSynced_ & (1U << slot)); }
@@ -149,6 +173,8 @@ class PsuController {
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
+  __attribute__((noinline)) Result applyProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
+  __attribute__((noinline)) Result stageProfile(MemoryManager& memory, const ProfileReview& review);
   static constexpr int8_t unknownRoute = -4, unboundRoute = -3;
   // Keep the common lookup small: no variable-bit loop or out-of-line register
   // save on each metric/status query. Resolving and validation stay in one path.
@@ -186,7 +212,9 @@ class PsuController {
   EnableSource resumeSource_ = EnableSource::Serial;
   bool hotPrevious_ = false, cool_ = false, protectionDirty_ = false, protectionFailed_ = false, resumePending_ = false;
   bool controlCorrection_ = false;
-  Result change(const Configuration& candidate, UnitMask invalidate = 0);
+  Result change(Configuration& candidate, UnitMask invalidate = 0);
+  ApplyPlan buildPlan(Operation operation, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
+      const uint16_t* voltage = nullptr, const uint16_t* current = nullptr) const;
   enum class TxPurpose : uint8_t { Background, Job, ManualRead, Control };
   bool send(const CanFrame& frame, TxPurpose purpose = TxPurpose::Background);
   void serviceTransmit(uint32_t now);
@@ -220,7 +248,7 @@ class PsuController {
   bool wakeAllowed(uint8_t slot, uint32_t now) const;
   bool releaseAllowed(uint32_t now) const;
   bool controlsOnline(UnitMask mask) const;
-  uint16_t reconciliationVoltage() const;
+  uint16_t reconciliationVoltage(uint8_t slot) const;
   CanTransport& transport_;
   EnableControl enable_;
   UnitControl control_[PSU_MAX_UNITS];
@@ -245,6 +273,7 @@ class PsuController {
   MemoryManager* availabilityMemory_ = nullptr;
   uint16_t availabilitySaveToken_ = 0;
   Configuration config_;
+  ProfileLoadStatus profileLoad_;
   Discovery discovery_;
   uint32_t revision_ = 1, lastSend_ = 0, lastProbe_ = 0;
   uint32_t reportSequence_ = 0;
@@ -261,12 +290,14 @@ class PsuController {
   TxPurpose txPurpose_ = TxPurpose::Background;
   bool ready_ = false, waiting_ = false, secondPhase_ = false;
   bool jobStarted_ = false;
-  bool voltageCommissioned_ = false, verifying_ = false, identityChecked_ = false;
+  bool verifying_ = false, identityChecked_ = false;
   uint32_t verificationStarted_ = 0;
   UnitMask pending_ = 0;
   uint8_t jobSlot_ = 0;
   uint16_t expected_ = 0, txFailures_ = 0;
   uint16_t readFailures_ = 0;
+  uint8_t jobAddresses_[PSU_MAX_UNITS] = {};
+  uint32_t jobEpochs_[PSU_MAX_UNITS] = {};
   ApplyPlan job_ = {};
   OperationReport report_ = {};
   FrameObserver observer_ = nullptr;

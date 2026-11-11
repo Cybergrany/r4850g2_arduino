@@ -19,12 +19,22 @@ class RamStorage : public ByteStorage {
  public:
   RamStorage() { clear(); }
   void clear();
-  uint16_t length() const override { return 512; }
-  uint8_t read(uint16_t at) const override { return at < 512 ? bytes_[at] : 0xff; }
-  void update(uint16_t at, uint8_t value) override { if (at < 512 && !failWrites) bytes_[at] = value; }
+  uint16_t length() const override { return 4096; }
+  uint8_t read(uint16_t at) const override;
+  void update(uint16_t at, uint8_t value) override;
   bool failWrites = false;
  private:
-  uint8_t bytes_[512];
+#if PSU_DEBUG_COMPACT_STORAGE
+  // Bench simulation keeps the latest copy per record. No physical persistence
+  // or power-loss guarantee is claimed here; host tests use the full journal.
+  // Four simulated units leave room for all eight profiles and UI call stacks.
+  static constexpr uint16_t bytes = MemoryManager::recordSize + 8 * 128 + 2 * 40 + 2;
+  static int16_t address(uint16_t at);
+#else
+  static constexpr uint16_t bytes = 4096;
+  static int16_t address(uint16_t at) { return at < bytes ? int16_t(at) : -1; }
+#endif
+  uint8_t bytes_[bytes];
 };
 // Generates one response at a time: no heap, hardware access or unbounded queues.
 class SimulatedCan : public CanTransport {

@@ -31,7 +31,7 @@ uint8_t UiModel::unitRank() const {
   return group_ < 0 ? 0 : population(c_.configuration().groups[group_].members & UnitMask((1U << unit_) - 1));
 }
 uint16_t UiModel::draft() const {
-  return field_ == UiField::Voltage ? c_.configuration().voltage : c_.configuration().groups[group_].current;
+  return configured(field_ == UiField::Voltage ? SettingFields::Voltage : SettingFields::Current).minimum;
 }
 void UiModel::result(UiNotice n, Issue issue) {
   recovery_.selection = 0;
@@ -52,7 +52,8 @@ void UiModel::refresh(uint32_t now) {
       plan_.topologyRevision != c_.discovery().revision())) result(UiNotice::Changed);
 }
 void UiModel::tick(uint32_t now) {
-  uiNow_ = now; recoveryTick(now);
+  uiNow_ = now; recoveryTick(now); settingsTick(now);
+  if (profileLoading_) return;
   refresh(now);
   if (page_ == UiPage::Availability && group_ >= 0 && !working()) {
     auto action = AvailabilityAction::Accept;
@@ -98,7 +99,7 @@ void UiModel::tick(uint32_t now) {
       c_.storageStatus(storageResult_, c_.configurationRevision() != operationRevision_);
       result(storageResult_ != StorageResult::Ok ? UiNotice::SaveFailed :
           c_.configurationRevision() != operationRevision_ ? UiNotice::SavedOlder :
-          (plan_.missing || plan_.excluded) ? UiNotice::PartialSaved : UiNotice::Saved);
+          profileFlow_ && saveProfileChoice_ ? UiNotice::ProfileSaved : plan_.prepared ? UiNotice::Prepared : (plan_.missing || plan_.excluded) ? UiNotice::PartialSaved : UiNotice::Saved);
     }
   }
 }
@@ -110,7 +111,7 @@ void UiModel::queue(uint32_t now, bool confirmed) {
   const auto r = c_.queue(plan_, confirmed, now);
   if (r != Result::Ok) {
     result(r == Result::Changed ? UiNotice::Changed : r == Result::Busy ? UiNotice::Busy : UiNotice::Blocked,
-           c_.preview(plan_.operation, plan_.group, now, plan_.partial).blocker);
+           c_.preview(plan_.scope, plan_.fields, now, plan_.partial).blocker);
     return;
   }
   operationSequence_ = c_.report().sequence; operationRevision_ = c_.configurationRevision();
@@ -119,13 +120,20 @@ void UiModel::queue(uint32_t now, bool confirmed) {
 }
 void UiModel::commit(uint32_t now) {
   if (c_.configurationRevision() != editRevision_) { result(UiNotice::Changed); return; }
-  const auto r = field_ == UiField::Voltage ? c_.setVoltage(edit_) : c_.setCurrent(group_, edit_);
+  if (scope_.kind == ScopeKind::Global && page_ != UiPage::ScopeConfirm) {
+    page_ = UiPage::ScopeConfirm; settingsSelection_ = 0; editing_ = false;
+    profileReview_.created = now; profileReview_.topology = c_.discovery().revision(); return;
+  }
+  if (page_ == UiPage::ScopeConfirm && (profileReview_.topology != c_.discovery().revision() ||
+      uint32_t(now - profileReview_.created) > limits::confirmationMs)) { result(UiNotice::Changed); return; }
+  const auto fields = field_ == UiField::Voltage ? SettingFields::Voltage : SettingFields::Current;
+  const auto r = c_.set(scope_, fields, edit_);
   if (r != Result::Ok) { result(r == Result::Busy ? UiNotice::Busy : UiNotice::Blocked, Issue::Invalid); return; }
   editing_ = false; editRevision_ = c_.configurationRevision();
-  plan_ = c_.preview(field_ == UiField::Voltage ? Operation::Voltage : Operation::GroupCurrent, group_, now);
+  plan_ = c_.preview(scope_, fields, now);
   if (plan_.blocker != Issue::None) {
     if (field_ == UiField::Current && plan_.missing) {
-      const auto partial = c_.preview(Operation::GroupCurrent, group_, now, true);
+      const auto partial = c_.preview(scope_, SettingFields::Current, now, true);
       if (partial.blocker == Issue::None) {
         plan_ = partial; confirmYes_ = false; notice_ = UiNotice::None; page_ = UiPage::Confirm; return;
       }
@@ -149,6 +157,7 @@ void UiModel::input(UiInput event, uint32_t now) {
     }
     return;
   }
+  if (settingsPage()) { settingsInput(event, now); return; }
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
   if (recovering() && event.held) { action({ActionKind::Back}, now); return; }
   if (page_ == UiPage::Recovery || page_ == UiPage::RecoveryConfirm ||
@@ -188,9 +197,8 @@ void UiModel::input(UiInput event, uint32_t now) {
     return;
   }
   if (event.held) {
-    if (page_==UiPage::Groups && group_<0) { page_=UiPage::Tools; return; }
     editing_ = false;
-    if (page_ == UiPage::Groups && group_ >= 0 && !working()) { page_ = UiPage::Config; notice_ = UiNotice::None; }
+    if (page_ == UiPage::Groups && !working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = 0; notice_ = UiNotice::None; }
     else { page_ = UiPage::Groups; }
     return;
   }
@@ -226,7 +234,8 @@ void UiModel::input(UiInput event, uint32_t now) {
     if (event.delta % 2) confirmYes_ = !confirmYes_;
     if (event.clicked) { if (confirmYes_) queue(now, true); else result(UiNotice::Cancelled); }
   } else if (page_ == UiPage::Result && event.clicked && !working()) {
-    page_ = group_ < 0 ? UiPage::Groups : UiPage::Config;
+    if (profileFlow_) action({ActionKind::Back}, now);
+    else page_ = group_ < 0 ? UiPage::Groups : UiPage::Config;
   }
 }
 }
@@ -235,6 +244,7 @@ namespace psu {
 void UiModel::resetNavigation() {
   recovery_ = {};
   alertOverlay_ = alertSelection_ = 0;
+  scope_ = {ScopeKind::Group, 0}; settingsSelection_ = listPage_ = nameCursor_ = 0; profileFlow_ = profileLoading_ = false;
   page_ = UiPage::Groups; field_ = UiField::Current; notice_ = UiNotice::None;
   group_ = -1; unit_ = toolSelection_ = 0; editing_ = confirmYes_ = false; request_ = {};
   availabilityWorking_ = false; availabilitySelection_ = availabilitySelected_ = 0;
@@ -269,6 +279,10 @@ void UiModel::action(UiAction a, uint32_t now) {
   uiNow_ = now;
   if (alertAction(a, now)) return;
   if (recoveryAction(a, now)) return;
+  if (settingsAction(a, now)) return;
+  navigationAction(a, now);
+}
+void UiModel::navigationAction(UiAction a, uint32_t now) {
   refresh(now);
   if (availabilityWorking_ && a.kind != ActionKind::HardStop) return;
   switch (a.kind) {
@@ -330,9 +344,9 @@ void UiModel::action(UiAction a, uint32_t now) {
       break;
     }
     case ActionKind::Configure:
-      if (group_ >= 0 && !working()) { page_ = UiPage::Config; field_ = UiField::Current; editing_ = false; } break;
+      if (!working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = 0; editing_ = false; } break;
     case ActionKind::EditVoltage: case ActionKind::EditCurrent:
-      if (group_ < 0 || working()) return;
+      if (!settingsMembers() || working()) return;
       editing_ = false; page_ = UiPage::Config;
       field_ = a.kind == ActionKind::EditVoltage ? UiField::Voltage : UiField::Current;
       input({0,true,false}, now); break;

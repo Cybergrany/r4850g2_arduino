@@ -4,9 +4,9 @@
 namespace psu {
 inline const __FlashStringHelper* operationName(Operation op) {
   switch (op) {
-    case Operation::All: return F("global-voltage-and-current");
-    case Operation::Voltage: return F("global-voltage");
-    case Operation::GroupCurrent: return F("group-current");
+    case Operation::All: return F("scoped-voltage-and-current");
+    case Operation::Voltage: return F("scoped-voltage");
+    case Operation::GroupCurrent: return F("scoped-current");
     case Operation::Offline: return F("PSU-offline-defaults");
     case Operation::Restore: return F("restore-authorized-profile");
   }
@@ -37,7 +37,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::Conflict: return F("identity at multiple live addresses; inspect/isolate units");
     case Issue::NoTelemetry: return F("waiting for fresh telemetry AND current broadcast");
     case Issue::NotReady: return F("PSU reports not ready; check AC/protection/alarms");
-    case Issue::VoltageUnsynced: return F("common voltage not synchronized; apply voltage/all");
+    case Issue::VoltageUnsynced: return F("PSU voltage not synchronized; apply target voltage or both");
     case Issue::DeploymentMismatch: return F("EEPROM deployment differs; review config, then defaults");
     case Issue::Busy: return F("operation in progress"); case Issue::Invalid: return F("invalid operation or CAN not initialized");
     case Issue::Capacity: return F("per-PSU current share exceeds capability");

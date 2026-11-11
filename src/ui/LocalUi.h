@@ -16,7 +16,7 @@ class LocalUi {
 #endif
       { (void)bytes; }
   void begin();
-  void tick(uint32_t now);
+  __attribute__((noinline)) void tick(uint32_t now);
   void paint();
   bool priorityDrawing() const { return available_ && !pageReady_ && display_.pending(); }
   void storageTick();

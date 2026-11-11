@@ -26,5 +26,5 @@ constexpr uint32_t displayReadMaxSpiHz = 1000000UL; // Reads have stricter timin
 constexpr uint8_t displayRotation = 3; // 1 or 3: landscape.
 constexpr bool displayVerifyId = true; // Connect TFT SDO/MISO; opt out only for a verified write-only module.
 constexpr uint32_t serialBaud = 115200UL;
-constexpr uint16_t eepromBudget = 512;
+constexpr uint16_t eepromBudget = 4096;
 } }

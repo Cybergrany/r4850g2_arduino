@@ -127,8 +127,8 @@ Result PsuController::setFanOverride(UnitMask mask, FanOverride mode, uint32_t n
   }
   return Result::Ok;
 }
-uint16_t PsuController::reconciliationVoltage() const {
-  return config_.operating.voltageAuthorized ? config_.operating.voltage : deployment::voltage;
+uint16_t PsuController::reconciliationVoltage(uint8_t i) const {
+  return config_.operating.voltageMask & (1U << i) ? config_.operating.voltage[i] : deployment::voltage;
 }
 bool PsuController::readinessAcceptable(uint8_t i, uint32_t now) const {
   const auto* d = deviceForSlot(i, now);
@@ -315,8 +315,7 @@ bool PsuController::wakeAllowed(uint8_t i, uint32_t now) const {
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && fabsf(amps) <= control::stoppedCurrentAmps;
 }
 bool PsuController::releaseAllowed(uint32_t now) const {
-  if (!powerAvailable() || availabilitySaving() || !participants() || !enable_.enabled() || !config_.operating.voltageAuthorized ||
-      config_.operating.voltageMask != membersMask(count())) return false;
+  if (!powerAvailable() || availabilitySaving() || !participants() || !enable_.enabled() || (config_.operating.voltageMask & requiredMembers()) != requiredMembers()) return false;
   for (uint8_t i = 0; i < count(); ++i) {
     if (sensorFaults_ & (1U << i)) {
       if (!control_[i].zeroConfirmed && !control_[i].standbyConfirmed) return false;
@@ -328,7 +327,7 @@ bool PsuController::releaseAllowed(uint32_t now) const {
     }
     if (excluded_ & (1U << i)) return false;
     const auto& u = control_[i];
-    if (issue(i, now) != Issue::None || u.fault != CommandState::Idle || !(voltageSynced_ & (1U << i))) return false;
+    if (issue(i, now) != Issue::None || u.fault != CommandState::Idle || ((config_.operating.voltageMask & (1U << i)) && !(voltageSynced_ & (1U << i)))) return false;
     if (u.phase != ControlPhase::Held && u.phase != ControlPhase::Online) return false;
     if (!u.awakeConfirmed) return false;
     if (u.phase != ControlPhase::Online && u.fanAcknowledged != u.fanRequested) return false;
@@ -339,7 +338,7 @@ bool PsuController::releaseAllowed(uint32_t now) const {
   return true;
 }
 bool PsuController::psuActive(uint32_t now) const {
-  if (!ready_ || !enable_.enabled() || !powerAvailable() || !config_.operating.voltageAuthorized) return false;
+  if (!ready_ || !enable_.enabled() || !powerAvailable() || (config_.operating.voltageMask & requiredMembers()) != requiredMembers()) return false;
   for (uint8_t i = 0; i < count(); ++i) {
     const UnitMask bit = UnitMask(1U << i);
     // Online means this unit has crossed the installation-wide release barrier.
@@ -392,7 +391,7 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
     s.activity = s.blocker != Issue::None ? (stopped ? Activity::StartBlocked : Activity::StopUnconfirmed) :
         stopped && held ? Activity::Holding : Activity::Stopping;
   } else if (s.blocker != Issue::None) s.activity = Activity::StartBlocked;
-  else if (!config_.operating.voltageAuthorized || config_.operating.voltageMask != membersMask(count())) {
+  else if ((config_.operating.voltageMask & requiredMembers()) != requiredMembers()) {
     s.activity = Activity::StartBlocked; s.blocker = Issue::NoProfile;
   } else if (online && !starting) s.activity = Activity::Running;
   else s.activity = starting ? Activity::Starting : Activity::Reconciling;
@@ -434,7 +433,7 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
   if (correction) return;
   if (refresh) {
     if (controlRegister_ == protocol::OnlineVoltage) {
-      if (controlValue_ == protocol::encodeVoltage(reconciliationVoltage())) voltageSynced_ |= 1U << controlSlot_;
+      if (controlValue_ == protocol::encodeVoltage(reconciliationVoltage(controlSlot_))) voltageSynced_ |= 1U << controlSlot_;
       refreshCurrent_ = true; refreshSlot_ = controlSlot_;
     } else {
       refreshed_[controlSlot_] = now; refreshCurrent_ = false;
@@ -450,7 +449,7 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
     u.fanAcknowledged = controlValue_ ? FanMode::Max : FanMode::Auto;
     if (u.phase == ControlPhase::Fan) controlPhase(controlSlot_, ControlPhase::Voltage, now);
   } else if (controlRegister_ == protocol::OnlineVoltage) {
-    if (config_.operating.voltageAuthorized && controlValue_ == protocol::encodeVoltage(config_.operating.voltage))
+    if ((config_.operating.voltageMask & (1U << controlSlot_)) && controlValue_ == protocol::encodeVoltage(config_.operating.voltage[controlSlot_]))
       voltageSynced_ |= 1U << controlSlot_;
     controlPhase(controlSlot_, u.postReady && u.awakeConfirmed ? ControlPhase::Starting : ControlPhase::Prepared, now);
   } else if (controlRegister_ == protocol::OnlineCurrent) {
@@ -559,7 +558,7 @@ void PsuController::controlTick(uint32_t now) {
         else latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now);
       }
     }
-    if (u.phase == ControlPhase::Held && config_.operating.voltageAuthorized && !(voltageSynced_ & (1U << i)))
+    if (u.phase == ControlPhase::Held && (config_.operating.voltageMask & (1U << i)) && !(voltageSynced_ & (1U << i)))
       controlPhase(i, ControlPhase::Voltage, now);
     updateFan(i, now);
     if (u.phase == ControlPhase::Fan && u.fanAcknowledged == u.fanRequested) controlPhase(i, ControlPhase::Voltage, now);
@@ -575,7 +574,7 @@ void PsuController::controlTick(uint32_t now) {
     }
     if (!controlWaiting_ && controlVerified_ && !txPending_ && uint32_t(now - lastSend_) >= limits::commandGapMs) {
       if (controlRefresh_) {
-        const uint16_t desired = controlRegister_ == protocol::OnlineVoltage ? protocol::encodeVoltage(reconciliationVoltage()) :
+        const uint16_t desired = controlRegister_ == protocol::OnlineVoltage ? protocol::encodeVoltage(reconciliationVoltage(controlSlot_)) :
             protocol::encodeCurrent(control_[controlSlot_].phase == ControlPhase::Online ? effectiveCurrent(controlSlot_) : 0,
                 config_.units[controlSlot_].ratedCurrent);
         if (desired != controlValue_ || !powerAvailable() || (control_[controlSlot_].phase != ControlPhase::Online && control_[controlSlot_].phase != ControlPhase::Held)) {
@@ -626,7 +625,7 @@ void PsuController::controlTick(uint32_t now) {
   for (uint8_t i = 0; i < count(); ++i) {
     if (routingIssue(i, now) != Issue::None || control_[i].fault != CommandState::Idle) continue;
     if (control_[i].phase == ControlPhase::Voltage) {
-      controlCommand(i, protocol::OnlineVoltage, protocol::encodeVoltage(reconciliationVoltage()), now); return;
+      controlCommand(i, protocol::OnlineVoltage, protocol::encodeVoltage(reconciliationVoltage(i)), now); return;
     }
   }
   for (uint8_t i = 0; i < count(); ++i) if (control_[i].phase == ControlPhase::Prepared && wakeAllowed(i, now)) {
@@ -653,10 +652,10 @@ void PsuController::refreshSettings(uint32_t now) {
     if (!refreshCurrent_ && uint32_t(now - refreshed_[i]) < control::volatileRefreshMs) continue;
     const uint16_t current = u.phase == ControlPhase::Online ? effectiveCurrent(i) : 0;
     if (refreshCurrent_ && current >= control::fanOutputCurrentThreshold && u.fanAcknowledged != FanMode::Max) return;
-    if (refreshCurrent_ && config_.operating.voltageAuthorized && !(voltageSynced_ & (1U << i))) { refreshCurrent_ = false; return; }
+    if (refreshCurrent_ && (config_.operating.voltageMask & (1U << i)) && !(voltageSynced_ & (1U << i))) { refreshCurrent_ = false; return; }
     if (!refreshCurrent_) { refreshEpoch_ = d->epoch; refreshSlot_ = i; }
     controlCommand(i, refreshCurrent_ ? protocol::OnlineCurrent : protocol::OnlineVoltage,
-        refreshCurrent_ ? protocol::encodeCurrent(current, config_.units[i].ratedCurrent) : protocol::encodeVoltage(reconciliationVoltage()), now);
+        refreshCurrent_ ? protocol::encodeCurrent(current, config_.units[i].ratedCurrent) : protocol::encodeVoltage(reconciliationVoltage(i)), now);
     controlRefresh_ = controlActive_; return;
   }
 }

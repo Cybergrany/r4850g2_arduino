@@ -28,7 +28,7 @@ void thermalLimitsAndSensors() {
   r.inputTemperature=65; r.step(4000); CHECK(r.c.thermalStatus().percent==85);
   for(uint8_t i=0;i<2;++i) { CHECK(r.c.effectiveCurrent(i)==1700); uint16_t raw;
     CHECK(r.c.acknowledgedCurrent(i,raw) && raw==protocol::encodeCurrent(1700,5000)); }
-  CHECK(r.c.configurationRevision()==revision && r.c.configuration().groups[0].current==4000);
+  CHECK(r.c.configurationRevision()==revision && groupCurrent(r.c.configuration(), 0)==4000);
   r.inputTemperature=70; r.step(4000); CHECK(r.c.thermalStatus().percent==30);
   CHECK(r.c.effectiveCurrent(0)==600 && r.c.configuration().operating.current[0]==2000);
   r.inputTemperature=66; r.temperature=60; r.step(1000); CHECK(r.c.thermalStatus().percent==30 && r.c.thermalStatus().hotMs==0);
@@ -92,7 +92,7 @@ void thermalTimingAndAbsence() {
   Rig boundary; boundary.temperature=75; boundary.step(2000); CHECK(boundary.c.configuration().thermalStop==ThermalStop::None);
   boundary.temperature=76; boundary.step(); CHECK(boundary.c.configuration().thermalStop==ThermalStop::Temperature);
 }
-void serviceThermal(Rig& r, MemoryManager& memory, unsigned loops=500) {
+void serviceThermal(Rig& r, MemoryManager& memory, unsigned loops=2*(MemoryManager::recordSize+5)+20) {
   for(unsigned i=0;i<loops;++i) { r.step(20); r.c.serviceProtection(memory,r.now); memory.stepSave(); r.c.serviceProtection(memory,r.now); }
 }
 void thermalPersistence() {
@@ -101,8 +101,8 @@ void thermalPersistence() {
   r.c.setVoltage(5700); // unsaved operator draft must not be persisted by stop
   r.temperature=76; r.step(); CHECK(!r.c.enableControl().enabled()); serviceThermal(r,memory);
   Configuration saved; CHECK(memory.load(saved)==StorageResult::Ok);
-  CHECK(saved.thermalStop==ThermalStop::Temperature && !saved.autoResume && saved.voltage==5400);
-  CHECK(r.c.configuration().voltage==5700 && r.c.thermalStatus().persisted);
+  CHECK(saved.thermalStop==ThermalStop::Temperature && !saved.autoResume && saved.voltage[0]==5400);
+  CHECK(r.c.configuration().voltage[0]==5700 && r.c.thermalStatus().persisted);
   Rig reboot(saved,true,false); reboot.c.sampleEnableInput(true,reboot.now); reboot.step(1000); reboot.c.sampleEnableInput(true,reboot.now);
   CHECK(!reboot.c.enableControl().enabled()); reboot.finish();
   CHECK(!reboot.c.enableControl().enabled());
@@ -126,7 +126,7 @@ void thermalPersistence() {
     CHECK(trial.startProtectionSave(ThermalStop::Duration)==StorageResult::Ok);
     try { while(trial.saving()) trial.stepSave(); } catch(const PowerCut&) {}
     bytes.stopAfter=-1; MemoryManager reader(bytes); Configuration cfg;
-    CHECK(reader.load(cfg)==StorageResult::Ok && !cfg.autoResume && cfg.voltage==5400);
+    CHECK(reader.load(cfg)==StorageResult::Ok && !cfg.autoResume && cfg.voltage[0]==5400);
     CHECK(cfg.thermalStop==ThermalStop::None || cfg.thermalStop==ThermalStop::Duration);
     for(uint16_t i=0;i<512;++i) if((i>=216&&i<256)||i>=472) CHECK(bytes.bytes[i]==baseline.bytes[i]);
   }
@@ -223,7 +223,7 @@ void thermalAckRacesAndMigration() {
     CHECK(memory.startProtectionSave(ThermalStop::Temperature)==StorageResult::Ok);
     while(memory.saving()) memory.stepSave();
     CHECK(memory.load(loaded)==StorageResult::Ok && loaded.thermalStop==ThermalStop::Temperature && !loaded.autoResume);
-    CHECK(bytes.bytes[257]==5 && MemoryManager::recordSize<=216);
+    CHECK(bytes.bytes[513]==6 && MemoryManager::recordSize<=512);
   }
   // Calibration/normal save gate: stop wins after the old snapshot finishes.
   Rig saving; FakeEeprom bytes; MemoryManager memory(bytes);
@@ -231,7 +231,7 @@ void thermalAckRacesAndMigration() {
   saving.c.setVoltage(5600); CHECK(memory.startSave(saving.c.configuration())==StorageResult::Ok);
   saving.temperature=76; saving.step(); saving.c.serviceProtection(memory,saving.now);
   CHECK(!saving.c.thermalStatus().persisted); serviceThermal(saving,memory);
-  Configuration saved; CHECK(memory.load(saved)==StorageResult::Ok && saved.thermalStop==ThermalStop::Temperature && saved.voltage==5600);
+  Configuration saved; CHECK(memory.load(saved)==StorageResult::Ok && saved.thermalStop==ThermalStop::Temperature && saved.voltage[0]==5600);
   saving.temperature=30; saving.step(4000); CHECK(saving.c.setAutoResume(true)==Result::Ok);
   memory.auxiliaryBusy(true); saving.c.serviceProtection(memory,saving.now); CHECK(!saving.c.enableControl().enabled());
   memory.auxiliaryBusy(false); saving.c.serviceProtection(memory,saving.now); CHECK(memory.saving());
@@ -240,7 +240,7 @@ void thermalAckRacesAndMigration() {
   CHECK(!saving.c.enableControl().enabled() && memory.load(saved)==StorageResult::Ok && saved.thermalStop!=ThermalStop::None);
   // Automatic thermal OFF preserves the editor's unsaved value.
   Rig editor; FakeEeprom editBytes; MemoryManager editMemory(editBytes); UiModel model(editor.c,editMemory);
-  model.tick(editor.now); model.action({ActionKind::Configure},editor.now); model.input({0,true,false},editor.now);
+  model.tick(editor.now); model.action({ActionKind::Configure},editor.now); model.action({ActionKind::SettingsChoice,1},editor.now); model.action({ActionKind::SettingsItem,0},editor.now); model.input({0,true,false},editor.now);
   model.input({1,false,false},editor.now); const auto edit=model.editValue();
   editor.temperature=76; editor.step(); model.tick(editor.now);
   CHECK(model.editing() && model.editValue()==edit);

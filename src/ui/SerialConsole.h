@@ -21,7 +21,18 @@ class SerialConsole {
   void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; alertNotice_ = previousAlertSources_ = 0; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile };
+  __attribute__((noinline)) void storageCommand(const char* command);
+  __attribute__((noinline)) void restoreCommand(bool defaults);
+  bool profileCommand(char* line);
+  void profileConfirm(bool yes);
+  void profileRow();
+  bool parseScope(const char* text, SettingScope& scope) const;
+  ProfileReview profileReview_;
+  char profileName_[profiles::nameLength + 1] = {};
+  uint8_t profilePending_ = 0; // 1 save, 2 load; both default participation to No.
+  uint8_t profileCount_ = 0;
+  uint32_t profileNotice_ = 0;
   void printControl(uint32_t now);
   void printAlert(const AlertState& alert, bool action);
   bool broadcastAlerts(uint32_t now);
@@ -37,7 +48,7 @@ class SerialConsole {
   void prompt();
   void reply(Result result);
   void storageReply(StorageResult result);
-  void outputRow(uint32_t now);
+  __attribute__((noinline)) void outputRow(uint32_t now);
   void startView(View view, UnitMask mask = allUnitsMask);
   void printIdentity(const Identity& identity);
   void printMembers(UnitMask mask);

@@ -10,7 +10,7 @@ void openIncident(UiRig& u, AlertCode code, uint8_t source) {
 void recoverySnapshot(UiRig& u,const char* name) { UiFrame f; UiView::compose(f,u.ui,u.r.c,u.r.now); snapshot(name,f); }
 void uiRecoveryAvailability() {
   auto cfg=authorized(false); cfg.groups[0].members=1;
-  std::strcpy(cfg.groups[1].name,"GROUP2"); cfg.groups[1].members=2; cfg.groups[1].current=1000;
+  std::strcpy(cfg.groups[1].name,"GROUP2"); cfg.groups[1].members=2; draftGroupCurrent(cfg, 1, 1000);
   Rig r(cfg,true,false); r.live=0; r.step(18000); UiRig u(r);
   // An editor survives a read-only trip through the affected group's recovery.
   u.ui.action({ActionKind::EditVoltage},++r.now); u.turn(1); CHECK(u.ui.editing()); const auto edit=u.ui.editValue();
@@ -91,13 +91,13 @@ void uiRecoverySave() {
   while(u.memory.saving()) u.memory.stepSave();
   u.ui.tick(++r.now);
   CHECK(!u.ui.recoverySaving() && u.ui.recoveryResult()==Result::Changed && !u.ui.recoverySaved());
-  Configuration loaded; CHECK(u.memory.load(loaded)==StorageResult::Ok && loaded.voltage==5400);
-  CHECK(r.c.configuration().voltage==5510 && r.can.writes().size()==writes);
+  Configuration loaded; CHECK(u.memory.load(loaded)==StorageResult::Ok && loaded.voltage[0]==5400);
+  CHECK(r.c.configuration().voltage[0]==5510 && r.can.writes().size()==writes);
   u.ui.action({ActionKind::RecoveryReview},++r.now); CHECK(u.ui.page()==UiPage::Recovery); // refresh RAM revision first
   u.ui.action({ActionKind::RecoveryReview},++r.now); u.ui.action({ActionKind::RecoveryConfirm},++r.now);
   while(u.memory.saving()) u.memory.stepSave();
   u.ui.tick(++r.now);
-  CHECK(u.ui.recoverySaved() && u.memory.load(loaded)==StorageResult::Ok && loaded.voltage==5510);
+  CHECK(u.ui.recoverySaved() && u.memory.load(loaded)==StorageResult::Ok && loaded.voltage[0]==5510);
   CHECK(!r.c.alerts().at(AlertManager::Storage).acknowledged && r.can.writes().size()==writes);
   // A competing journal owner blocks a duplicate save without stealing its token.
   CHECK(u.memory.startSave(r.c.configuration())==StorageResult::Ok);
@@ -110,8 +110,8 @@ void uiRecoverySave() {
 }
 void uiRecoveryResultsAndThermal() {
   Rig off(authorized(false),true,false); off.finish(); UiRig u(off);
-  u.ui.action({ActionKind::EditCurrent},++off.now); u.ui.action({ActionKind::Apply},++off.now);
-  CHECK(u.ui.notice()==UiNotice::Blocked && u.ui.recoveryLink().kind==RecoveryKind::Enable);
+  u.ui.action({ActionKind::EditCurrent},++off.now); u.ui.action({ActionKind::Apply},++off.now); u.finish();
+  CHECK(u.ui.notice()==UiNotice::Prepared && u.ui.recoveryLink().kind==RecoveryKind::Enable);
   recoverySnapshot(u,"recovery-blocked-result");
   u.ui.action({ActionKind::Recover},++off.now); u.ui.action({ActionKind::RecoveryReview},++off.now);
   off.c.setAutoResume(false); u.ui.action({ActionKind::RecoveryConfirm},++off.now);

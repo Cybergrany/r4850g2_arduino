@@ -21,9 +21,10 @@ namespace psu {
 class Application {
  public:
   Application();
-  void begin();
-  void tick();
+  __attribute__((noinline)) void begin();
+  __attribute__((noinline)) void tick();
  private:
+  __attribute__((noinline)) StorageResult configureFromStorage();
 #if PSU_UI_DEBUG
   SimulatedCan can_;
   RamStorage eeprom_;

@@ -1,8 +1,150 @@
 # Validation
 
-Target: Arduino Mega 2560, nine-slot capacity. Validation covers the parallel
+Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
+
+## Scoped settings, eight profiles and optional participation (2026-11-11)
+
+The [settings/profile guide](PROFILES.md) covers global/group/individual targets,
+OFF preparation, names, participation reviews, schema-6 migration and the bench
+sequence. The new [generated previews](ui-preview.html) include the five-choice
+menu, mixed settings, individual selector, names and profile save/load reviews.
+
+Software validation passes:
+
+- **2,827,020** host checks with AddressSanitizer/UndefinedBehaviorSanitizer:
+  scoped precedence and field isolation; unequal group sizes and rounding;
+  invalid-setting rejection; distinct authorized voltages through startup,
+  refresh, apply and restore; OFF priority, identity and thermal protections.
+- All eight named slots, staged versus authorized values, address independence,
+  identity reorder/mismatch, current-rating/deployment rejection, generations,
+  interrupted writes, corruption, migration and calibration/protection ownership.
+  Participation defaults to No, captures session choices when selected, and
+  changed restores require OFF, settled availability and zero/inclusion guards.
+  A profile cannot release a new missing-hot-unit thermal contribution.
+- **1,324** touch/simulator checks, including real hit-box/gesture paths through
+  names, participation, Cancel-first reviews, serial changes invalidating a
+  confirmation, an alert arriving during a named save, and OFF load persistence.
+  The existing readiness, thermal, recovery and calibration suites still run.
+- Production renderer with **73 exported screens** at 500 kHz, 1, 2, 4 and 8 MHz;
+  **19,652** real ClickEncoder checks; route-search budgets; GPIO, fan, cutoff, AVR printf and debug isolation.
+  The compact AVR debug storage adapter also passes its own sanitizer test for
+  controller/eight-profile/calibration mappings, failures and protection.
+- All **19 Mega profiles** build. The nine-unit instruction-level rendering run
+  gives 88.5 ms group selection, 85.4 ms charger selection, 50.5 ms Tools selection
+  and 767.0 ms page replacement with priority drawing. These model AVR computation
+  and nominal SPI; they do not measure hardware CAN/display interrupt load.
+
+The three AVR UI-debug builds use four simulated units (two groups, 3/1) to leave
+runtime room for eight in-RAM profiles. A nine-unit touch-debug diagnostic build
+used **8,196 static bytes**, already beyond the Mega's 8,192-byte RAM before stack;
+this reduction addresses a physical limit, not the advisory 1 KiB reserve.
+Production and host fixtures retain nine.
+The compact debug store retains only the latest controller/profile copy, while
+host tests use all 4 KiB and both journal copies for interruption tests. It is a
+UI simulation adapter, not an EEPROM power-loss model. Calibration retains both
+40-byte copies, and no physical CAN, EEPROM or power GPIO links into debug builds.
+
+### Flash and static RAM
+
+Bytes, release builds with the repository's PlatformIO settings. Free RAM below
+1 KiB is advisory; actual RAM/flash overflow remains a failed check.
+
+| Mega profile | Flash | Static RAM | Static free |
+| --- | ---: | ---: | ---: |
+| `mega2560` | 195094 | 7131 | 1061 |
+| `mega2560_serial` | 117982 | 5273 | 2919 |
+| `mega2560_display` | 183436 | 7100 | 1092 |
+| `mega2560_local` | 145452 | 6108 | 2084 |
+| `mega2560_minimal` | 52190 | 4252 | 3940 |
+| `mega2560_touch` | 204782 | 7333 | 859 |
+| `mega2560_touch_wheel` | 206346 | 7364 | 828 |
+| `mega2560_ui_debug` | 197646 | 6715 | 1477 |
+| `mega2560_touch_debug` | 207080 | 6917 | 1275 |
+| `mega2560_touch_local` | 151726 | 6310 | 1882 |
+| `mega2560_touch_debug_local` | 152214 | 5919 | 2273 |
+| `mega2560_touch_enable` | 205092 | 7333 | 859 |
+| `mega2560_touch_fan` | 205494 | 7338 | 854 |
+| `mega2560_serial_fan` | 118380 | 5278 | 2914 |
+| `mega2560_serial_cutoff` | 118070 | 5274 | 2918 |
+| `mega2560_touch_cutoff` | 205604 | 7339 | 853 |
+| `mega2560_serial_alerts` | 118252 | 5275 | 2917 |
+| `mega2560_touch_alerts` | 205868 | 7341 | 851 |
+| `mega2560_wheel_alerts` | 195724 | 7134 | 1058 |
+
+### AVR stack audit and remaining margin
+
+`tools/analyze_avr_stack.py` audits the **linked** ELF, including saved registers,
+fixed local frames and three-byte Mega return addresses. It flags indirect calls
+and cycles; it is not a complete stack proof. In the largest production build
+(`mega2560_touch_wheel`, 828 bytes statically free):
+
+- The former EEPROM audit's 606-byte load frame plus 232-byte validation frame
+  no longer coexist. Boot/serial restoration use one caller-owned 256-byte
+  configuration candidate. `loadCandidate` may modify that temporary on failure;
+  the caller checks the result before configuring the controller. Normal `load`
+  retains its failure semantics. Legacy schema-1 validation remains a separate
+  112-byte candidate. Boot storage loading is separated from CAN/display startup.
+- Record selection shares the writer's buffer only while idle. Protection and
+  absence persistence no longer duplicate a full RAM configuration. Job address
+  **and epoch** guards live in one controller-owned array instead of every plan;
+  both checks remain in dispatch/ACK validation.
+- Source-reviewed direct-call estimates, including the `main` caller, are about
+  **509 bytes** for boot/migration, **547 bytes** for serial restoration,
+  **545 bytes** for migration during protection persistence, and **670 bytes**
+  for wheel-driven profile review/loading. Target arrays are released before
+  application plans are allocated. UI dispatch keeps mutually exclusive
+  alert/recovery/navigation/profile frames separate. Calibration and ordinary
+  rendering paths remain below the reviewed profile-load peak.
+- The raw graph reports a larger load path because `newestConfig` can allocate
+  its own candidate when called without one. Production `loadCandidate` and
+  migrated protection pass their existing candidate, so that nested allocation
+  is unreachable there. Boot's calibration action also cannot load a profile.
+  These are source/argument constraints, not blanket exclusions from the audit.
+- The direct graph omits the virtual EEPROM read callees and outgoing arguments.
+  Allowing another dozen bytes for those on the 670-byte review path, the
+  largest reviewed ISR path is approximately **53 bytes**, including the hardware return address, saved registers, indirect
+  MCP2515 callback and callees. Encoder/Timer0/UART paths are smaller; these
+  handlers do not enable nested interrupts. That leaves approximately **90 bytes**
+  on this reviewed estimate. No reachable allocating `new`/`malloc`
+  call was found in the linked production path; the linked allocator symbol alone
+  does not imply a heap allocation.
+
+This is a narrow margin, with uncertainty in indirect/library calls and future
+compiler changes. It is not a claim of a measured worst-case hardware watermark.
+`diag memory` reports static free, current stack/heap gap and the contiguous
+untouched pattern since boot. Painting occurs in `.init3`, before constructors,
+above application data. A matching pattern can overestimate untouched space, and
+unexercised paths remain unknown. Stress boot, serial load/defaults, all profile
+reviews/loads/saves, alert recovery, calibration and thermal-stop persistence
+under CAN traffic; record the smallest watermark. Investigate near-zero results
+before relying on the fullest touch+wheel build in operation. The user-approved
+1 KiB reserve remains a warning rather than a reason to remove production features.
+
+Reproduce the relevant checks:
+
+```sh
+python3 tools/test_host.py
+python3 tools/test_touch.py
+python3 tools/test_renderer.py
+python3 tools/test_wheel_alert_guard.py
+python3 tools/test_route_budget.py
+python3 tools/test_sim_storage.py
+python3 tools/test_alert_outputs.py
+python3 tools/test_fan_output.py
+python3 tools/test_charge_allow.py
+python3 tools/check_avr_formats.py
+# Build every env listed in platformio.ini before these ELF checks:
+python3 tools/check_memory.py
+python3 tools/check_debug_build.py
+python3 tools/analyze_avr_stack.py .pio/build/mega2560_touch_wheel/firmware.elf
+python3 tools/test_avr_render.py --simavr-prefix /path/to/extracted/usr
+```
+
+Actual PSU delivery, EEPROM interruption on the board, physical input/output
+behavior and measured RAM margin remain bench checks. The sections below record
+previous changes and their historical build measurements.
 
 ## Outline selection throughout the UI (2026-11-11)
 

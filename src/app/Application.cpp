@@ -23,6 +23,22 @@ Application::Application() : controller_(can_), memory_(eeprom_)
   , localUi_(controller_, memory_, display_, eeprom_)
 #endif
 {}
+StorageResult Application::configureFromStorage() {
+#if PSU_UI_DEBUG
+  can_.reset();
+  Configuration config = debugConfiguration();
+  const StorageResult loaded = memory_.load(config);
+#else
+  Configuration config;
+  const StorageResult loaded = memory_.loadCandidate(config);
+  if (loaded != StorageResult::Ok && loaded != StorageResult::Migrated && loaded != StorageResult::WrongDeployment)
+    defaultConfiguration(config);
+#endif
+  controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok);
+  controller_.storageStatus(loaded);
+  controller_.configureStartup(PSU_CHG_ALLOW_PIN >= 0 || PSU_UI_DEBUG, PSU_UI_DEBUG || loaded == StorageResult::Ok, millis());
+  return loaded;
+}
 void Application::begin() {
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.begin(); // First application action; reset-time LOW is hardware-owned.
@@ -37,16 +53,7 @@ void Application::begin() {
 #if PSU_FAN_PWM_PIN >= 0 && !PSU_UI_DEBUG
   fanOutput_.begin();
 #endif
-#if PSU_UI_DEBUG
-  can_.reset();
-  Configuration config = debugConfiguration();
-#else
-  Configuration config = defaultConfiguration();
-#endif
-  const StorageResult loaded = memory_.load(config);
-  controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok);
-  controller_.storageStatus(loaded);
-  controller_.configureStartup(PSU_CHG_ALLOW_PIN >= 0 || PSU_UI_DEBUG, PSU_UI_DEBUG || loaded == StorageResult::Ok, millis());
+  const auto loaded = configureFromStorage();
 #if PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG
   pinMode(control::enablePin, control::enablePullup ? INPUT_PULLUP : INPUT);
   controller_.sampleEnableInput((digitalRead(control::enablePin) == LOW) == control::enableActiveLow, millis());
@@ -103,6 +110,7 @@ void Application::tick() {
 #endif
   controller_.serviceProtection(memory_, millis());
   memory_.stepSave();
+  controller_.profileTick(memory_);
 #if PSU_ENABLE_DISPLAY
   localUi_.storageTick();
 #endif
@@ -205,7 +213,7 @@ void Application::debugTick(uint32_t now) {
       auto cfg=controller_.configuration(); strcpy(cfg.groups[0].name,"LONGGRP1"); scenarioResult_ = controller_.configure(cfg,true);
     } else if (desiredScenario_ == DebugScenario::Unbound) scenarioResult_ = controller_.unbind(PSU_MAX_UNITS>1 ? 1 : 0);
     else if (desiredScenario_ == DebugScenario::VoltageUnsynced) {
-      auto cfg=controller_.configuration(); cfg.voltage+=10;
+      auto cfg=controller_.configuration(); for (auto& v : cfg.voltage) v += 10;
       // Loading a draft without restore clears runtime voltage ACKs. Merely
       // staging a different voltage correctly retains the authorized voltage.
       scenarioResult_ = controller_.configure(cfg);

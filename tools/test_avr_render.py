@@ -28,7 +28,7 @@ manifest = ast.parse((root / 'tools/test_host.py').read_text())
 sources = next(ast.literal_eval(n.value) for n in manifest.body if isinstance(n, ast.Assign)
                and any(isinstance(t, ast.Name) and t.id == 'sources' for t in n.targets))
 sources = [str(root / s) for s in sources if not s.startswith('test/') and
-           s not in ('src/ui/SerialConsole.cpp', 'src/ui/SerialAlerts.cpp')]
+           s not in ('src/ui/SerialConsole.cpp', 'src/ui/SerialProfiles.cpp', 'src/ui/SerialAlerts.cpp')]
 sources += [str(root / s) for s in ('src/debug/Simulator.cpp', 'src/ui/Ili9341Display.cpp', 'test/avr_render/benchmark.cpp')]
 sources += [str(arduino / 'cores/arduino' / s) for s in ('wiring.c', 'wiring_digital.c')]
 with tempfile.TemporaryDirectory(prefix='r4850-avr-render-') as folder:
@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix='r4850-avr-render-') as folder:
     subprocess.run([str(compiler), '-mmcu=atmega2560', '-DF_CPU=16000000UL', '-std=gnu++11',
                     '-Os', '-flto', '-fno-tree-switch-conversion', '-fno-exceptions', '-g',
                     '-ffunction-sections', '-fdata-sections', '-DPSU_UI_DEBUG=1',
-                    '-DPSU_ENABLE_DISPLAY=1', '-DPSU_ENABLE_SERIAL=0', '-DPSU_ENABLE_ENCODER=0',
+                    '-DPSU_MAX_UNITS=9', '-DPSU_ENABLE_DISPLAY=1', '-DPSU_ENABLE_SERIAL=0', '-DPSU_ENABLE_ENCODER=0',
                     '-I' + str(root / 'test/avr_render'), '-I' + str(font.parent), '-I' + str(root / 'src'),
                     '-I' + str(arduino / 'cores/arduino'), '-I' + str(arduino / 'variants/mega'),
                     *sources, '-Wl,--gc-sections', '-o', str(elf)], check=True)

@@ -1,3 +1,4 @@
+#include "config_helpers.h"
 #include "config/ChargerConfig.h"
 #include "config/ConsoleConfig.h"
 #include "config/Deployment.h"
@@ -57,10 +58,10 @@ struct FakeCan : CanTransport {
 };
 struct PowerCut {};
 struct FakeEeprom : ByteStorage {
-  std::array<uint8_t, 512> bytes;
+  std::array<uint8_t, 4096> bytes;
   int stopAfter = -1;
   int calls = 0;
-  uint16_t capacity = 512;
+  uint16_t capacity = 4096;
   int ignoredAddress = -1;
   bool readyNow = true;
   FakeEeprom() { bytes.fill(0xff); }
@@ -196,7 +197,7 @@ CanFrame broadcast(uint8_t address, bool ready = true, uint16_t raw = 20) {
 Configuration installation(uint8_t count = 2) {
   auto c = defaultConfiguration(); c.count = count;
   std::strcpy(c.groups[0].name, "GROUP1"); c.groups[0].members = membersMask(count);
-  c.groups[0].current = 5500;
+  draftGroupCurrent(c, 0, 5500);
   for (uint8_t i = 0; i < count; ++i) c.units[i].identity = identity(i + 1);
   CHECK(validConfig(c)); return c;
 }
@@ -241,7 +242,7 @@ struct Rig {
         if(prepared) break;
       }
       if (c.configuration().deploymentId == deployment::id) {
-        if (!c.configuration().operating.voltageAuthorized) {
+        if (!(c.configuration().operating.voltageMask != 0)) {
           const auto plan=c.preview(Operation::Voltage,-1,now);
           CHECK(plan.blocker==Issue::None); CHECK(c.queue(plan,false,now)==Result::Ok);
         }
@@ -331,7 +332,7 @@ struct Rig {
 };
 Configuration authorized(bool enabled = true) {
   auto c=installation(); c.autoResume=enabled;
-  c.operating.voltageAuthorized=true; c.operating.voltage=5400;
+   authorizedVoltage(c, 5400);
   c.operating.voltageMask=c.operating.currentMask=membersMask(c.count);
   c.operating.current[0]=c.operating.current[1]=1000;
   return c;
@@ -354,18 +355,18 @@ void controlLifecycle() {
   CHECK(!early.sample(true,100) && !early.enabled());
   EnableControl wrap; wrap.boot(false); wrap.sample(true,0xfffffff0U); CHECK(wrap.sample(true,40) && wrap.enabled());
 
-  auto saved=authorized(false); saved.voltage=5800; saved.groups[0].current=5000;
+  auto saved=authorized(false); draftVoltage(saved, 5800); draftGroupCurrent(saved, 0, 5000);
   Rig off(saved,true,false); off.current[0]=off.current[1]=3500; off.finish();
   CHECK(off.c.controlStatus(off.now).activity==Activity::Holding);
   CHECK(off.c.unitControl(0).zeroConfirmed && off.c.unitControl(1).zeroConfirmed);
   CHECK(off.c.unitControl(0).awakeConfirmed && off.c.unitControl(1).awakeConfirmed && !off.standby);
-  CHECK(off.c.configuration().operating.current[0]==1000 && off.c.configuration().voltage==5800);
+  CHECK(off.c.configuration().operating.current[0]==1000 && off.c.configuration().voltage[0]==5800);
   for(const auto& f:off.can.writes()) {
     if(f.data[1]==protocol::Standby) CHECK(f.data[3]==0);
     if(f.data[1]==protocol::OnlineCurrent) CHECK(protocol::readBigEndian(f.data+4)==0);
     if(f.data[1]==protocol::OnlineVoltage) CHECK(protocol::readBigEndian(f.data+4)==protocol::encodeVoltage(5400));
   }
-  CHECK(off.c.preview(Operation::All,-1,off.now).blocker==Issue::Disabled);
+  CHECK(off.c.preview(Operation::All,-1,off.now).prepared && off.c.preview(Operation::All,-1,off.now).blocker==Issue::None);
   CHECK(off.c.setAutoResume(true)==Result::Ok); off.finish();
   CHECK(off.c.controlStatus(off.now).activity==Activity::Running && off.c.report().succeeded==3);
   CHECK(off.current[0]>990 && off.current[0]<=1000); // Restored authorized profile, never the 25 A draft.
@@ -608,7 +609,7 @@ void manualFanControl() {
   CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto && r.c.unitControl(1).fanAcknowledged==FanMode::Auto);
   CHECK(r.c.unitControl(0).fanReason==FanReason::ManualAuto);
   CHECK(!r.c.enableControl().enabled() && r.c.controlStatus(r.now).activity==Activity::Holding);
-  CHECK(r.c.configuration().operating.current[0]==profile.operating.current[0] && r.c.configuration().voltage==profile.voltage);
+  CHECK(r.c.configuration().operating.current[0]==profile.operating.current[0] && r.c.configuration().voltage[0]==profile.voltage[0]);
   CHECK(r.c.setFanOverride(1,FanOverride::Max,r.now)==Result::Ok); r.step(2000);
   CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max && r.c.unitControl(1).fanAcknowledged==FanMode::Auto);
   CHECK(r.c.externalFanStatus(r.now).reason==FanReason::ManualMax);
@@ -695,18 +696,18 @@ void protocolAndConfiguration() {
   invalid.length = 8; invalid.rtr = true; CHECK(!protocol::isReply(invalid));
   invalid.rtr = false; invalid.extended = false; CHECK(!protocol::isReply(invalid));
   auto c = defaultConfiguration(); CHECK(validConfig(c));
-  CHECK(!c.autoResume && !c.operating.voltageAuthorized && !identified(c.units[0].identity));
+  CHECK(!c.autoResume && !(c.operating.voltageMask != 0) && !identified(c.units[0].identity));
   CHECK(!groupName("all") && !groupName("VOLtage") && !groupName("1group") && !groupName("TOOLONG99"));
   CHECK(groupName("Group_1") && sameName("Group_1", "GROUP_1"));
-  GroupConfig g = {}; std::strcpy(g.name, "TEST"); g.members = 0x85; g.current = 5501;
-  CHECK(allocation(g, 0) == 1834 && allocation(g, 2) == 1834 && allocation(g, 7) == 1833);
-  CHECK(allocation(g, 1) == 0);
+  GroupConfig g = {}; std::strcpy(g.name, "TEST"); g.members = 0x85;
+  CHECK(allocation(g.members, 5501, 0) == 1834 && allocation(g.members, 5501, 2) == 1834 && allocation(g.members, 5501, 7) == 1833);
+  CHECK(allocation(g.members, 5501, 1) == 0);
   Rig r;
   CHECK(r.c.groupIndex("group1") == 0);
   CHECK(r.c.setGroup("GROUP2", 2) == Result::Invalid); // Membership must be disjoint.
   CHECK(r.c.setCount(1) == Result::Invalid);
   CHECK(r.c.setCurrent(0, 12001) == Result::Invalid);
-  CHECK(r.c.configuration().groups[0].current == 5500); // Atomic, never clamp.
+  CHECK(groupCurrent(r.c.configuration(), 0) == 5500); // Atomic, never clamp.
   const auto check = r.c.checkCurrent(0, 12001);
   CHECK(check.issue == Issue::Capacity && check.slot == 0 && check.share == 6001 && check.maximum == 6000);
   CHECK(r.c.setVoltage(6000) == Result::Invalid && r.c.setVoltage(4700, true) == Result::Invalid);
@@ -774,10 +775,10 @@ void orderedApplyAndDraftIsolation() {
   CHECK(r.c.voltageSynchronized(0) && r.c.voltageSynchronized(1));
   CHECK(r.c.setVoltage(5650) == Result::Ok && r.c.setCurrent(0, 6000) == Result::Ok);
   const auto p = r.c.preview(Operation::GroupCurrent, 0, r.now);
-  CHECK(p.voltage == 5400 && p.current[0] == 3000); // Unapplied voltage remains a draft.
+  CHECK(p.voltage[0] == 5400 && p.current[0] == 3000); // Unapplied voltage remains a draft.
   r.apply(Operation::GroupCurrent, 0);
   CHECK(r.can.writes().size() == 6 && r.can.writes()[4].data[1] == protocol::OnlineCurrent);
-  CHECK(r.c.configuration().voltage == 5650 && r.c.configuration().operating.voltage == 5400);
+  CHECK(r.c.configuration().voltage[0] == 5650 && r.c.configuration().operating.voltage[0] == 5400);
   CHECK(r.c.setCurrent(0, 2000, true) == Result::Ok);
   r.apply(Operation::Offline);
   const auto offline = r.can.writes(); CHECK(offline.size() == 10);
@@ -904,7 +905,7 @@ void restorationAndDeployment() {
   }
   CHECK(lastReturned.data[1]==protocol::OnlineCurrent);
   CHECK(protocol::readBigEndian(lastReturned.data + 4) == protocol::encodeCurrent(2750, 5000));
-  CHECK(r.c.configuration().groups[0].current == 2000 && r.c.configuration().voltage == 5800);
+  CHECK(groupCurrent(r.c.configuration(), 0) == 2000 && r.c.configuration().voltage[0] == 5800);
   auto saved = r.c.configuration(); saved.autoResume=false;
   Rig noResume(saved, true); noResume.finish(); CHECK(noResume.c.controlStatus(noResume.now).activity==Activity::Holding);
   for(const auto& f:noResume.can.writes()) CHECK(f.data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(f.data+4)==0);
@@ -933,7 +934,7 @@ void restorationAndDeployment() {
   // Reassignment preserves requested total but requires an explicit new apply.
   Rig groups; groups.apply(); CHECK(groups.c.setGroup("GROUP1", 1) == Result::Ok);
   CHECK(groups.c.configuration().operating.currentMask == 0);
-  CHECK(groups.c.configuration().groups[0].current == 5500);
+  CHECK(groupCurrent(groups.c.configuration(), 0) == 2750);
   CHECK(groups.c.setGroup("GROUP2", 2) == Result::Ok);
   groups.live = 0; groups.step(16000); groups.live = 3; groups.step(200); groups.step(200);
   groups.finish();
@@ -1103,35 +1104,35 @@ FakeEeprom parallelRecord(const Configuration& c, uint8_t schema = 4, uint8_t ca
   const uint16_t size = 136 + 10 * capacity;
   auto* b = bytes.bytes.data(); std::memset(b, 0, size);
   b[0] = 0xa5; b[1] = schema; put16(b + 2, size); b[4] = 42;
-  std::memcpy(b + 10, "R48C", 4); b[14] = c.operating.voltageAuthorized; b[15] = c.operating.voltageMask;
+  std::memcpy(b + 10, "R48C", 4); b[14] = (c.operating.voltageMask != 0); b[15] = c.operating.voltageMask;
   for (uint8_t i = 0; i < 4; ++i) b[16+i] = c.deploymentId >> (8*i);
-  put16(b + 20, c.voltage); put16(b + 22, c.offlineVoltage); put16(b + 24, c.pollMs);
+  put16(b + 20, c.voltage[0]); put16(b + 22, c.offlineVoltage); put16(b + 24, c.pollMs);
   b[26] = c.count; b[27] = uint8_t(c.autoResume) | (schema == 4 ? uint8_t(c.thermalStop) << 1 : 0);
   b[28] = schema >= 3 ? c.acceptedAbsent : 0;
   uint16_t at = 29;
   for (const auto& g : c.groups) {
     std::memcpy(b + at, g.name, 8); b[at+8] = g.members;
-    put16(b + at + 9, g.current); put16(b + at + 11, g.offlineCurrent); at += 13;
+    put16(b + at + 9, groupCurrent(c, uint8_t(&g - c.groups))); put16(b + at + 11, g.offlineCurrent); at += 13;
   }
   for (uint8_t i = 0; i < capacity; ++i) {
     std::memcpy(b + at, c.units[i].identity.bytes, 6); put16(b + at + 6, c.units[i].ratedCurrent); at += 8;
   }
-  put16(b + at, c.operating.voltage); at += 2; b[at++] = c.operating.currentMask;
+  put16(b + at, c.operating.voltage[0]); at += 2; b[at++] = c.operating.currentMask;
   for (uint8_t i = 0; i < capacity; ++i) { put16(b + at, c.operating.current[i]); at += 2; }
   CHECK(at == size); recordCrc(b, size); return bytes;
 }
 void eepromAndMigration() {
-  CHECK(MemoryManager::recordSize <= 256 && MemoryManager::budget == 512);
+  CHECK(MemoryManager::recordSize <= 256 && MemoryManager::budget == 4096);
   FakeEeprom bytes; MemoryManager memory(bytes);
   auto one = installation(PSU_MAX_UNITS), out = defaultConfiguration();
-  one.autoResume = true; one.operating.voltageAuthorized = true; one.operating.voltage = 5300;
+  one.autoResume = true;  authorizedVoltage(one, 5300);
   one.operating.currentMask = membersMask(PSU_MAX_UNITS);
   one.operating.voltageMask = membersMask(PSU_MAX_UNITS);
   one.groups[0] = {};
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
     const uint8_t g = i % limits::maxGroups;
     one.groups[g].name[0] = 'G'; one.groups[g].name[1] = '1' + g;
-    one.groups[g].members |= 1U << i; one.groups[g].current = 2000 + g;
+    one.groups[g].members |= 1U << i; draftGroupCurrent(one, g, 2000 + g);
     one.groups[g].offlineCurrent = 1000 + g;
     one.operating.current[i] = 500 + i; one.units[i].ratedCurrent = 5000 + 100 * i;
   }
@@ -1146,36 +1147,36 @@ void eepromAndMigration() {
   }
   bytes.bytes.fill(0xff); CHECK(memory.save(one) == StorageResult::Ok && memory.load(out) == StorageResult::Ok);
   CHECK(out.deploymentId == one.deploymentId && out.count == PSU_MAX_UNITS && out.autoResume);
-  CHECK(out.operating.voltage == 5300 && out.operating.voltageAuthorized && out.operating.currentMask == one.operating.currentMask);
+  CHECK(out.operating.voltage[0] == 5300 && (out.operating.voltageMask != 0) && out.operating.currentMask == one.operating.currentMask);
   CHECK(out.operating.voltageMask == one.operating.voltageMask);
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
     CHECK(sameIdentity(out.units[i].identity, one.units[i].identity));
     CHECK(out.units[i].ratedCurrent == one.units[i].ratedCurrent);
     const uint8_t g = i % limits::maxGroups;
     CHECK(sameName(out.groups[g].name, one.groups[g].name) && out.groups[g].members == one.groups[g].members);
-    CHECK(out.groups[g].current == one.groups[g].current && out.groups[g].offlineCurrent == one.groups[g].offlineCurrent);
+    CHECK(groupCurrent(out, g) == groupCurrent(one, g) && out.groups[g].offlineCurrent == one.groups[g].offlineCurrent);
     CHECK(out.operating.current[i] == one.operating.current[i]);
   }
-  auto two = one; two.voltage = 5500; CHECK(memory.save(two) == StorageResult::Ok);
+  auto two = one; draftVoltage(two, 5500); CHECK(memory.save(two) == StorageResult::Ok);
   CHECK(bytes.bytes[255] == 0xff && bytes.bytes[511] == 0xff);
   const auto original = bytes.bytes;
-  auto three = two; three.voltage = 5600;
+  auto three = two; draftVoltage(three, 5600);
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     bytes.bytes = original; bytes.calls = 0; bytes.stopAfter = cut;
     MemoryManager interrupted(bytes);
     try { interrupted.save(three); } catch (const PowerCut&) {}
     bytes.stopAfter = -1;
     CHECK(memory.load(out) == StorageResult::Ok);
-    CHECK(out.voltage == (cut <= MemoryManager::recordSize ? 5500 : 5600));
+    CHECK(out.voltage[0] == (cut <= MemoryManager::recordSize ? 5500 : 5600));
   }
-  bytes.bytes = original; bytes.bytes[256 + 30] ^= 1;
-  CHECK(memory.load(out) == StorageResult::Ok && out.voltage == one.voltage);
-  bytes.bytes = original; bytes.ignoredAddress = 20;
-  CHECK(memory.save(three) == StorageResult::WriteFailed && memory.load(out) == StorageResult::Ok && out.voltage == 5500);
+  bytes.bytes = original; bytes.bytes[1024 + 30] ^= 1;
+  CHECK(memory.load(out) == StorageResult::Ok && out.voltage[0] == one.voltage[0]);
+  bytes.bytes = original; bytes.ignoredAddress = 512 + 106;
+  CHECK(memory.save(three) == StorageResult::WriteFailed && memory.load(out) == StorageResult::Ok && out.voltage[0] == 5500);
   bytes.ignoredAddress = -1; bytes.bytes = original;
   // A CRC-valid record belonging to another deployment remains inspectable.
-  bytes.bytes[256 + 16] ^= 0x40;
-  recordCrc(bytes.bytes.data() + 256, MemoryManager::recordSize);
+  bytes.bytes[1024 + 16] ^= 0x40;
+  recordCrc(bytes.bytes.data() + 1024, MemoryManager::recordSize);
   CHECK(memory.load(out) == StorageResult::WrongDeployment);
   CHECK(out.deploymentId != deployment::id && memory.save(out) == StorageResult::WrongDeployment);
   const auto untouched = bytes.bytes;
@@ -1186,8 +1187,8 @@ void eepromAndMigration() {
   auto legacy = legacyRecord(); MemoryManager old(legacy);
   const auto preserved = legacy.bytes;
   CHECK(old.load(out) == StorageResult::Migrated);
-  CHECK(out.voltage == 5400 && out.groups[0].current == 5500 && out.groups[0].offlineCurrent == 2000);
-  CHECK(out.groups[0].members == 3 && !out.autoResume && !out.operating.voltageAuthorized);
+  CHECK(out.voltage[0] == 5400 && groupCurrent(out, 0) == 5500 && out.groups[0].offlineCurrent == 2000);
+  CHECK(out.groups[0].members == 3 && !out.autoResume && !(out.operating.voltageMask != 0));
   CHECK(!identified(out.units[0].identity) && legacy.bytes == preserved);
   LegacyConfiguration details; CHECK(old.legacy(details) && details.units[1].address == 2 && details.applyOnBoot);
   const auto migrated = out;
@@ -1199,8 +1200,8 @@ void eepromAndMigration() {
     CHECK(old.load(out) == (cut <= MemoryManager::recordSize ? StorageResult::Migrated : StorageResult::Ok));
   }
   legacy = legacyRecord(true); const auto mixed = legacy.bytes;
-  out = installation(); out.voltage = 5700;
-  CHECK(old.load(out) == StorageResult::LegacyNeedsReview && out.voltage == 5700 && legacy.bytes == mixed);
+  out = installation(); draftVoltage(out, 5700);
+  CHECK(old.load(out) == StorageResult::LegacyNeedsReview && out.voltage[0] == 5700 && legacy.bytes == mixed);
   CHECK(old.legacy(details) && details.units[1].voltage == 5500);
 }
 struct Terminal {
@@ -1214,7 +1215,7 @@ struct Terminal {
     drain(30);
   }
   void drain(unsigned count = 1000) {
-    for (unsigned i = 0; i < count; ++i) { memory.stepSave(); console.tick(rig.now); }
+    for (unsigned i = 0; i < count; ++i) { memory.stepSave(); rig.c.profileTick(memory); console.tick(rig.now); }
   }
   std::string input(const std::string& text, bool drain = true) {
     io.output.clear(); io.feed(text);
@@ -1256,19 +1257,19 @@ void serialWorkflow() {
   CHECK(t.input("help diagnostics\n").find("BUS / GROUP DIAGNOSTICS") != std::string::npos);
   CHECK(t.input("diag bus\n").find("responding addresses=2 verified identities=2 broadcasting=2") != std::string::npos);
   CHECK(t.input("diag group GROUP1\n").find("members=1,2 responding=1,2 ready=1,2 missing=-") != std::string::npos);
-  CHECK(t.input("set voltage GROUP1 56\n").find("voltage is global") != std::string::npos);
-  CHECK(t.input("set current GROUP1 55\n").find("STAGED total A=55.00") != std::string::npos);
+  CHECK(t.input("set voltage GROUP1 56\n").find("STAGED") != std::string::npos);
+  CHECK(t.input("set current GROUP1 55\n").find("STAGED 55.00") != std::string::npos);
   CHECK(t.input("preview all\n").find("share A=27.50") != std::string::npos && r.can.writes().empty());
   CHECK(t.input("apply all\n").find("QUEUED;") != std::string::npos); r.finish(); t.console.tick(r.now);
   CHECK(r.c.report().succeeded == 3);
   CHECK(t.input("set current GROUP1 20\nsave\n").find("EEPROM OK") != std::string::npos);
   Configuration stored; CHECK(t.memory.load(stored) == StorageResult::Ok);
-  CHECK(stored.groups[0].current == 2000 && stored.operating.current[0] == 2750);
+  CHECK(groupCurrent(stored, 0) == 2000 && stored.operating.current[0] == 2750);
   CHECK(t.input("telemetry GROUP1\n").find("filtered-current A=N/A") != std::string::npos);
-  CHECK(t.input("set current GROUP1 121\n").find("PSU 1 share A=60.50 exceeds configured maximum A=60.00") != std::string::npos);
+  CHECK(t.input("set current GROUP1 121\n").find("ERR") != std::string::npos);
   for (const auto& command : {"set current GROUP1 nan\n", "set current GROUP1 inf\n", "set current GROUP1 -2\n", "set current GROUP1 2junk\n", "group set BAD 1-99\n", "count 0\n"})
     CHECK(t.input(command).find("ERR") != std::string::npos);
-  CHECK(r.c.configuration().groups[0].current == 2000);
+  CHECK(groupCurrent(r.c.configuration(), 0) == 2000);
   r.live = 1; r.step(6000);
   CHECK(t.input("apply GROUP1\n").find("missing; output state unknown") != std::string::npos);
   CHECK(t.input("apply GROUP1 partial\n").find("ARE YOU SURE?") != std::string::npos);
@@ -1290,12 +1291,12 @@ void serialWorkflow() {
 void serialLifecycleAndParity() {
   Rig r; Terminal t(r);
   CHECK(t.input("set current GROUP1 4", false) == "set current GROUP1 4");
-  CHECK(r.c.configuration().groups[0].current == 5500);
+  CHECK(groupCurrent(r.c.configuration(), 0) == 5500);
   CHECK(t.input("\b3", false) == "\b \b3");
-  CHECK(t.input("\r").find("OK") != std::string::npos && r.c.configuration().groups[0].current == 300);
+  CHECK(t.input("\r").find("OK") != std::string::npos && groupCurrent(r.c.configuration(), 0) == 300);
   CHECK(t.input("\n").empty()); CHECK(t.input("\n") == "\r\n> ");
   t.input("echo off\r\n"); CHECK(t.input("set\tcurrent GROUP1 4", false).empty());
-  t.input("\x7f" "2\n"); CHECK(r.c.configuration().groups[0].current == 200); t.input("echo on\n");
+  t.input("\x7f" "2\n"); CHECK(groupCurrent(r.c.configuration(), 0) == 200); t.input("echo on\n");
   t.input(std::string(100, 'x')); CHECK(t.input("\n").find("discarded") != std::string::npos);
   CHECK(t.input("hello\n").find("console ready") != std::string::npos);
   t.io.observing = false; t.input("apply all", false);
@@ -1387,7 +1388,7 @@ void cooperativeSerialAndStorage() {
   }
   CHECK(!t.memory.saving() && t.io.output.find("EEPROM OK") != std::string::npos);
   CHECK(t.io.output.find("newer RAM changes remain unsaved") != std::string::npos);
-  Configuration saved; CHECK(t.memory.load(saved) == StorageResult::Ok && saved.groups[0].current == 5500);
+  Configuration saved; CHECK(t.memory.load(saved) == StorageResult::Ok && groupCurrent(saved, 0) == 5500);
   const auto completed = t.memory.completedToken();
   CHECK(t.memory.startSave(r.c.configuration()) == StorageResult::Ok);
   CHECK(t.memory.saveToken() != completed && t.memory.completedToken() == completed);
@@ -1426,18 +1427,18 @@ void cooperativeSerialAndStorage() {
     serial.begin(StorageResult::NoValidRecord); serial.displayStatus(false); serial.finishStartup();
     io.feed("set current GROUP1 12\r\nignored prefix ");
     for (unsigned i = 0; i < 10; ++i) serial.tick(blocked.now);
-    CHECK(!io.available() && io.output.empty() && blocked.c.configuration().groups[0].current == 5500);
+    CHECK(!io.available() && io.output.empty() && groupCurrent(blocked.c.configuration(), 0) == 5500);
     // Cancellation arriving just as TX space becomes available still wins
     // over a command retained during the earlier output stall.
     if (cancel) io.feed("\x18");
     io.throttled = false;
     for (unsigned i = 0; i < 100; ++i) serial.tick(blocked.now);
-    CHECK(blocked.c.configuration().groups[0].current == (cancel ? 5500 : 1200));
+    CHECK(groupCurrent(blocked.c.configuration(), 0) == (cancel ? 5500 : 1200));
     if (!cancel) {
       CHECK(io.output.find("input backlog") != std::string::npos);
       io.feed("set voltage 56\n"); // Suffix of a previously discarded prefix.
       for (unsigned i = 0; i < 50; ++i) serial.tick(blocked.now);
-      CHECK(blocked.c.configuration().voltage == 5400);
+      CHECK(blocked.c.configuration().voltage[0] == 5400);
       CHECK(io.output.find("incomplete/invalid line; discarded") != std::string::npos);
     }
     io.feed("hello\r\n"); io.output.clear();
@@ -1483,7 +1484,8 @@ struct UiRig {
   void turn(int16_t n) { ui.input({n, false, false}, r.now); }
   void click() { ui.input({0, true, false}, r.now); }
   void hold() { ui.input({0, false, true}, r.now); }
-  void tick(uint32_t ms = 1, bool refresh = true) { r.step(ms, true, refresh); memory.stepSave(); ui.tick(r.now); }
+  void config() { hold(); CHECK(ui.page()==UiPage::ConfigMenu); turn(1); click(); CHECK(ui.page()==UiPage::GroupSelect); click(); CHECK(ui.page()==UiPage::Config); }
+  void tick(uint32_t ms = 1, bool refresh = true) { r.step(ms, true, refresh); memory.stepSave(); r.c.profileTick(memory); ui.tick(r.now); }
   void finish() {
     for (unsigned n = 0; ui.working() && n < 2000; ++n) tick(10);
     CHECK(!ui.working());
@@ -1546,26 +1548,26 @@ void uiWorkflows() {
   u.click(); CHECK(u.ui.page() == UiPage::Units); u.turn(1); CHECK(u.ui.unit() == 1);
   u.click(); CHECK(u.ui.page() == UiPage::Detail); u.click(); CHECK(u.ui.unit() == 1);
   u.hold(); CHECK(u.ui.page() == UiPage::Groups); u.click(); CHECK(u.ui.unit() == 1);
-  u.hold(); u.hold(); CHECK(u.ui.page() == UiPage::Config && u.ui.field() == UiField::Current);
-  const auto old = r.c.configuration().groups[0].current;
+  u.hold(); u.config(); CHECK(u.ui.page() == UiPage::Config && u.ui.field() == UiField::Current);
+  const auto old = groupCurrent(r.c.configuration(), 0);
   u.click(); u.turn(30000); CHECK(u.ui.editValue() == r.c.groupCurrentMaximum(0));
-  CHECK(r.c.configuration().groups[0].current == old && r.can.writes().empty());
+  CHECK(groupCurrent(r.c.configuration(), 0) == old && r.can.writes().empty());
   u.turn(-30000); CHECK(u.ui.editValue() == 0);
-  u.hold(); CHECK(r.c.configuration().groups[0].current == old && !u.ui.editing());
+  u.hold(); CHECK(groupCurrent(r.c.configuration(), 0) == old && !u.ui.editing());
   // Current before global voltage commissioning produces a useful blocker.
-  u.hold(); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.blocker() == Issue::VoltageUnsynced);
+  u.config(); u.click(); u.click(); CHECK(u.ui.notice() == UiNotice::Blocked && u.ui.blocker() == Issue::VoltageUnsynced);
   CHECK(r.can.writes().empty());
   u.click(); u.turn(-1); CHECK(u.ui.field() == UiField::Voltage);
   u.click(); u.turn(1); u.click(); CHECK(u.ui.notice() == UiNotice::Applying);
   u.finish(); CHECK(u.ui.notice() == UiNotice::Saved);
   Configuration saved; CHECK(u.memory.load(saved) == StorageResult::Ok);
-  CHECK(saved.voltage == 5410 && saved.operating.voltage == 5410);
+  CHECK(saved.voltage[0] == 5410 && saved.operating.voltage[0] == 5410);
   CHECK(saved.operating.currentMask == 0); // Voltage edit cannot apply group drafts.
   for (const auto& frame : r.can.writes()) CHECK(frame.data[1] != protocol::OnlineCurrent || protocol::readBigEndian(frame.data+4)==0);
   u.click(); u.turn(1); u.click(); u.turn(1); u.click();
   CHECK(u.ui.notice() == UiNotice::Applying); u.finish();
   CHECK(u.ui.notice() == UiNotice::Saved && u.memory.load(saved) == StorageResult::Ok);
-  CHECK(saved.groups[0].current == old + ui::currentStep);
+  CHECK(groupCurrent(saved, 0) == old + ui::currentStep);
   CHECK(saved.operating.current[0] + saved.operating.current[1] == old + ui::currentStep);
   CHECK(r.c.currentSynchronized(0) && !pendingSettings(r.c, 3));
   Rig reboot(saved,false,false); reboot.finish(); CHECK(!reboot.c.currentSynchronized(0) && pendingSettings(reboot.c, 3));
@@ -1574,14 +1576,14 @@ void uiWorkflows() {
   u.click(); u.click(); u.turn(3); const auto writes = r.can.writes().size();
   CHECK(r.c.setCurrent(0, 1000) == Result::Ok); u.ui.tick(r.now);
   CHECK(!u.ui.editing() && u.ui.notice() == UiNotice::Changed);
-  u.click(); CHECK(r.can.writes().size() == writes && r.c.configuration().groups[0].current == 1000);
+  u.click(); CHECK(r.can.writes().size() == writes && groupCurrent(r.c.configuration(), 0) == 1000);
   // No groups is a valid commissioning screen; gestures cannot index -1.
   Rig empty; CHECK(empty.c.removeGroup(0) == Result::Ok); UiRig e(empty);
-  e.click(); e.hold(); e.turn(300); CHECK(e.ui.group() == -1 && e.ui.page() == UiPage::Tools);
+  e.click(); e.hold(); e.turn(300); CHECK(e.ui.group() == -1 && e.ui.page() == UiPage::ConfigMenu);
   e.hold(); CHECK(e.ui.page() == UiPage::Groups);
   UiFrame frame; UiView::compose(frame, e.ui, empty.c, empty.now);
   CHECK(rowText(frame, 3).find("No groups") != std::string::npos);
-  Rig removed; UiRig deleted(removed); deleted.hold(); deleted.click();
+  Rig removed; UiRig deleted(removed); deleted.config(); deleted.click();
   CHECK(removed.c.removeGroup(0) == Result::Ok); deleted.ui.tick(removed.now);
   CHECK(deleted.ui.notice() == UiNotice::Changed && !deleted.ui.editing());
   deleted.click(); CHECK(deleted.ui.page() == UiPage::Groups && removed.can.writes().empty());
@@ -1589,7 +1591,7 @@ void uiWorkflows() {
 void uiPartialAndFailures() {
   Rig r; r.apply(); UiRig u(r);
   r.live = 1; r.step(6000); u.ui.tick(r.now);
-  u.hold(); u.click(); u.turn(1); u.click();
+  u.config(); u.click(); u.turn(1); u.click();
   CHECK(u.ui.page() == UiPage::Confirm && !u.ui.confirmingYes());
   UiFrame warning; UiView::compose(warning, u.ui, r.c, r.now); snapshot("confirmation", warning);
   CHECK(rowText(warning, 10).find("Missing PSU: 2") != std::string::npos);
@@ -1598,7 +1600,7 @@ void uiPartialAndFailures() {
   CHECK(u.ui.notice() == UiNotice::Cancelled && r.can.writes().size() == writes);
   u.click(); u.click(); u.click(); CHECK(u.ui.page() == UiPage::Confirm);
   u.turn(1); CHECK(u.ui.confirmingYes()); u.click(); CHECK(u.ui.notice() == UiNotice::Applying);
-  const auto share = allocation(r.c.configuration().groups[0], 0);
+  const auto share = r.c.configuration().current[0];
   u.finish(); CHECK(u.ui.notice() == UiNotice::PartialSaved);
   CHECK(r.c.report().recipients == 1 && r.c.report().skipped == 2);
   CHECK(r.c.configuration().operating.current[0] == share); // No redistribution.
@@ -1610,7 +1612,7 @@ void uiPartialAndFailures() {
   for (size_t i = before; i < refreshed.size(); ++i) {
     CHECK(refreshed[i].data[1] == protocol::OnlineVoltage || refreshed[i].data[1] == protocol::OnlineCurrent);
     CHECK(protocol::readBigEndian(refreshed[i].data + 4) ==
-          (refreshed[i].data[1] == protocol::OnlineVoltage ? protocol::encodeVoltage(r.c.configuration().operating.voltage) :
+          (refreshed[i].data[1] == protocol::OnlineVoltage ? protocol::encodeVoltage(r.c.configuration().operating.voltage[0]) :
            protocol::encodeCurrent(share, r.c.configuration().units[0].ratedCurrent)));
   }
   u.click(); CHECK(u.ui.notice() == UiNotice::Changed && u.ui.page() == UiPage::Config && r.can.writes().size() == refreshed.size());
@@ -1619,39 +1621,39 @@ void uiPartialAndFailures() {
   CHECK(r.can.writes().size() == refreshed.size());
   Rig unready; unready.apply(); UiRig blocked(unready);
   unready.can.incoming.push_back(broadcast(2, false)); unready.c.tick(unready.now);
-  blocked.hold(); blocked.click(); blocked.click();
+  blocked.config(); blocked.click(); blocked.click();
   CHECK(blocked.ui.notice() == UiNotice::Blocked && blocked.ui.blocker() == Issue::NotReady);
   // CAN failure never produces a success banner or an EEPROM record.
   Rig failure; failure.apply(); UiRig bad(failure); failure.can.sendOk = false;
-  bad.hold(); bad.click(); bad.turn(1); bad.click(); bad.finish();
+  bad.config(); bad.click(); bad.turn(1); bad.click(); bad.finish();
   CHECK(bad.ui.notice() == UiNotice::ApplyFailed && bad.memory.load(saved) == StorageResult::NoValidRecord);
   // EEPROM failure is distinguished from already-acknowledged live settings.
-  Rig storage; storage.apply(); UiRig broken(storage); broken.bytes.ignoredAddress = 20;
-  broken.hold(); broken.click(); broken.turn(1); broken.click(); broken.finish();
+  Rig storage; storage.apply(); UiRig broken(storage); broken.bytes.ignoredAddress = 512 + 106;
+  broken.config(); broken.click(); broken.turn(1); broken.click(); broken.finish();
   CHECK(broken.ui.notice() == UiNotice::SaveFailed && storage.c.report().failed == 0);
   // An asynchronous save snapshots once, rejects overlapping saves, and writes
   // at most one byte per tick while the main loop remains available.
   FakeEeprom bytes; MemoryManager memory(bytes); auto original = installation();
   CHECK(memory.startSave(original) == StorageResult::Ok && memory.saving());
   CHECK(memory.save(original) == StorageResult::Busy);
-  original.voltage = 5500;
+  draftVoltage(original, 5500);
   unsigned ticks = 0;
   while (memory.saving()) { const auto prior = bytes.bytes; memory.stepSave(); unsigned changed = 0;
     for (unsigned i = 0; i < prior.size(); ++i) changed += prior[i] != bytes.bytes[i];
-    CHECK(changed <= 1 && ++ticks <= MemoryManager::recordSize + 2);
+    CHECK(changed <= 1 && ++ticks <= MemoryManager::recordSize + 5);
   }
-  CHECK(memory.saveResult() == StorageResult::Ok && memory.load(saved) == StorageResult::Ok && saved.voltage == 5400);
+  CHECK(memory.saveResult() == StorageResult::Ok && memory.load(saved) == StorageResult::Ok && saved.voltage[0] == 5400);
   // A serial change during save must not be labelled as the saved configuration.
   Rig concurrent; concurrent.apply(); UiRig changed(concurrent);
-  changed.hold(); changed.click(); changed.click();
+  changed.config(); changed.click(); changed.click();
   for (unsigned i = 0; changed.ui.notice() == UiNotice::Applying && i < 1000; ++i) changed.tick(10);
   CHECK(changed.ui.notice() == UiNotice::Saving);
   CHECK(concurrent.c.setCurrent(0, 1000) == Result::Ok); changed.finish();
   CHECK(changed.ui.notice() == UiNotice::SavedOlder);
-  CHECK(changed.memory.load(saved) == StorageResult::Ok && saved.groups[0].current == 5500);
+  CHECK(changed.memory.load(saved) == StorageResult::Ok && groupCurrent(saved, 0) == 5500);
   // A new save may start before the UI observes its own completed snapshot.
   Rig owner; owner.apply(); UiRig pending(owner);
-  pending.hold(); pending.click(); pending.click();
+  pending.config(); pending.click(); pending.click();
   for (unsigned i = 0; pending.ui.notice() == UiNotice::Applying && i < 1000; ++i) pending.tick(10);
   CHECK(pending.ui.notice() == UiNotice::Saving);
   while (pending.memory.saving()) pending.memory.stepSave();
@@ -1661,7 +1663,7 @@ void uiPartialAndFailures() {
 }
 void presentationAndSessions() {
   auto cfg = installation(3); cfg.units[1].ratedCurrent = 1001;
-  cfg.groups[0].current = 1000; Rig r(cfg);
+  draftGroupCurrent(cfg, 0, 1000); Rig r(cfg);
   const auto maximum = r.c.groupCurrentMaximum(0);
   CHECK(r.c.checkCurrent(0, maximum).issue == Issue::None);
   CHECK(r.c.checkCurrent(0, maximum + 1).issue == Issue::Capacity);
@@ -1720,7 +1722,7 @@ void uiLayouts() {
   auto cfg = installation(8); for (auto& g : cfg.groups) g = {};
   for (uint8_t i = 0; i < 5; ++i) { std::snprintf(cfg.groups[i].name, sizeof(cfg.groups[i].name), "GROUP%u", unsigned(i + 1));
     cfg.groups[i].members = i < 3 ? 3U << (i * 2) : 1U << (i + 3);
-    cfg.groups[i].current = i < 2 ? 2000 : i == 2 ? 0 : 500;
+    draftGroupCurrent(cfg, i, i < 2 ? 2000 : i == 2 ? 0 : 500);
   }
   Rig r(cfg); r.apply(); UiRig u(r);
   for (uint8_t i = 0; i < 8; ++i) {
@@ -1749,10 +1751,10 @@ void uiLayouts() {
   u.hold(); u.turn(2); CHECK(u.ui.groupRank() == 3);
   UiView::compose(frame, u.ui, r.c, r.now); snapshot("groups-page2", frame);
   CHECK(rowText(frame, 2).find("GROUP4") != std::string::npos && rowText(frame, 0).find("2/2") != std::string::npos);
-  u.hold(); u.click();
+  u.config(); u.click();
   const uint32_t paintTime = r.now + ((r.now / ui::blinkMs) % 2 ? ui::blinkMs : 0);
   UiView::compose(frame, u.ui, r.c, paintTime); snapshot("config", frame);
-  CHECK(rowText(frame, 3).find("ALL GROUPS") != std::string::npos);
+  CHECK(rowText(frame, 3).find("GROUP VOLTAGE") != std::string::npos);
   CHECK(rowText(frame, 4).find("54.00V") != std::string::npos && rowText(frame, 5).find("58.50V") != std::string::npos);
 }
 #include "test_availability.inc"
@@ -1764,22 +1766,30 @@ void uiLayouts() {
 #include "test_ui_recovery.inc"
 #include "test_nine_units.inc"
 #include "test_route_cache.inc"
+#include "test_scoped_profiles.inc"
 }
 int main() {
+  unsigned failures = 0;
+  const auto run = [&](const char* name, void (*test)()) {
+    try { test(); } catch (const std::exception& e) { ++failures; std::cerr << name << ": " << e.what() << '\n'; }
+  };
   try {
-    routeCacheLifecycle(); drawingReceiveService(); exactGroupRange(); idleSerialStatusCadence();
-    nineUnitMigration(); ninthProtectionAndControl(); ninthAvailabilityAndRouting(); ninthSerialAndUi();
-    decimalFormatting(); uiRecoveryAvailability(); uiRecoveryGuards(); uiRecoverySave(); uiRecoveryResultsAndThermal();
-    psuActiveLifecycle(); psuActiveProtection(); psuActiveAbsences();
-    serialAlertCadence(); serialAlertStorm();
-    alertEpisodes(); thermalLimitsAndSensors(); thermalTimingAndAbsence(); thermalPersistence(); thermalQueuedChanges(); thermalAckRacesAndMigration(); alertUiAndSerial(); alertSerialCommands(); activeIdentityAlert();
-    zeroHoldReadiness(); zeroHoldOutputStart(); zeroHoldFailures();
-    readinessQualification(); readinessFrameOrdering(); readinessAckOrdering(); readinessDeadlineAndLatch(); readinessTelemetryAndBoundary(); readinessSafetyEdges(); readinessMultiUnitAndWrap();
-    availabilityProtocol(); startupPowerPolicy(); acceptedAbsences(); availabilityDecisionsAndStorage(); availabilityRefreshAndSoak(); availabilityInterfaces();
-    controlLifecycle(); zeroHoldEdges(); fanControl(); manualFanControl(); externalFanControl(); controlPresentation(); boundedCanTransmit(); cooperativeCan(); protocolAndConfiguration(); discoveryAndTelemetry(); orderedApplyAndDraftIsolation();
-    missingMembersAndConfirmations(); acknowledgementsAndFailures(); restorationAndDeployment(); schedulerAndBounds();
-    eepromAndMigration(); serialFanControl(); serialWorkflow(); serialLifecycleAndParity(); cooperativeSerialAndStorage(); boundedFrameChanges();
-    uiWorkflows(); uiPartialAndFailures(); presentationAndSessions(); uiLayouts();
+    run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
+    run("scopedSettings", scopedSettings); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);
+    run("routeCacheLifecycle", routeCacheLifecycle); run("drawingReceiveService", drawingReceiveService); run("exactGroupRange", exactGroupRange); run("idleSerialStatusCadence", idleSerialStatusCadence);
+    run("nineUnitMigration", nineUnitMigration); run("ninthProtectionAndControl", ninthProtectionAndControl); run("ninthAvailabilityAndRouting", ninthAvailabilityAndRouting); run("ninthSerialAndUi", ninthSerialAndUi);
+    run("decimalFormatting", decimalFormatting); run("uiRecoveryAvailability", uiRecoveryAvailability); run("uiRecoveryGuards", uiRecoveryGuards); run("uiRecoverySave", uiRecoverySave); run("uiRecoveryResultsAndThermal", uiRecoveryResultsAndThermal);
+    run("psuActiveLifecycle", psuActiveLifecycle); run("psuActiveProtection", psuActiveProtection); run("psuActiveAbsences", psuActiveAbsences);
+    run("serialAlertCadence", serialAlertCadence); run("serialAlertStorm", serialAlertStorm);
+    run("alertEpisodes", alertEpisodes); run("thermalLimitsAndSensors", thermalLimitsAndSensors); run("thermalTimingAndAbsence", thermalTimingAndAbsence); run("thermalPersistence", thermalPersistence); run("thermalQueuedChanges", thermalQueuedChanges); run("thermalAckRacesAndMigration", thermalAckRacesAndMigration); run("alertUiAndSerial", alertUiAndSerial); run("alertSerialCommands", alertSerialCommands); run("activeIdentityAlert", activeIdentityAlert);
+    run("zeroHoldReadiness", zeroHoldReadiness); run("zeroHoldOutputStart", zeroHoldOutputStart); run("zeroHoldFailures", zeroHoldFailures);
+    run("readinessQualification", readinessQualification); run("readinessFrameOrdering", readinessFrameOrdering); run("readinessAckOrdering", readinessAckOrdering); run("readinessDeadlineAndLatch", readinessDeadlineAndLatch); run("readinessTelemetryAndBoundary", readinessTelemetryAndBoundary); run("readinessSafetyEdges", readinessSafetyEdges); run("readinessMultiUnitAndWrap", readinessMultiUnitAndWrap);
+    run("availabilityProtocol", availabilityProtocol); run("startupPowerPolicy", startupPowerPolicy); run("acceptedAbsences", acceptedAbsences); run("availabilityDecisionsAndStorage", availabilityDecisionsAndStorage); run("availabilityRefreshAndSoak", availabilityRefreshAndSoak); run("availabilityInterfaces", availabilityInterfaces);
+    run("controlLifecycle", controlLifecycle); run("zeroHoldEdges", zeroHoldEdges); run("fanControl", fanControl); run("manualFanControl", manualFanControl); run("externalFanControl", externalFanControl); run("controlPresentation", controlPresentation); run("boundedCanTransmit", boundedCanTransmit); run("cooperativeCan", cooperativeCan); run("protocolAndConfiguration", protocolAndConfiguration); run("discoveryAndTelemetry", discoveryAndTelemetry); run("orderedApplyAndDraftIsolation", orderedApplyAndDraftIsolation);
+    run("missingMembersAndConfirmations", missingMembersAndConfirmations); run("acknowledgementsAndFailures", acknowledgementsAndFailures); run("restorationAndDeployment", restorationAndDeployment); run("schedulerAndBounds", schedulerAndBounds);
+    run("eepromAndMigration", eepromAndMigration); run("serialFanControl", serialFanControl); run("serialWorkflow", serialWorkflow); run("serialLifecycleAndParity", serialLifecycleAndParity); run("cooperativeSerialAndStorage", cooperativeSerialAndStorage); run("boundedFrameChanges", boundedFrameChanges);
+    run("uiWorkflows", uiWorkflows); run("uiPartialAndFailures", uiPartialAndFailures); run("presentationAndSessions", presentationAndSessions); run("uiLayouts", uiLayouts);
+    if (failures) { std::cerr << failures << " suites failed\n"; return 1; }
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
   return 0;
