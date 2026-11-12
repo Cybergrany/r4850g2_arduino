@@ -19,6 +19,22 @@ continues without a terminal. Firmware buffers output and writes only when
 It never waits for a UART buffer or USB reader. Raw logging has its own bounded
 queue; saturation drops trace entries with a warning, not controller ACK handling.
 
+With the default `raw off`, successful periodic voltage/current refresh ACKs are
+quiet. The controller still sends and validates those refreshes approximately
+every ten seconds per unit, including zero-current holding. Only an ACK matching
+that in-flight routine refresh is omitted from the console queue. Startup,
+operator applies, fan-mode changes, protective corrections, rejected and
+unexpected replies remain visible, along with timeout/fault reports and periodic
+warning/error summaries. Acknowledging an active alert does not silence those
+summaries. `raw on` restores the full diagnostic trace, including refresh ACKs;
+`raw off` returns to quiet background operation.
+
+For a soak, use `watch off` and `raw off`, then capture `diag bus`, `diag control`,
+`telemetry all` and `diag ui`. Repeat `diag bus` after 30 seconds to compare receive
+loss counters. Quiet refresh logging does not fix CAN receive loss or alter
+physical fan behavior. `alerts every 30` reduces summary frequency if desired;
+`alerts` still shows current incidents immediately.
+
 | Situation | Expected behaviour |
 | --- | --- |
 | Boot on independent power, no USB host | Defaults/EEPROM load and CAN polling proceed; startup text is not replayed automatically |

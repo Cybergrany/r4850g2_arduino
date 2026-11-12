@@ -54,7 +54,7 @@ class SerialConsole {
   void printMembers(UnitMask mask);
   void printUnit(uint8_t slot, uint8_t field, uint32_t now);
   void printFrame(int8_t index, const CanFrame& frame);
-  static void onFrame(void* context, int8_t index, const CanFrame& frame);
+  static void onFrame(void* context, int8_t index, const CanFrame& frame, bool refreshAccepted);
   Extension extension_ = nullptr;
   void* extensionContext_ = nullptr;
   Stream& stream_;

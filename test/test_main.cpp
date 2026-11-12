@@ -1762,6 +1762,7 @@ void uiLayouts() {
 #include "test_output_readiness.inc"
 #include "test_alerts.inc"
 #include "test_serial_alerts.inc"
+#include "test_serial_refresh.inc"
 #include "test_psu_active.inc"
 #include "test_ui_recovery.inc"
 #include "test_nine_units.inc"
@@ -1782,6 +1783,7 @@ int main() {
     run("nineUnitMigration", nineUnitMigration); run("ninthProtectionAndControl", ninthProtectionAndControl); run("ninthAvailabilityAndRouting", ninthAvailabilityAndRouting); run("ninthSerialAndUi", ninthSerialAndUi);
     run("decimalFormatting", decimalFormatting); run("uiRecoveryAvailability", uiRecoveryAvailability); run("uiRecoveryGuards", uiRecoveryGuards); run("uiRecoverySave", uiRecoverySave); run("uiRecoveryResultsAndThermal", uiRecoveryResultsAndThermal);
     run("psuActiveLifecycle", psuActiveLifecycle); run("psuActiveProtection", psuActiveProtection); run("psuActiveAbsences", psuActiveAbsences);
+    run("serialQuietRefresh", serialQuietRefresh); run("serialRefreshTraceAndFaults", serialRefreshTraceAndFaults);
     run("serialAlertCadence", serialAlertCadence); run("serialAlertStorm", serialAlertStorm);
     run("alertEpisodes", alertEpisodes); run("thermalLimitsAndSensors", thermalLimitsAndSensors); run("thermalTimingAndAbsence", thermalTimingAndAbsence); run("thermalPersistence", thermalPersistence); run("thermalQueuedChanges", thermalQueuedChanges); run("thermalAckRacesAndMigration", thermalAckRacesAndMigration); run("alertUiAndSerial", alertUiAndSerial); run("alertSerialCommands", alertSerialCommands); run("activeIdentityAlert", activeIdentityAlert);
     run("zeroHoldReadiness", zeroHoldReadiness); run("zeroHoldOutputStart", zeroHoldOutputStart); run("zeroHoldFailures", zeroHoldFailures);

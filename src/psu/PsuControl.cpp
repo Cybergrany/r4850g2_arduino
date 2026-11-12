@@ -457,15 +457,21 @@ void PsuController::controlComplete(CommandState state, uint32_t now) {
     controlPhase(controlSlot_, ControlPhase::Stopping, now);
   }
 }
-void PsuController::controlReceive(const CanFrame& f, uint32_t now) {
-  if (!controlActive_) return;
+bool PsuController::controlReceive(const CanFrame& f, uint32_t now) {
+  if (!controlActive_) return false;
   const auto* d = deviceForSlot(controlSlot_, now);
   if (!d || routingIssue(controlSlot_, now) != Issue::None || d->epoch != controlEpoch_ ||
-      protocol::address(f.id) != d->address) return;
+      protocol::address(f.id) != d->address) return false;
   if (!controlWaiting_ && protocol::isReply(f) && protocol::command(f.id) == protocol::infoCommand &&
       f.data[0] == 0 && f.data[1] == 2) controlVerified_ = true;
-  if (controlWaiting_ && protocol::settingReply(f, controlRegister_, controlValue_))
+  if (controlWaiting_ && protocol::settingReply(f, controlRegister_, controlValue_)) {
+    // Capture the origin before completion clears it. Only a matched successful
+    // periodic refresh is quiet; protective corrections and failures are not.
+    const bool refreshAccepted = controlRefresh_ && !controlCorrection_ && f.data[0] == 1;
     controlComplete(f.data[0] == 1 ? CommandState::Success : CommandState::Rejected, now);
+    return refreshAccepted;
+  }
+  return false;
 }
 void PsuController::controlTick(uint32_t now) {
   const uint32_t observation = uint32_t(config_.pollMs) * 3 > control::observationMs ? uint32_t(config_.pollMs) * 3 : control::observationMs;

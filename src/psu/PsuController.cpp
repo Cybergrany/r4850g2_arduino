@@ -416,7 +416,7 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
     const auto* d = deviceForSlot(i, now);
     if (d && d->address == protocol::address(f.id)) { slot = i; validateSource(i, *d, now); break; }
   }
-  controlReceive(f, now);
+  const bool refreshAccepted = controlReceive(f, now);
   if (slot >= 0) readinessReceive(slot, f, now);
   if (slot >= 0 && protocol::isCurrentBroadcast(f)) {
     const auto* d = deviceForSlot(slot, now);
@@ -448,7 +448,7 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
       advance(ok);
     }
   }
-  if (observer_) observer_(context_, slot, f);
+  if (observer_) observer_(context_, slot, f, refreshAccepted);
 }
 void PsuController::runJob(uint32_t now) {
   if (discovery_.negotiating()) { cancelJob(); return; }

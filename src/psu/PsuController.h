@@ -175,7 +175,8 @@ class PsuController {
   Result requestDescription(uint8_t address);
   Result requestPoll(UnitMask mask, uint32_t now);
   void resetAmpHours();
-  using FrameObserver = void (*)(void*, int8_t, const CanFrame&);
+  // Final flag identifies an accepted routine refresh; failures/corrections stay visible.
+  using FrameObserver = void (*)(void*, int8_t, const CanFrame&, bool);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
   __attribute__((noinline)) Result applyProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
@@ -239,7 +240,7 @@ class PsuController {
   void enableChanged(bool wasEnabled);
   void cancelJob();
   void controlTick(uint32_t now);
-  void controlReceive(const CanFrame& frame, uint32_t now);
+  bool controlReceive(const CanFrame& frame, uint32_t now);
   void controlCommand(uint8_t slot, uint8_t reg, uint16_t value, uint32_t now);
   void controlComplete(CommandState state, uint32_t now);
   void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now);

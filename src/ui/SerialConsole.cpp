@@ -940,8 +940,11 @@ void SerialConsole::outputRow(uint32_t now) {
     } else { io_.println(F("Export before saving a replacement profile; legacy addresses are not identity bindings.")); view_ = View::None; }
   }
 }
-void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& f) {
+void SerialConsole::onFrame(void* context, int8_t index, const CanFrame& f, bool refreshAccepted) {
   auto& s = *static_cast<SerialConsole*>(context);
+  // Suppress before enqueueing: routine success must not fill the tiny trace
+  // queue or consume UART time. Raw mode retains the complete diagnostic trace.
+  if (refreshAccepted && !s.raw_) return;
   const bool description = protocol::isReply(f) && protocol::command(f.id) == protocol::descriptionCommand &&
       protocol::address(f.id) == s.descriptionAddress_;
   const bool acknowledgement = index >= 0 && protocol::isReply(f) && protocol::command(f.id) == protocol::setCommand;

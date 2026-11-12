@@ -239,7 +239,11 @@ Ctrl-U line clear, and prompt redraw remain available. Description control bytes
 are sanitized. A console reset also cancels a pending serial confirmation, but
 cannot cancel a submitted controller job. See [serial lifecycle](SERIAL.md).
 The frame observer copies only relevant frames into a four-entry console trace
-queue; it performs no printing. Trace overflow drops diagnostic entries and
+queue; it performs no printing. The core annotates successful routine refresh
+ACKs before completion clears their origin; serial omits them unless raw tracing
+is enabled. The annotation is a callback argument, with no retained per-frame or
+per-unit storage. Rejected/unmatched replies and protective corrections retain
+their usual visibility. Trace overflow drops diagnostic entries and
 warns the operator, leaving the controller's ACK/state processing intact. The
 console reports trace drops separately from CAN receive drops. Custom Stream
 adapters must implement `availableForWrite()`; the Mega HardwareSerial does.

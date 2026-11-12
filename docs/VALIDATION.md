@@ -4,6 +4,32 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Quiet background refresh logging (2026-11-12)
+
+Successful routine voltage/current refresh ACKs are now omitted from the serial
+trace queue unless `raw on` is selected. The filter uses the matched control
+transaction's origin, before completion clears it. Startup, operator applies,
+fan changes, thermal corrections, rejected/unexpected replies, timeouts and
+periodic warning/error summaries retain their existing visibility. No CAN
+requests, deadlines, alert acknowledgement rules or EEPROM fields changed.
+
+Validation passes: **3,357,481 host checks** with ASan/UBSan, **1,310 touch/simulator
+checks** (without exporting snapshots), AVR printf validation, route-search
+budgets, all **19 Mega builds** and all three debug-isolation checks. The new
+production-controller/console tests exercise nine units for a simulated minute
+with UART backpressure, continued zero-hold refresh writes without trace backlog,
+positive-current refreshes, operator results, fan transitions, thermal corrections,
+raw tracing, unmatched/unknown ACKs, rejection and timeout fault reporting.
+
+All profiles retain their previous static RAM use. The touch+wheel build uses
+**7,385 RAM / 210,886 flash bytes**, leaving **807 static RAM bytes**; wheel-alerts
+uses **7,155 / 199,944**, leaving **1,037 bytes**. The linked receive path is 150
+bytes before callers, with its actual observer callback requiring only 26 bytes
+before its caller; it remains below the previously reviewed 668-byte profile-load
+peak. The raw main-path audit remains 754 bytes with the same loader-argument
+constraints described below. Physical receive loss, fan speed and the bench stack
+watermark remain unverified. See [serial soak guidance](SERIAL.md).
+
 ## Availability UI and consistent participation (2026-11-11)
 
 The [startup guide](STARTUP.md) covers the three-column overview, four-row
