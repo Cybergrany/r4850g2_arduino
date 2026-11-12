@@ -501,8 +501,10 @@ changes map those counters by stable identity using a nine-byte local snapshot;
 profiles or temporary CAN addresses do not own them. Internal startup/probe
 reconciliation calls `reconcile(false)` and preserves an exhausted budget and its
 fault. Operator `reconcile()` / guarded UI Retry ALL clears the session counters.
-The third qualified-output loss exceeds the default two-restart budget and uses
-the existing fault-stop path, alert source and recovery controls.
+The third readiness-triggered restart exceeds the default two-restart budget and
+uses the existing fault-stop path, alert source and recovery controls. The same
+bound applies in Online and Held; benign zero-hold transitions pass the existing
+readiness guard and do not consume the budget.
 
 Fan hysteresis and accepted mode survive software reconciliation and enable
 events; identity/connection changes invalidate them. Cooling is evaluated in

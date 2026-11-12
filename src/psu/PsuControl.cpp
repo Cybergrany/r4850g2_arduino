@@ -569,8 +569,8 @@ void PsuController::controlTick(uint32_t now) {
     // alone may drop at a confirmed zero limit without restarting reconciliation.
     if ((u.phase == ControlPhase::Online || u.phase == ControlPhase::Held) &&
         d->telemetry.broadcastSeen && !readinessAcceptable(i, now)) {
-      // Two-second qualification is not sustained recovery. Repeated qualified
-      // ready/not-ready cycles must not renew zero/wake/restore indefinitely.
+      // Bound this recovery path in both Online and Held. Benign zero-hold
+      // changes passed readinessAcceptable above and do not consume a retry.
       if (readinessLosses_[i] <= control::outputReadyRecoveries) ++readinessLosses_[i];
       if (readinessLosses_[i] > control::outputReadyRecoveries) {
         latchControlFault(i, CommandState::ReadinessRecoveryLimit, protocol::OnlineCurrent, now);

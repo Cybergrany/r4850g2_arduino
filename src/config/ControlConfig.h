@@ -26,8 +26,8 @@
 #ifndef PSU_ENABLE_IN_PULLUP
 #define PSU_ENABLE_IN_PULLUP 1
 #endif
-// Automatic zero/wake/profile retries after a previously qualified output loses
-// readiness. The next loss latches a fault; only explicit retry resets the count.
+// Automatic zero/wake/profile retries when a reconciled unit loses acceptable
+// readiness. Benign zero-hold changes are exempt; explicit retry resets the count.
 #ifndef PSU_OUTPUT_READY_RECOVERIES
 #define PSU_OUTPUT_READY_RECOVERIES 2
 #endif

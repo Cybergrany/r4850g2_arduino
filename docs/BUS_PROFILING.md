@@ -44,11 +44,12 @@ and state handling, not physical bus timing, fan response or PSU regulation.
 
 ## Readiness restart limit check
 
-The controller now permits two automatic zero/wake/restores after a qualified
-output loses readiness, then latches `readiness restart limit reached` on the
-third loss. This bounds the observed repeating sequence; it does not diagnose or
-fix the electrical reason a PSU is losing readiness. Normal zero-hold status
-changes and the initial bounded readiness qualification are separate paths.
+The controller now permits two automatic zero/wake/restores when a reconciled
+unit loses acceptable readiness, then latches `readiness restart limit reached`
+on the third loss. This also covers zero hold when the fresh benign-idle checks
+fail. It bounds the observed repeating sequence; it does not diagnose or fix the
+electrical reason a PSU is losing readiness. Normal benign zero-hold status
+changes consume no retry; initial readiness qualification has its own deadline.
 
 During the controlled bench run, capture `diag control` and `alerts` if the known
 ready/not-ready cycling returns. `readiness-losses` must stop at 3 with the

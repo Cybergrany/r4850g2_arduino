@@ -4,12 +4,31 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Integration review (2026-11-12)
+
+Reviewed the receive-buffer reads against MCP2515 DS20001801K section 12.4 and
+traced interrupt masking, queue ownership, retry lifetime and UI confirmation.
+Clarified that failed readiness recovery from zero hold shares the retry bound;
+added a controller regression proving that it remains OFF, stops retrying after
+the bound and only returns to zero hold after explicit retry. The existing
+benign-zero-hold regression still consumes no retries. This review follow-up
+changes comments, documentation and tests only.
+
+Independent reruns passed: ordinary host **3,367,502 checks**, profiled host
+**3,495,033 checks**, production RX/observer, renderer at all five SPI clocks,
+touch **1,310 checks**, real wheel **19,652 checks**, parser, route budget and AVR
+format checks. All **22 Mega profiles**, memory checks and debug/observer isolation
+passed. Firmware sizes match the table below; the documented narrow stack margins
+and hardware validation requirements still apply.
+
 ## Bounded output-readiness recovery (2026-11-12)
 
 `PSU_OUTPUT_READY_RECOVERIES=2` permits two automatic zero/wake/profile restarts
-after a qualified output loses readiness. The next loss latches the existing
-bounded fault-stop path. Brief ready periods, OFF/ON, CAN/AC/address recovery and
-configuration reloads cannot renew the budget. Explicit serial `reconcile` or
+when a reconciled unit loses acceptable readiness. This includes zero hold when
+the benign-idle checks fail; benign zero-hold changes do not consume a retry.
+The next loss latches the existing bounded fault-stop path. Brief ready periods,
+OFF/ON, CAN/AC/address recovery and configuration reloads cannot renew the budget.
+Explicit serial `reconcile` or
 the guarded **Retry ALL** UI review resets the counters; acknowledging the alert
 does not. The counters follow stable identities within the controller session.
 EEPROM layout, fan policy and startup electrical sequencing are unchanged.

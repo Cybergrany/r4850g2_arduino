@@ -68,6 +68,30 @@ void readinessRecoveryBudget() {
   cutoff.c.setAutoResume(false); cutoff.c.setAutoResume(true); cutoff.step(5000);
   CHECK(!cutoff.c.chargeAllowed() && cutoff.c.readinessLosses(0)==control::outputReadyRecoveries+1);
 }
+void readinessRecoveryZeroHold() {
+  Rig r(zeroHoldConfiguration(),false,false);
+  r.reportAc=true; r.temperature=20; r.finish();
+  CHECK(!r.c.enableControl().enabled() && r.c.unitControl(0).phase==ControlPhase::Held);
+  for(unsigned n=0;n<=control::outputReadyRecoveries;++n) {
+    // An unrecognized status cannot establish benign idle. This exercises the
+    // existing readiness failure path without claiming a meaning for that bit.
+    r.statusFlags=uint32_t(1)<<20; r.notReady=1; r.step();
+    CHECK(r.c.readinessLosses(0)==n+1);
+    CHECK(!r.c.enableControl().enabled() && r.current[0]==0);
+    if(n<control::outputReadyRecoveries) {
+      r.statusFlags=0; r.notReady=0; r.finish();
+      CHECK(r.c.unitControl(0).phase==ControlPhase::Held && r.c.unitControl(0).fault==CommandState::Idle);
+    }
+  }
+  CHECK(r.c.unitControl(0).fault==CommandState::ReadinessRecoveryLimit && r.c.unitControl(0).zeroConfirmed);
+  const auto stopped=r.can.writes().size();
+  r.statusFlags=0; r.notReady=0; r.step(35000);
+  CHECK(r.c.unitControl(0).fault==CommandState::ReadinessRecoveryLimit);
+  for(size_t n=stopped;n<r.can.writes().size();++n) CHECK(r.can.writes()[n].data[1]==protocol::FanMode);
+  r.c.reconcile(); r.finish();
+  CHECK(!r.c.readinessLosses(0) && !r.c.enableControl().enabled() && r.current[0]==0);
+  CHECK(r.c.unitControl(0).phase==ControlPhase::Held);
+}
 void readinessRecoveryUi() {
   Rig r(zeroHoldConfiguration()); r.apply(); r.finish();
   for(unsigned n=0;n<=control::outputReadyRecoveries;++n) loseQualifiedOutput(r);

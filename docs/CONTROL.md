@@ -162,8 +162,12 @@ standby fallback/cutoff. This fault survives CAN loss, AC transitions and addres
 recovery in the same controller session; explicit `reconcile` is required.
 If stop proof was lost with the link, diagnostics show it as unconfirmed; a
 verified return attempts the bounded fault stop without restoring current.
-After qualification, a later readiness loss may automatically repeat zero/wake
-and restore the authorized profile **twice per PSU per controller session**.
+Once reconciled, a loss of acceptable readiness may automatically repeat
+zero/wake **twice per PSU per controller session**, restoring the authorized
+profile only when otherwise enabled. This also bounds recovery from zero hold
+when the ready indication drops and the fresh benign-idle checks fail. A normal
+benign zero-hold transition consumes no retry; ordinary startup qualification
+retains its separate fixed deadline.
 The third loss latches `readiness restart limit reached` and uses the same bounded
 fault-stop/cutoff path. `PSU_OUTPUT_READY_RECOVERIES` in `ControlConfig.h` sets the
 automatic-restart budget (default 2; 0 disables automatic readiness restarts).
