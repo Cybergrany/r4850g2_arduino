@@ -5,12 +5,18 @@ void PsuController::configureStartup(bool installed, bool trusted, uint32_t now)
   startupConfigured_ = true; now_ = acReleased_ = now;
   startup_.permit = installed ? PermitState::Inhibited : PermitState::NotFitted;
   startup_.configurationReady = trusted; startup_.commissioning = false; startup_.since = now;
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),trusted,now);
+#endif
 }
 void PsuController::startupTick(uint32_t now) {
   if (startup_.permit == PermitState::Allowed && config_.deploymentId != deployment::id) hardStop();
   if (startup_.permit == PermitState::Inhibited && ready_ && startup_.configurationReady &&
       config_.deploymentId == deployment::id && uint32_t(now - startup_.since) >= control::inhibitMs) {
     startup_.permit = PermitState::Allowed; startup_.since = acReleased_ = now;
+#if PSU_BUS_PROFILE
+    busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),0,now);
+#endif
     // AC return is a new hardware state even when DC keeps CAN alive.
     reconcile();
   }
@@ -19,6 +25,9 @@ Result PsuController::hardStop() {
   if (startup_.permit == PermitState::NotFitted) return Result::Invalid;
   if (startup_.permit != PermitState::Fault) startup_.since = now_;
   startup_.permit = PermitState::Fault;
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),0,now_);
+#endif
   cancelJob(); controlActive_ = controlWaiting_ = controlVerified_ = false;
   voltageSynced_ = currentSynced_ = 0; restorePending_ |= running_;
   for (auto& u : control_) {

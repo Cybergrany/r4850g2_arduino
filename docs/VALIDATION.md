@@ -4,6 +4,89 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Bounded bus profiling and isolated observer (2026-11-12)
+
+The [capture guide](BUS_PROFILING.md) covers production profiling, the separate
+observer, normal/delayed AC startup and late-unit arrival. This patch instruments
+the existing policy; it does not change negotiation silence, fan hysteresis,
+charging permission, retry timing or EEPROM format.
+
+Validation passes:
+
+- Ordinary host suite: **3,357,481 checks**. With `PSU_TEST_BUS_PROFILE=1`:
+  **3,482,883 checks**, including unchanged setting-write inhibition during
+  negotiation, visibility of the existing INFO-query gap, serial reconnect,
+  command handling during event storms, and actual production CSV row bounds.
+  Both runs use AddressSanitizer/UndefinedBehaviorSanitizer.
+- New observer/transport tests exercise the production MCP2515 RX callback:
+  software-ring saturation beyond the old 255 counter, negotiation counted even
+  when dropped, invalid frames, queue-age/micros rollover, register readback and
+  overflow-bit preservation. Observer tests cover zero CAN sends, failed CAN
+  initialization, AC-review expiry/rollover, newer OFF, malformed/abandoned input,
+  serial backpressure and the actual setup/loop LOW-before-OUTPUT and parked
+  TFT/touch chip selects. Maximum-width summary/event rows fit the UART reserve.
+- Decoder tests cover truncated rows, mixed console output, queued events,
+  counter rollover, reboot and unit-snapshot fields.
+- Touch/simulator **1,310 checks**, real wheel **19,652 checks**, production
+  renderer at 500 kHz / 1 / 2 / 4 / 8 MHz, route-search budgets and AVR format
+  checks pass. No UI scenes changed; previews were not regenerated.
+- All **22 Mega environments** build: the original 19 plus the three diagnostic
+  environments. All three UI-debug isolation checks pass. A new linked-image
+  check confirms the observer omits controller, EEPROM, UI and transmitter state;
+  ordinary production builds omit the optional recorder. The CAN library's
+  retained virtual transmit symbol alone is not evidence of an observer send;
+  the observer adapter rejects sends and the host test verifies that boundary.
+
+| Environment | Flash bytes | Static RAM | Static free |
+| --- | ---: | ---: | ---: |
+| `mega2560_wheel_alerts` | 200030 | 7155 | 1037 |
+| `mega2560_wheel_profile` | 207524 | 7307 | 885 |
+| `mega2560_serial_cutoff` | 119978 | 5285 | 2907 |
+| `mega2560_serial_profile` | 127066 | 5437 | 2755 |
+| `mega2560_can_observer` | 16054 | 1881 | 6311 |
+
+Profiling adds **152 static bytes** to either supplied production variant.
+Ordinary build RAM is unchanged; a brief `diag profile` reply explains when the
+recorder is not compiled. No configuration snapshots or framebuffers were added.
+
+The linked wheel-profile direct-call graph has a **767-byte** raw maximum in
+the existing UI settings path. The new summary/event formatter measures 101
+bytes and the per-unit row 138 bytes before callers, below existing deep paths.
+The RX callback has a 14-byte frame / 20-byte direct chain. Accounting for the
+interrupt wrapper, its indirect library handler/callback and hardware return
+gives the same approximately **53-byte** reviewed interrupt overlap. Combining
+the unpruned 767-byte graph with that overlap leaves 65 bytes before outgoing
+arguments and other indirect-call allowances. The source/argument exclusions
+described below still apply, but this remains a narrow, unmeasured margin.
+Use `diag memory` after the loaded capture; do not infer physical stack safety
+solely from compilation or these static estimates. The serial profiler and
+observer provide substantially more room for comparison. Adding profiling to
+the already tight nine-unit touch builds needs its own stack audit; those are
+not supplied diagnostic environments.
+
+Relevant commands:
+
+```sh
+python3 tools/test_host.py
+PSU_TEST_BUS_PROFILE=1 python3 tools/test_host.py
+python3 tools/test_bus_profile.py
+python3 -B test/test_bus_log.py
+python3 tools/test_touch.py
+python3 tools/test_renderer.py
+python3 tools/test_wheel_alert_guard.py
+python3 tools/test_route_budget.py
+python3 tools/check_avr_formats.py
+python3 tools/check_memory.py
+python3 tools/check_observer_build.py
+python3 tools/check_debug_build.py
+python3 tools/analyze_avr_stack.py .pio/build/mega2560_wheel_profile/firmware.elf
+```
+
+Instrumentation adds CPU/SPI/UART work and can itself affect timing. Counts of
+diagnostic loss and CAN loss are separate. The requested hardware captures,
+physical fan response, loaded receive-service timing and stack watermark remain
+bench checks; no firmware was uploaded during software validation.
+
 ## Quiet background refresh logging (2026-11-12)
 
 Successful routine voltage/current refresh ACKs are now omitted from the serial

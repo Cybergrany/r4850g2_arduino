@@ -4,6 +4,7 @@
 #include "Availability.h"
 #include "Alerts.h"
 #include "Thermal.h"
+#include "../diagnostics/BusProfile.h"
 namespace psu {
 enum class Operation : uint8_t { All, Voltage, GroupCurrent, Offline, Restore };
 struct ApplyPlan {
@@ -55,6 +56,10 @@ struct ProfileLoadStatus {
 class PsuController {
  public:
   explicit PsuController(CanTransport& transport);
+#if PSU_BUS_PROFILE
+  BusProfile& busProfile() { return busProfile_; }
+  void busReceiveStats(BusReceiveStats& stats) const { transport_.busReceiveStats(stats); }
+#endif
   bool begin();
   void tick(uint32_t now);
   // Bounded RX/protection service between drawing slices. No new setting or
@@ -179,6 +184,9 @@ class PsuController {
   using FrameObserver = void (*)(void*, int8_t, const CanFrame&, bool);
   void observeFrames(FrameObserver observer, void* context) { observer_ = observer; context_ = context; }
  private:
+#if PSU_BUS_PROFILE
+  BusProfile busProfile_;
+#endif
   __attribute__((noinline)) Result applyProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
   __attribute__((noinline)) Result stageProfile(MemoryManager& memory, const ProfileReview& review);
   static constexpr int8_t unknownRoute = -4, unboundRoute = -3;

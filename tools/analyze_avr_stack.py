@@ -69,6 +69,8 @@ for _,f in sorted(functions.items(),key=lambda v:v[1][1]+v[1][2],reverse=True)[:
     print(f'{f[1]+f[2]:4} ({f[1]:2}+{f[2]:3}) {f[0]}')
 print('\nLongest direct-call paths from selected entry points (indirect paths require separate review):')
 roots=('main','psu::Application::begin(','psu::Application::tick(','psu::SerialConsole::storageCommand(',
+       'psu::SerialConsole::busProfileRow(', 'psu::SerialConsole::busProfileUnit(',
+       'psu::printBusSummary(', 'psu::printBusEvent(', 'psu::BusObserver::tick(',
        'psu::SerialConsole::execute(','psu::UiModel::action(','psu::PsuController::serviceProtection(',
        'psu::PsuController::loadProfile(','psu::CalibrationWizard::solve(',
        'psu::LocalUi::tick(','psu::Mcp2515Transport::onReceive(',

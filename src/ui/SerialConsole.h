@@ -27,6 +27,14 @@ class SerialConsole {
   bool profileCommand(char* line);
   void profileConfirm(bool yes);
   void profileRow();
+#if PSU_BUS_PROFILE
+  __attribute__((noinline)) void busProfileRow(uint32_t now, bool summary);
+  __attribute__((noinline)) void busProfileUnit(uint32_t now);
+  bool busProfileOutput(uint32_t now);
+  uint32_t busProfileUnitAt_ = 0;
+  uint8_t busProfileUnit_ = 0;
+  bool busProfileTurn_ = false;
+#endif
   bool parseScope(const char* text, SettingScope& scope) const;
   ProfileReview profileReview_;
   char profileName_[profiles::nameLength + 1] = {};

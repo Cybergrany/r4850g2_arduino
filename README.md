@@ -20,6 +20,10 @@ For intermittent AC and battery-connected PSUs, see [startup, AC cutoff and
 remembered group absences](docs/STARTUP.md). Serial and local UI can accept
 unavailable groups and include returning identities without redistributing current.
 
+For startup/fan investigations, [CAN profiling and the isolated observer](docs/BUS_PROFILING.md)
+provide bounded production captures and a separate application that sends no
+PSU commands or EEPROM writes. The guide includes the requested hardware runs.
+
 The MCP2515 interface is unchanged. Screen, wheel, and serial support are
 optional. The local UI targets a **320x240 landscape ILI9341 SPI display (2.8 or 3.2 inches)** with
 three group columns, two chargers per detail page, and optional wheel/touch voltage/current
@@ -45,6 +49,9 @@ See [serial connection behaviour](docs/SERIAL.md).
 | --- | --- | --- | --- |
 | `mega2560` (default) | ILI9341 dashboard/config | Navigate/edit | Yes |
 | `mega2560_wheel_alerts` | 8 MHz display, touch disabled; D26 enable, D27–D30 outputs | Navigate/edit | Yes |
+| `mega2560_wheel_profile` | Same wiring/control as wheel_alerts, plus bounded CAN profiling | Navigate/edit | Yes |
+| `mega2560_serial_profile` | No; production control/profiling with CHG_ALLOW D27 | No | Yes |
+| `mega2560_can_observer` | No; CAN observer, explicit D27 release, no PSU commands/EEPROM | No | Yes |
 | `mega2560_serial` | No | No | Yes |
 | `mega2560_display` | Group overview, automatic paging | No | Yes |
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
@@ -125,6 +132,7 @@ under `src/`; it is built automatically and needs no separate installation.
 | [`ProfileConfig.h`](src/config/ProfileConfig.h) | Eight profile slots, 12-character names and EEPROM locations |
 | [`BuildOptions.h`](src/config/BuildOptions.h) | Optional peripherals and maximum slots (1–9) |
 | [`ConsoleConfig.h`](src/config/ConsoleConfig.h) | Serial input budget and idle expiry |
+| [`BusProfileConfig.h`](src/config/BusProfileConfig.h) | Optional diagnostic ring/cadence and observer review limits |
 | [`UiConfig.h`](src/config/UiConfig.h) | UI timing, edit increments, paging, dimming and drawing budget |
 
 Change the deployment ID when moving to another physical installation. EEPROM

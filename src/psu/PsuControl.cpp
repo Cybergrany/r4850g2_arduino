@@ -4,6 +4,25 @@
 #include <math.h>
 namespace psu {
 namespace {
+#if PSU_BUS_PROFILE
+struct FanTrace {
+  PsuController& c; uint32_t now; uint8_t slot;
+  FanMode mode; FanReason reason;
+  FanTrace(PsuController& controller, uint8_t i, uint32_t time) : c(controller), now(time), slot(i),
+      mode(c.unitControl(i).fanRequested), reason(c.unitControl(i).fanReason) {}
+  ~FanTrace() {
+    const auto& u=c.unitControl(slot);
+    if (mode==u.fanRequested && reason==u.fanReason) return;
+    float value; int16_t temperature=INT16_MIN; uint16_t amps=UINT16_MAX;
+    if (c.freshMetric(slot,protocol::OutputTemperature,value,now) && isfinite(value) && value>=-327.67f && value<=327.67f)
+      temperature=int16_t(value*100);
+    if (c.freshMetric(slot,protocol::OutputCurrent,value,now) && isfinite(value) && value>=0 && value<655.35f)
+      amps=uint16_t(value*100);
+    c.busProfile().note(BusEvent::Fan,slot+1,(uint32_t(uint16_t(temperature))<<16)|amps,
+        (uint16_t(u.fanRequested)<<8)|uint8_t(u.fanReason),now);
+  }
+};
+#endif
 bool after(uint32_t sample, uint32_t boundary, uint32_t now) {
   return uint32_t(now - sample) < uint32_t(now - boundary);
 }
@@ -37,6 +56,9 @@ void PsuController::cancelJob() {
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::reconcile() {
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Reconcile,0,0,uint8_t(enable_.source()),now_);
+#endif
   if (!ready_) begin(); // Explicit retry also retries local CAN initialization.
   if (startup_.permit == PermitState::Fault) {
     startup_.permit = PermitState::Inhibited; startup_.since = now_;
@@ -57,6 +79,9 @@ void PsuController::reconcile() {
   }
 }
 void PsuController::enableChanged(bool wasEnabled) {
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Enable,0,enable_.enabled(),(uint16_t(wasEnabled)<<8)|uint8_t(enable_.source()),now_);
+#endif
   // Save persists the effective preference; switch edges never write EEPROM.
   config_.autoResume = enable_.enabled(); ++revision_;
   if (wasEnabled && !enable_.enabled()) {
@@ -216,9 +241,16 @@ void PsuController::currentAccepted(uint8_t i, uint16_t raw) {
   if (!raw) control_[i].outputDemand = OutputDemand::Zero;
 }
 void PsuController::controlPhase(uint8_t slot, ControlPhase phase, uint32_t now) {
+#if PSU_BUS_PROFILE
+  if (control_[slot].phase!=phase)
+    busProfile_.note(BusEvent::Phase,slot+1,0,(uint16_t(control_[slot].phase)<<8)|uint8_t(phase),now);
+#endif
   auto& u = control_[slot]; u.phase = phase; u.since = now;
 }
 void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now) {
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Fault,slot+1,0,(uint16_t(state)<<8)|reg,now);
+#endif
   auto& u = control_[slot];
   // An observation can fail while a fan/wake identity check or ACK is pending.
   // Its late completion must not overwrite the emergency-stop phase.
@@ -238,6 +270,9 @@ void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t 
   if (state != CommandState::IdentityTimeout && !u.zeroConfirmed && !u.standbyConfirmed && startup_.permit == PermitState::Allowed) hardStop();
 }
 void PsuController::updateFan(uint8_t i, uint32_t now) {
+#if PSU_BUS_PROFILE
+  const FanTrace trace(*this,i,now);
+#endif
   auto& u = control_[i]; float temperature = 0, amps = 0;
   if (u.fanOverride == FanOverride::Auto && fanOverrideIssue(i, FanOverride::Auto, now) != Issue::None)
     clearFanOverride(i);
@@ -480,6 +515,9 @@ void PsuController::controlTick(uint32_t now) {
     auto& u = control_[i]; const auto* d = deviceForSlot(i, now);
     const uint32_t epoch = d && routingIssue(i, now) == Issue::None ? d->epoch : 0;
     if (observedEpoch_[i] != epoch) {
+#if PSU_BUS_PROFILE
+      busProfile_.note(BusEvent::Route,i+1,epoch,(uint16_t(routingIssue(i,now))<<8)|(d ? d->address : 0),now);
+#endif
       const CommandState latched = startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
       const uint8_t faultReg = u.faultRegister;
       u = {}; acknowledgedMask_ &= UnitMask(~(1U << i)); voltageSynced_ &= UnitMask(~(1U << i)); currentSynced_ &= UnitMask(~(1U << i));

@@ -7,11 +7,13 @@
 #include <avr/pgmspace.h>
 #define PSU_SNPRINTF(out, size, literal, ...) snprintf_P(out, size, PSTR(literal), ##__VA_ARGS__)
 #define PSU_STRCMP(value, literal) strcmp_P(value, PSTR(literal))
+#define PSU_STRNCMP(value, literal, size) strncmp_P(value, PSTR(literal), size)
 #define PSU_CONST_STORAGE PROGMEM
 #define PSU_COPY_CONSTANT(out, source, size) memcpy_P(out, source, size)
 #else
 #define PSU_SNPRINTF(out, size, literal, ...) snprintf(out, size, literal, ##__VA_ARGS__)
 #define PSU_STRCMP(value, literal) strcmp(value, literal)
+#define PSU_STRNCMP(value, literal, size) strncmp(value, literal, size)
 #define PSU_CONST_STORAGE
 #define PSU_COPY_CONSTANT(out, source, size) memcpy(out, source, size)
 #endif

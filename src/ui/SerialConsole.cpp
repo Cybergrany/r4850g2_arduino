@@ -158,6 +158,18 @@ void SerialConsole::execute() {
   view_ = View::None;
   if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
   uint16_t n = 0, value = 0; UnitMask mask = 0;
+#if PSU_BUS_PROFILE
+  if (!PSU_STRCMP(args[0], "busprofile")) {
+    auto& p=controller_.busProfile();
+    if (argc==2 && (!PSU_STRCMP(args[1], "on") || !PSU_STRCMP(args[1], "off"))) {
+      p.stream(!PSU_STRCMP(args[1], "on")); io_.println(F("OK; capture counters continue; EEPROM unchanged")); return;
+    }
+    if (argc==3 && !PSU_STRCMP(args[1], "mark") && integer(args[2],UINT16_MAX,n)) {
+      p.note(BusEvent::Marker,0,n,0,now_); reply(Result::Ok); return;
+    }
+    io_.println(F("busprofile on|off; busprofile mark N; diag profile. BUS v1; docs/BUS_PROFILING.md")); return;
+  }
+#endif
   if (memory_.saving() && (!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") ||
       !PSU_STRCMP(args[0], "defaults") || !PSU_STRCMP(args[0], "legacy") || !PSU_STRCMP(args[0], "apply") ||
       !PSU_STRCMP(args[0], "offline") || !PSU_STRCMP(args[0], "confirm"))) {
@@ -199,6 +211,14 @@ void SerialConsole::execute() {
     return;
   }
   if (!PSU_STRCMP(args[0], "diag") && argc >= 2) {
+    if (!PSU_STRCMP(args[1], "profile") && argc==2) {
+#if PSU_BUS_PROFILE
+      busProfileRow(now_,true);
+#else
+      io_.println(F("Bus profiling not compiled; use PSU_BUS_PROFILE=1"));
+#endif
+      return;
+    }
     if (!PSU_STRCMP(args[1], "thermal") && argc == 2) { startView(View::Thermal); return; }
     if (!PSU_STRCMP(args[1], "startup") && argc == 2) { startView(View::Startup); return; }
     if (!PSU_STRCMP(args[1], "control") && argc == 2) { startView(View::Control); return; }
@@ -558,6 +578,12 @@ void SerialConsole::tick(uint32_t now) {
   // Command/operation/save results come first. Summaries precede background
   // status and trace traffic, so flapping control states cannot starve them.
   if (broadcastAlerts(now)) return;
+#if PSU_BUS_PROFILE
+  // Alternate with ordinary console work; even a continuous event storm cannot
+  // starve status/trace output. Commands and alert notifications retain priority.
+  busProfileTurn_ = !busProfileTurn_;
+  if (busProfileTurn_ && busProfileOutput(now)) return;
+#endif
   if (uint32_t(now - lastStatus_) >= console::statusIntervalMs) {
     lastStatus_ = now;
     const UnitMask attention = controller_.availabilityAttention(now);

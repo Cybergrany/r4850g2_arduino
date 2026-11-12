@@ -3,7 +3,13 @@
 #include <string.h>
 namespace psu {
 PsuController::PsuController(CanTransport& t) : transport_(t), config_(defaultConfiguration()) {}
-bool PsuController::begin() { ready_ = transport_.begin(); return ready_; }
+bool PsuController::begin() {
+  ready_ = transport_.begin();
+#if PSU_BUS_PROFILE
+  busProfile_.note(BusEvent::Boot,0,ready_,PSU_CAN_OBSERVER,now_);
+#endif
+  return ready_;
+}
 Result PsuController::configure(const Configuration& c, bool resume) {
   if (busy() || availabilitySaving()) return Result::Busy;
   if (!validConfig(c)) return Result::Invalid;
@@ -369,12 +375,21 @@ void PsuController::beginReport(Operation op, UnitMask requested, UnitMask recip
 }
 bool PsuController::send(const CanFrame& f, TxPurpose purpose) {
   sentThisTick_ = true;
+#if PSU_BUS_PROFILE
+  busProfile_.requested(f,uint8_t(purpose),discovery_.negotiating(),now_);
+#endif
   if (ready_ && transport_.send(f)) {
     txPending_ = transport_.transmitState() == TransmitState::Pending;
+#if PSU_BUS_PROFILE
+    if (!txPending_) busProfile_.completed(transport_.transmitState() == TransmitState::Sent,now_);
+#endif
     txPurpose_ = purpose; txJobSlot_ = jobSlot_; txJobSequence_ = report_.sequence;
     return true;
   }
   if (txFailures_ != UINT16_MAX) ++txFailures_;
+#if PSU_BUS_PROFILE
+  busProfile_.completed(false,now_);
+#endif
   if (purpose == TxPurpose::ManualRead && readFailures_ != UINT16_MAX) ++readFailures_;
   return false;
 }
@@ -382,6 +397,9 @@ void PsuController::serviceTransmit(uint32_t now) {
   transport_.service(now);
   if (!txPending_ || transport_.transmitState() == TransmitState::Pending) return;
   txPending_ = false;
+#if PSU_BUS_PROFILE
+  busProfile_.completed(transport_.transmitState() == TransmitState::Sent,now);
+#endif
   if (transport_.transmitState() != TransmitState::Failed) return;
   if (txFailures_ != UINT16_MAX) ++txFailures_;
   if (txPurpose_ == TxPurpose::ManualRead && readFailures_ != UINT16_MAX) ++readFailures_;
@@ -403,6 +421,18 @@ void PsuController::advance(bool success) {
   pending_ &= UnitMask(~bit); waiting_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::receive(const CanFrame& f, uint32_t now) {
+#if PSU_BUS_PROFILE
+  busProfile_.received(f,now);
+  if (protocol::isNegotiation(f) && !discovery_.negotiating()) busProfile_.negotiation(f,now);
+  const auto* prior = discovery_.address(protocol::address(f.id));
+  if (protocol::isReply(f) && protocol::command(f.id)==protocol::infoCommand && f.data[0]==0 && f.data[1]==2 &&
+      (!prior || memcmp(prior->identity.bytes,f.data+2,6))) busProfile_.identity(protocol::address(f.id),f.data+2,now);
+  if (protocol::isReply(f) && protocol::command(f.id)==protocol::dataCommand && f.data[0]==1 && f.data[1]==0x83 &&
+      (!prior || !prior->telemetry.alarmSeen || prior->telemetry.alarmBits!=protocol::readBigEndian(f.data+4)))
+    busProfile_.note(BusEvent::Status,protocol::address(f.id),protocol::readBigEndian(f.data+4),0,now);
+  if (protocol::isCurrentBroadcast(f) && (!prior || !prior->telemetry.broadcastSeen || prior->telemetry.ready!=(f.data[3]==0)))
+    busProfile_.note(BusEvent::Ready,protocol::address(f.id),f.data[3],0,now);
+#endif
   if (protocol::isReply(f) && protocol::command(f.id)==protocol::infoCommand && f.data[0]==0 && f.data[1]==2)
     for (uint8_t i=0;i<count();++i) if (energized_ & (1U << i)) {
       const auto* previous=deviceForSlot(i,now);
@@ -578,7 +608,13 @@ void PsuController::tick(uint32_t now) {
   serviceTransmit(now);
   CanFrame f;
   for (uint8_t n = 0; n < 32 && transport_.receive(f); ++n) receive(f, now);
+#if PSU_BUS_PROFILE
+  const bool negotiating = discovery_.negotiating();
+#endif
   discovery_.tick(now, staleMs());
+#if PSU_BUS_PROFILE
+  if (negotiating && !discovery_.negotiating()) busProfile_.note(BusEvent::Quiet,0,0,0,now);
+#endif
   thermalTick(now);
   controlTick(now);
   availabilityTick(now);
@@ -638,7 +674,13 @@ uint8_t PsuController::serviceReceive(uint32_t now) {
   CanFrame frame; uint8_t received = 0;
   while (received < 4 && transport_.receive(frame)) { receive(frame, now); ++received; }
   if (received) {
+#if PSU_BUS_PROFILE
+    const bool negotiating = discovery_.negotiating();
+#endif
     discovery_.tick(now, staleMs());
+#if PSU_BUS_PROFILE
+    if (negotiating && !discovery_.negotiating()) busProfile_.note(BusEvent::Quiet,0,0,0,now);
+#endif
     thermalTick(now);
   }
   return received;

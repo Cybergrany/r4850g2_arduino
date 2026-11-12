@@ -8,6 +8,7 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 subprocess.run(["python3", str(root / "tools/check_avr_formats.py")], check=True)
 sources = [
+    "src/diagnostics/BusProfile.cpp", "src/diagnostics/BusProfileText.cpp", "src/ui/SerialBusProfile.cpp",
     "src/ui/UiAlerts.cpp", "src/ui/UiAlertView.cpp", "src/ui/UiRecovery.cpp", "src/ui/UiRecoveryView.cpp",
     "src/psu/PsuAvailability.cpp", "src/psu/Alerts.cpp", "src/psu/PsuThermal.cpp", "src/psu/PsuAlerts.cpp",
     "src/ui/UiAvailability.cpp",
@@ -22,6 +23,7 @@ with tempfile.TemporaryDirectory(prefix="r4850-tests-") as directory:
         os.environ.get("CXX", "g++"), "-std=c++11", "-Wall", "-Wextra", "-Werror", "-g",
         "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
         "-DPSU_ENABLE_DISPLAY=0", "-DPSU_ENABLE_ENCODER=0",
+        *(["-DPSU_BUS_PROFILE=1"] if os.environ.get("PSU_TEST_BUS_PROFILE") else []),
         "-Itest/support", "-Isrc", *sources, "-o", binary,
     ], cwd=root, check=True)
     environment = os.environ.copy()

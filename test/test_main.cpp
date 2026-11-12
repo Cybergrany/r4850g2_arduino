@@ -10,6 +10,7 @@
 #include "ui/UiView.h"
 #include "ui/UiLayout.h"
 #include "ui/Touch.h"
+#include "diagnostics/BusProfileText.h"
 #include <fstream>
 #include <cstdlib>
 #include <array>
@@ -1769,6 +1770,7 @@ void uiLayouts() {
 #include "test_route_cache.inc"
 #include "test_scoped_profiles.inc"
 #include "test_participation.inc"
+#include "test_bus_profile.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1776,6 +1778,9 @@ int main() {
     try { test(); } catch (const std::exception& e) { ++failures; std::cerr << name << ": " << e.what() << '\n'; }
   };
   try {
+#if PSU_BUS_PROFILE
+    run("busProfiling", busProfiling);
+#endif
     run("participationPersistence", participationPersistence); run("participationAtomicity", participationAtomicity); run("participationProfiles", participationProfiles); run("participationUiViewport", participationUiViewport); run("participationChangedGroup", participationChangedGroup);
     run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
     run("scopedSettings", scopedSettings); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);
