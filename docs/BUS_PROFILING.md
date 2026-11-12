@@ -42,6 +42,36 @@ Nonzero counters, long ISR measurements, or resumed stalls still need diagnosis;
 the patch does not suppress their alerts. Software tests establish bounded work
 and state handling, not physical bus timing, fan response or PSU regulation.
 
+## Readiness restart limit check
+
+The controller now permits two automatic zero/wake/restores after a qualified
+output loses readiness, then latches `readiness restart limit reached` on the
+third loss. This bounds the observed repeating sequence; it does not diagnose or
+fix the electrical reason a PSU is losing readiness. Normal zero-hold status
+changes and the initial bounded readiness qualification are separate paths.
+
+During the controlled bench run, capture `diag control` and `alerts` if the known
+ready/not-ready cycling returns. `readiness-losses` must stop at 3 with the
+default budget of 2; automatic voltage/current/wake restoration for that PSU
+must stop. The existing bounded standby/cutoff fallback and cooling remain in
+force. Healthy units retain their own state unless the shared AC cutoff trips.
+
+1. Acknowledge the incident in the UI (or `alerts ack <id>`). Its ERROR condition
+   and restart count must remain; no retry or setting write is authorized by ACK.
+2. Request `autoresume off`, inspect `diag control` and correct the bench cause.
+   Record `diag bus`, `diag ui` and `diag memory` before retrying.
+3. Open the incident's **Details → Retry ALL…** review. Cancel is initially
+   selected. Cancelling leaves the fault and counters unchanged.
+4. After inspecting the cause, explicitly confirm Retry ALL or use serial
+   `reconcile`. It affects every managed PSU, resets the session counters and
+   reconciles at zero. OFF remains OFF; ON can restore the authorized profile
+   after the normal identity, thermal and availability checks.
+
+Do not use reboot as the routine recovery test: the counts are deliberately
+session state. OFF/ON, address reacquisition and loading the same identities must
+not clear them. Keep the full capture if the budget is exceeded without a fault,
+or the controller still hangs after the receive/timing patch.
+
 ## Choose the build
 
 | Environment | Behaviour |
@@ -269,7 +299,7 @@ neg_isr,tx_info,tx_data,tx_describe,tx_setting,tx_ok,tx_fail,tx_in_neg,
 neg_rx,info_rx,data_rx,broadcast_rx,ack_rx,other_rx,event_drop,eflg,tec,rec
 ```
 
-- `rx`, `rx_drop`, `invalid`: 32-bit counters. `rx` counts library-delivered
+- `rx`, `rx_drop`, `invalid`: 32-bit counters. `rx` counts adapter-drained
   packets before validation. `invalid` counts non-8-byte/standard/RTR frames;
   `rx_drop` counts valid frames lost from the software ring (15 usable slots).
 - Protocol/TX counters: 16-bit modulo counters. Counts alone cannot recover
@@ -278,11 +308,12 @@ neg_rx,info_rx,data_rx,broadcast_rx,ack_rx,other_rx,event_drop,eflg,tec,rec
   was active, not every attempt during actual PSU booting.
 - `hw_overflow`: saturating 16-bit count of observed MCP overflow events, not an
   exact number of lost frames. `event_drop` is saturating diagnostic loss.
-- `service_gap_us`: maximum unsigned interval between calls to receive, including
+- `service_gap_us`: maximum valid short interval between calls to receive, including
   empty calls. `queue_age_ms`: maximum enqueue-to-dequeue age, using 16-bit
   timestamps; it saturates at 65535 after a measured service gap beyond that
   range. These are not oscilloscope timing or true wire utilization. Wrap-aware
-  timing assumes receive is called at least once per `micros()` wrap (~71 min).
+  timing assumes receive is called within half a `micros()` wrap (~35.8 min).
+  Invalid short-clock samples are counted by `diag bus`, not used as a maximum.
 - `eflg`, `tec`, `rec`: instantaneous MCP2515 error registers, decimal. Short
   faults may be missed; RX overflow latches are separately counted and cleared
   by the existing driver. An uninitialized transport reports zero registers;

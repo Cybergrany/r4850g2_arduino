@@ -28,7 +28,13 @@ Result PsuController::configure(const Configuration& c, bool resume) {
   memset(groupChanged_, 0, sizeof(groupChanged_)); memset(groupEpisode_, 0, sizeof(groupEpisode_));
   memset(refreshed_, 0, sizeof(refreshed_)); controlRefresh_ = refreshCurrent_ = false;
   controlActive_ = controlWaiting_ = controlVerified_ = false;
-  for (auto& u : control_) u = {};
+  for (uint8_t i=0; i<PSU_MAX_UNITS; ++i) {
+    auto& u = control_[i]; u = {};
+    if (readinessLosses_[i] > control::outputReadyRecoveries) {
+      u.fault = CommandState::ReadinessRecoveryLimit; u.faultRegister = protocol::OnlineCurrent;
+      u.phase = ControlPhase::Fault; restoreBlocked_ |= 1U << i;
+    }
+  }
   enable_.boot(resume && config_.autoResume && config_.thermalStop == ThermalStop::None);
   if (config_.thermalStop != ThermalStop::None) enable_.request(false, EnableSource::Protection);
   config_.autoResume = enable_.enabled();
@@ -180,6 +186,16 @@ uint16_t PsuController::groupCurrentMaximum(uint8_t group) const {
   return maximum;
 }
 void PsuController::reconcileSessions(const Configuration& next) {
+  // This small snapshot follows stable identities through a load/reorder;
+  // replacing a slot must not transfer a different PSU's retry history.
+  uint8_t previousLosses[PSU_MAX_UNITS]; memcpy(previousLosses, readinessLosses_, sizeof(previousLosses));
+  for (uint8_t i=0; i<PSU_MAX_UNITS; ++i) {
+    readinessLosses_[i] = 0;
+    if (i < next.count && identified(next.units[i].identity))
+      for (uint8_t j=0; j<count(); ++j) if (sameIdentity(next.units[i].identity, config_.units[j].identity)) {
+        readinessLosses_[i] = previousLosses[j]; break;
+      }
+  }
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i)
     if (next.deploymentId != config_.deploymentId || i >= next.count ||
         !sameIdentity(next.units[i].identity, config_.units[i].identity)) {

@@ -15,7 +15,8 @@ void drawAlerts(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t) 
       PSU_SNPRINTF(text,sizeof(text),"%u %s %s",unsigned(a.id),source<c.count() ? "PSU" : "SYS",a.active ? "ACTIVE" : "CLEARED");
       f.text(2+i*3,0,26,text,color);
       f.outline(2+i*3,0,26,3,rank==m.alertSelection());
-      f.wrap(3+i*3,4+i*3,flash(alertCause(a.code)),color);
+      const auto fault = a.source < c.count() && a.active ? c.unitControl(a.source).fault : CommandState::Idle;
+      f.wrap(3+i*3,4+i*3,flash(alertCause(a.code, fault)),color);
     }
     if (!c.alerts().count()) f.text(5,0,26,UI_TEXT("No incidents"),Good);
     return;
@@ -30,9 +31,10 @@ void drawAlerts(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t) 
     PSU_SNPRINTF(text,sizeof(text),"PSU %u / %.8s",unsigned(a.source+1),group>=0 ? c.configuration().groups[group].name : "unassigned");
     f.text(2,0,26,text,Accent);
   } else f.text(2,0,26,UI_TEXT("SYSTEM / ALL GROUPS"),Accent);
-  f.wrap(3,5,flash(alertCause(a.code)),color);
-  f.wrap(5,7,flash(alertAction(a.code)));
-  f.wrap(7,10,flash(alertRecovery(a.code)),Muted);
+  const auto fault = a.source < c.count() && a.active ? c.unitControl(a.source).fault : CommandState::Idle;
+  f.wrap(3,5,flash(alertCause(a.code, fault)),color);
+  f.wrap(5,7,flash(alertAction(a.code, fault)));
+  f.wrap(7,10,flash(alertRecovery(a.code, fault)),Muted);
   if (a.source==AlertManager::Thermal) {
     const auto t=c.thermalStatus(); char temperature[8];
     formatValue(temperature,sizeof(temperature),t.maximum,"C",0);

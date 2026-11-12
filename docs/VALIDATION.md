@@ -4,6 +4,63 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Bounded output-readiness recovery (2026-11-12)
+
+`PSU_OUTPUT_READY_RECOVERIES=2` permits two automatic zero/wake/profile restarts
+after a qualified output loses readiness. The next loss latches the existing
+bounded fault-stop path. Brief ready periods, OFF/ON, CAN/AC/address recovery and
+configuration reloads cannot renew the budget. Explicit serial `reconcile` or
+the guarded **Retry ALL** UI review resets the counters; acknowledging the alert
+does not. The counters follow stable identities within the controller session.
+EEPROM layout, fan policy and startup electrical sequencing are unchanged.
+
+- Ordinary host suite: **3,367,319 checks**; profiled suite: **3,494,803**.
+  Regression cases repeatedly qualify for more than two seconds, lose readiness,
+  and verify that automatic restore stops at the configured bound. They cover
+  healthy peers, CAN/AC loss, OFF/ON, configuration reload/reordering, internal AC
+  reconciliation, timer rollover, failed standby fallback and fitted AC cutoff.
+- The real controller fault drives serial and UI tests: acknowledgement preserves
+  ERROR/fault/count, Retry ALL opens with Cancel selected, a newer OFF invalidates
+  the review, and a fresh retry preserves OFF and restores zero hold. A focused
+  build with `PSU_OUTPUT_READY_RECOVERIES=0` passes **6,296 checks**.
+- Touch/simulator: **1,350 checks**. Production renderer: **82 exported scenes**
+  plus transfer/pixel regressions at all five SPI clocks. Updated previews include
+  the restart-limit alert, PSU details and retry review. Route-budget and AVR
+  format checks pass; real-wheel/RX adapter validation is recorded below.
+- All **22 Mega profiles** build; physical memory limits, all three UI-debug
+  isolation checks and observer isolation pass. Reproduce with
+  `PLATFORMIO_CORE_DIR=../.platformio pio run -e <environment>` for every
+  `[env:...]` in `platformio.ini`, then `python3 tools/check_memory.py`.
+
+| Environment | Flash bytes | Static RAM | Static free |
+| --- | ---: | ---: | ---: |
+| `mega2560_touch_wheel` | 213036 | 7404 | 788 |
+| `mega2560_wheel_alerts` | 202170 | 7174 | 1018 |
+| `mega2560_wheel_profile` | 209718 | 7326 | 866 |
+| `mega2560_serial_profile` | 129288 | 5456 | 2736 |
+| `mega2560_can_observer` | 16736 | 1891 | 6301 |
+
+The limiter adds **nine static bytes**, one counter per slot; together with the
+receive/timing patch the controller builds add **19 bytes** over the baseline.
+Its identity remapping uses a nine-byte local snapshot, not another configuration
+copy. The linked remapping chain is 47 bytes and explicit reconciliation is 59
+bytes; neither becomes the largest reachable path.
+
+The fullest touch+wheel image retains the previously source-reviewed 668-byte
+runtime direct-call peak through profile loading. As described in the detailed
+audit below, production `loadCandidate`/protection loading pass existing scratch:
+the raw graph's nested 256-byte candidate is unreachable on those paths. Allowing
+about 12 bytes for outgoing arguments/virtual EEPROM calls and 54 bytes for the
+registered RX interrupt leaves an estimated **54 bytes** in that build. The wheel
+profiler's unpruned 765-byte main path leaves 47 bytes after that interrupt,
+before indirect-call/argument uncertainty.
+These are narrow estimates, not measured worst-case stack guarantees. Repeat
+`diag memory` through boot, profile loads, alert/retry reviews and normal traffic;
+keep the smallest watermark with the capture.
+
+The [bench comparison](BUS_PROFILING.md#readiness-restart-limit-check) verifies the
+operator-visible bound without assuming software ACKs prove physical PSU output.
+
 ## Bounded receive and clock diagnostics (2026-11-12)
 
 The receive adapter replaces the library's unbounded ISR loop with a two-buffer

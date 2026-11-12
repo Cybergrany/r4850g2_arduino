@@ -26,6 +26,11 @@
 #ifndef PSU_ENABLE_IN_PULLUP
 #define PSU_ENABLE_IN_PULLUP 1
 #endif
+// Automatic zero/wake/profile retries after a previously qualified output loses
+// readiness. The next loss latches a fault; only explicit retry resets the count.
+#ifndef PSU_OUTPUT_READY_RECOVERIES
+#define PSU_OUTPUT_READY_RECOVERIES 2
+#endif
 // Optional external fan driver. -1 disables physical output; policy/diagnostics
 // remain available. 25 kHz uses a dedicated Timer4 (D6/7/8) or Timer5 (D44/45/46).
 #ifndef PSU_FAN_PWM_PIN
@@ -44,6 +49,9 @@ constexpr uint32_t startupReadyMs = 15000, availabilitySettleMs = 3000;
 // candidate must span this duration; rereading one frame never advances it.
 constexpr uint16_t outputReadyStableMs = 2000, outputReadyMaxGapMs = 1000;
 constexpr uint8_t outputReadyFrames = 3;
+static_assert(PSU_OUTPUT_READY_RECOVERIES >= 0 && PSU_OUTPUT_READY_RECOVERIES < 255,
+    "Readiness recovery budget must fit one byte plus the latching loss");
+constexpr uint8_t outputReadyRecoveries = PSU_OUTPUT_READY_RECOVERIES;
 static_assert(startupReadyMs <= UINT16_MAX && outputReadyStableMs < startupReadyMs &&
     outputReadyFrames >= 2 && outputReadyMaxGapMs > 0, "Invalid output readiness window");
 constexpr uint32_t unstableMs = 30000, volatileRefreshMs = 10000;

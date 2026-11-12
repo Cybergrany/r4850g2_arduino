@@ -668,6 +668,8 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.println(u.fault != CommandState::Idle ? F("fault") :
         u.outputDemand == OutputDemand::Zero ? F("zero") : u.outputDemand == OutputDemand::Starting ? F("waiting-for-output-ready") :
         u.outputDemand == OutputDemand::Active ? F("active") : u.outputDemand == OutputDemand::Stopping ? F("waiting-for-zero-ACK") : F("unknown"));
+    io_.print(F("  readiness-losses=")); io_.print(controller_.readinessLosses(i));
+    io_.print(F(" auto-restart-budget=")); io_.println(control::outputReadyRecoveries);
   } else if (field == 7) {
     const auto ready = controller_.readinessStatus(i, now);
     if (ready.pending) {

@@ -1,7 +1,13 @@
 #pragma once
 #include "UiText.h"
 namespace psu {
-inline const __FlashStringHelper* alertCause(AlertCode c) {
+inline bool readinessRecoveryAlert(AlertCode c, CommandState fault) {
+  return fault == CommandState::ReadinessRecoveryLimit &&
+      (c == AlertCode::ActiveLost || c == AlertCode::Control || c == AlertCode::StopUnconfirmed);
+}
+inline const __FlashStringHelper* alertCause(AlertCode c, CommandState fault = CommandState::Idle) {
+  if (readinessRecoveryAlert(c, fault))
+    return F("Output readiness restart limit reached");
   switch (c) {
     case AlertCode::None: return F("No active condition");
     case AlertCode::Missing: return F("Members unavailable");
@@ -30,7 +36,8 @@ inline const __FlashStringHelper* alertCause(AlertCode c) {
   }
   return F("Unknown condition");
 }
-inline const __FlashStringHelper* alertAction(AlertCode c) {
+inline const __FlashStringHelper* alertAction(AlertCode c, CommandState fault = CommandState::Idle) {
+  if (readinessRecoveryAlert(c, fault)) return F("Restore blocked. Bounded stop/fault fallback.");
   switch (c) {
     case AlertCode::TemperatureWarning: case AlertCode::TemperatureError:
       return F("All active limits reduced; maximum cooling.");
@@ -46,7 +53,8 @@ inline const __FlashStringHelper* alertAction(AlertCode c) {
     default: return F("Notification only; existing control gates apply.");
   }
 }
-inline const __FlashStringHelper* alertRecovery(AlertCode c) {
+inline const __FlashStringHelper* alertRecovery(AlertCode c, CommandState fault = CommandState::Idle) {
+  if (readinessRecoveryAlert(c, fault)) return F("Inspect PSU, then Details / Retry ALL. Acknowledge only dismisses.");
   switch (c) {
     case AlertCode::TemperatureWarning: case AlertCode::TemperatureError:
       return F("Inspect cooling. All monitored temperatures must cool.");

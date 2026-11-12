@@ -3,7 +3,7 @@
 #include "../protocol/HuaweiProtocol.h"
 namespace psu {
 enum class AcState : uint8_t { Unknown, Absent, Present };
-enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed, ObservationTimeout, ReadinessTimeout };
+enum class CommandState : uint8_t { Idle, Queued, VerifyingIdentity, Waiting, Success, Incomplete, Rejected, Timeout, IdentityTimeout, TransportError, Changed, ObservationTimeout, ReadinessTimeout, ReadinessRecoveryLimit };
 struct CommandStatus { CommandState state; uint8_t reg; uint32_t rawValue; };
 struct Telemetry {
   float values[protocol::MetricCount];

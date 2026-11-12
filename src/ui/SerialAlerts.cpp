@@ -12,8 +12,9 @@ void SerialConsole::printAlert(const AlertState& a, bool action) {
   } else io_.print(F("SYSTEM"));
   io_.print(a.active ? F(" active ") : F(" cleared "));
   io_.print(a.acknowledged ? F("acknowledged: ") : F("unacknowledged: "));
-  io_.print(alertCause(a.code));
-  if (action && a.active) { io_.print(F("; ")); io_.print(alertAction(a.code)); }
+  const auto fault = a.source < controller_.count() && a.active ? controller_.unitControl(a.source).fault : CommandState::Idle;
+  io_.print(alertCause(a.code, fault));
+  if (action && a.active) { io_.print(F("; ")); io_.print(alertAction(a.code, fault)); }
   io_.println();
 }
 void SerialConsole::cancelAlertBroadcast() {

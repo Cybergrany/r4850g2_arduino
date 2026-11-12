@@ -97,7 +97,9 @@ class PsuController {
   // positive-current start while its output readiness is still being qualified.
   bool psuActive(uint32_t now) const;
   // Explicit retry after an operator has reviewed a latched control failure.
-  void reconcile();
+  // Internal AC/probe reconciliation must not reset the session retry budget.
+  void reconcile(bool explicitRetry = true);
+  uint8_t readinessLosses(uint8_t slot) const { return slot < count() ? readinessLosses_[slot] : 0; }
   void configureStartup(bool installed, bool configurationReady, uint32_t now);
   const StartupStatus& startupStatus() const { return startup_; }
   bool chargeAllowed() const { return startup_.permit == PermitState::Allowed; }
@@ -297,6 +299,7 @@ class PsuController {
   float sessionAh_[PSU_MAX_UNITS] = {};
   UnitMask sessionSeen_ = 0;
   uint32_t observedEpoch_[PSU_MAX_UNITS] = {};
+  uint8_t readinessLosses_[PSU_MAX_UNITS] = {}; // Lifetime: identity/session, not route or UnitControl reset.
   UnitMask voltageSynced_ = 0, running_ = 0, restorePending_ = 0, restoreBlocked_ = 0;
   UnitMask currentSynced_ = 0;
   uint8_t scanAddress_ = 1, probeIndex_ = 0;

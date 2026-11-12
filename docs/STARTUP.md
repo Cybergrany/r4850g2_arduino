@@ -69,6 +69,13 @@ do not restart indefinitely. [CONTROL.md](CONTROL.md) describes the idle-status
 guard and diagnostics. AC changes, missing identities, stale measurements,
 unknown status bits and unexpected held current retain their checks.
 
+After an output has qualified, readiness loss also has a session-wide bound:
+two automatic zero/wake/restores per PSU by default; the third loss latches an
+ERROR requiring explicit retry. A brief ready interval, enable switch change,
+address reassignment or internal AC-release reconciliation does not renew that
+budget. Use the alert's **Details → Retry ALL…** review or serial `reconcile`
+after inspecting the cause. Acknowledgement has no effect on the fault or budget.
+
 The readiness allowance does not relax the stop deadline. Observed nonzero
 current still uses max(5 seconds, three poll periods). A failed INFO query sent
 no setting and is not itself proof that a stop failed; freshness expiry can

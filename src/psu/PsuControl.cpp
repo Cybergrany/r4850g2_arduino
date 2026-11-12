@@ -2,6 +2,7 @@
 #include "FanPolicy.h"
 #include "../config/Deployment.h"
 #include <math.h>
+#include <string.h>
 namespace psu {
 namespace {
 #if PSU_BUS_PROFILE
@@ -55,7 +56,7 @@ void PsuController::cancelJob() {
   }
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
 }
-void PsuController::reconcile() {
+void PsuController::reconcile(bool explicitRetry) {
 #if PSU_BUS_PROFILE
   busProfile_.note(BusEvent::Reconcile,0,0,uint8_t(enable_.source()),now_);
 #endif
@@ -70,11 +71,17 @@ void PsuController::reconcile() {
   cancelJob(); controlActive_ = controlWaiting_ = controlVerified_ = false;
   voltageSynced_ = currentSynced_ = restoreBlocked_ = 0;
   restorePending_ = running_;
+  if (explicitRetry) memset(readinessLosses_, 0, sizeof(readinessLosses_));
   for (uint8_t i = 0; i < count(); ++i) {
     auto& u = control_[i];
     clearFanOverride(i);
     UnitControl next;
     preserveCooling(next, u, i == uncertainFan);
+    if (readinessLosses_[i] > control::outputReadyRecoveries) {
+      next.fault = CommandState::ReadinessRecoveryLimit; next.faultRegister = protocol::OnlineCurrent;
+      next.phase = powerAvailable() ? ControlPhase::EmergencyStandby : ControlPhase::Fault;
+      restoreBlocked_ |= 1U << i;
+    }
     u = next;
   }
 }
@@ -518,7 +525,8 @@ void PsuController::controlTick(uint32_t now) {
 #if PSU_BUS_PROFILE
       busProfile_.note(BusEvent::Route,i+1,epoch,(uint16_t(routingIssue(i,now))<<8)|(d ? d->address : 0),now);
 #endif
-      const CommandState latched = startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
+      const CommandState latched = readinessLosses_[i] > control::outputReadyRecoveries ? CommandState::ReadinessRecoveryLimit :
+          startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
       const uint8_t faultReg = u.faultRegister;
       u = {}; acknowledgedMask_ &= UnitMask(~(1U << i)); voltageSynced_ &= UnitMask(~(1U << i)); currentSynced_ &= UnitMask(~(1U << i));
       if (latched != CommandState::Idle) {
@@ -561,6 +569,13 @@ void PsuController::controlTick(uint32_t now) {
     // alone may drop at a confirmed zero limit without restarting reconciliation.
     if ((u.phase == ControlPhase::Online || u.phase == ControlPhase::Held) &&
         d->telemetry.broadcastSeen && !readinessAcceptable(i, now)) {
+      // Two-second qualification is not sustained recovery. Repeated qualified
+      // ready/not-ready cycles must not renew zero/wake/restore indefinitely.
+      if (readinessLosses_[i] <= control::outputReadyRecoveries) ++readinessLosses_[i];
+      if (readinessLosses_[i] > control::outputReadyRecoveries) {
+        latchControlFault(i, CommandState::ReadinessRecoveryLimit, protocol::OnlineCurrent, now);
+        updateFan(i, now); continue;
+      }
       UnitControl next;
       preserveCooling(next, u, controlActive_ && controlWaiting_ && controlSlot_ == i && controlRegister_ == protocol::FanMode);
       u = next; controlPhase(i, ControlPhase::Zero, now);

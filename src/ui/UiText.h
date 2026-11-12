@@ -23,6 +23,7 @@ inline const __FlashStringHelper* stateName(CommandState s) {
     case CommandState::TransportError: return F("CAN transport failed"); case CommandState::Changed: return F("identity/address/readiness changed");
     case CommandState::ObservationTimeout: return F("ACK received; fresh stopped current/readiness not confirmed");
     case CommandState::ReadinessTimeout: return F("output readiness timed out; explicit reconcile required");
+    case CommandState::ReadinessRecoveryLimit: return F("readiness restart limit reached; inspect PSU then explicit reconcile");
   }
   return F("unknown");
 }

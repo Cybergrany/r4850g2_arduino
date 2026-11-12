@@ -15,6 +15,7 @@ void pendingReadiness(const Rig& r, uint32_t since, uint8_t slot = 0) {
   CHECK(r.c.unitControl(slot).outputSince == since);
   CHECK(r.c.controlStatus(r.now).activity == Activity::Starting);
   CHECK(!(r.c.excluded() & (1U<<slot)));
+  CHECK(r.c.readinessLosses(slot)==0);
 }
 void readinessQualification() {
   Rig r(zeroHoldConfiguration()); startOutput(r); const auto since = r.now;

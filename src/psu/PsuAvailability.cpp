@@ -18,7 +18,7 @@ void PsuController::startupTick(uint32_t now) {
     busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),0,now);
 #endif
     // AC return is a new hardware state even when DC keeps CAN alive.
-    reconcile();
+    reconcile(false);
   }
 }
 Result PsuController::hardStop() {
@@ -201,7 +201,7 @@ void PsuController::applyAvailability(const AvailabilityPlan& p) {
     setAutoResume(false);
     startup_.configurationReady = true; startup_.commissioning = true;
     startup_.permit = PermitState::Inhibited; startup_.since = now_;
-    reconcile(); ++revision_; ++availabilityRevision_;
+    reconcile(false); ++revision_; ++availabilityRevision_;
   }
 }
 Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManager& memory, uint32_t now) {

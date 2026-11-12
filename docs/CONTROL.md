@@ -162,6 +162,25 @@ standby fallback/cutoff. This fault survives CAN loss, AC transitions and addres
 recovery in the same controller session; explicit `reconcile` is required.
 If stop proof was lost with the link, diagnostics show it as unconfirmed; a
 verified return attempts the bounded fault stop without restoring current.
+After qualification, a later readiness loss may automatically repeat zero/wake
+and restore the authorized profile **twice per PSU per controller session**.
+The third loss latches `readiness restart limit reached` and uses the same bounded
+fault-stop/cutoff path. `PSU_OUTPUT_READY_RECOVERIES` in `ControlConfig.h` sets the
+automatic-restart budget (default 2; 0 disables automatic readiness restarts).
+The count is not reset by a brief two-second ready qualification, OFF/ON edges,
+CAN/AC/address recovery, internal startup reconciliation, or loading/reordering
+the same configured identities. It is session state, not another EEPROM field;
+a controller reboot or a new binding starts a new history.
+
+`diag control` / `diag psu N` report `readiness-losses` and `auto-restart-budget`.
+The ERROR alert names the restart limit; **Acknowledge only dismisses**. Inspect
+the affected PSU, then use **Details → Retry ALL… → Confirm** (Cancel starts
+selected), **Controller → Retry ALL PSUs**, or serial **`reconcile`**. Retry resets
+the budgets for all managed PSUs and starts reconciliation at zero. It preserves
+the current enable preference: OFF stays at zero; ON may restore authorized
+limits after the normal checks. Thermal and identity guards still apply. Existing
+fault behavior may latch the common AC cutoff when stopping is unconfirmed.
+
 An accepted apply report still means command acceptance, not measured delivery;
 check `diag control` and measured voltage/current before increasing a load.
 

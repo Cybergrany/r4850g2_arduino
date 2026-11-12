@@ -71,6 +71,7 @@ FlashText shortCommand(CommandState state) {
     case CommandState::Changed: return UI_TEXT("DEVICE CHANGED");
     case CommandState::Incomplete: return UI_TEXT("INCOMPLETE APPLY");
     case CommandState::ReadinessTimeout: return UI_TEXT("OUTPUT NOT READY");
+    case CommandState::ReadinessRecoveryLimit: return UI_TEXT("READY RESTART LIMIT");
     default: return UI_TEXT("APPLYING");
   }
 }
@@ -191,7 +192,10 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   const auto& control = c.unitControl(slot);
   if (control.fault != CommandState::Idle) {
     f.wrap(5, 7, {reinterpret_cast<const char*>(stateName(control.fault))}, Error);
-    PSU_SNPRINTF(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister)); f.text(8, 0, 26, b, Error);
+    if (control.fault == CommandState::ReadinessRecoveryLimit)
+      PSU_SNPRINTF(b, sizeof(b), "Losses %u; budget %u", unsigned(c.readinessLosses(slot)), unsigned(control::outputReadyRecoveries));
+    else PSU_SNPRINTF(b, sizeof(b), "Control reg 0x01%02X", unsigned(control.faultRegister));
+    f.text(8, 0, 26, b, Error);
   } else if (issue != Issue::None) f.wrap(5, 8, {reinterpret_cast<const char*>(issueName(issue))}, Warning);
   else if (commandFailed(command)) f.wrap(5, 8, {reinterpret_cast<const char*>(stateName(command))}, Error);
   else if (c.readinessStatus(slot, now).pending) {
@@ -223,7 +227,7 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   if (d) {
     if (d->telemetry.alarmSeen) { PSU_SNPRINTF(b, sizeof(b), "Raw alarm 0x%08lX", (unsigned long)d->telemetry.alarmBits); f.text(11, 0, 26, b, Muted); }
   } else line(f, 11, UI_TEXT("No verified live address"), Warning);
-  line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
+  if (!m.recovering()) line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
 void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const auto scope = m.scope(); const UnitMask mask = m.settingsMembers();

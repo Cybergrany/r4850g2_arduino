@@ -27,6 +27,7 @@ void zeroHoldReadiness() {
     CHECK(r.c.unitControl(0).phase == ControlPhase::Held);
     CHECK(r.c.unitControl(0).since == heldSince && r.c.unitControl(0).coolSince == coolSince);
     CHECK(r.c.controlStatus(r.now).activity == Activity::Holding);
+    CHECK(r.c.readinessLosses(0)==0);
   }
   CHECK(r.c.unitControl(0).fanAcknowledged == FanMode::Auto && r.c.externalFanStatus(r.now).duty == 0);
   const auto writes = r.can.writes(); unsigned autoWrites = 0;

@@ -495,6 +495,15 @@ EEPROM schema are added: save snapshots the existing autoResume preference, and
 fan thresholds/pins live in `ControlConfig.h`. See [CONTROL.md](CONTROL.md) for
 ordering, exact thresholds, failure handling and hardware limits.
 
+Readiness-loss counters occupy one byte per configured-capacity slot, separately
+from `UnitControl` so ordinary route/phase resets cannot renew them. Configuration
+changes map those counters by stable identity using a nine-byte local snapshot;
+profiles or temporary CAN addresses do not own them. Internal startup/probe
+reconciliation calls `reconcile(false)` and preserves an exhausted budget and its
+fault. Operator `reconcile()` / guarded UI Retry ALL clears the session counters.
+The third qualified-output loss exceeds the default two-restart budget and uses
+the existing fault-stop path, alert source and recovery controls.
+
 Fan hysteresis and accepted mode survive software reconciliation and enable
 events; identity/connection changes invalidate them. Cooling is evaluated in
 every control phase. `externalFanStatus(now)` folds per-unit policy and the
