@@ -1,5 +1,6 @@
 #include "../util/FlashString.h"
 #include "SerialConsole.h"
+#include "../diagnostics/RuntimeTiming.h"
 #include "../util/StackMonitor.h"
 #if PSU_ENABLE_SERIAL
 #include "UiText.h"
@@ -901,6 +902,10 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" hw-overflow-events=")); io_.println(controller_.hardwareOverflows());
       io_.print(F("trace-drops=")); io_.print(traceDrops_); io_.print(F(" output-overruns=")); io_.print(io_.overruns());
       io_.print(F(" queued-read-failures=")); io_.println(controller_.readFailures());
+      const auto timing = psu::timing::diagnostics();
+      io_.print(F("rx-isr-max-us=")); io_.print(controller_.receiveInterruptMaxUs());
+      io_.print(F(" clock-invalid-samples=")); io_.print(timing.invalidSamples);
+      io_.print(F(" max-backstep-us=")); io_.println(timing.maxBackstepUs);
     } else if (row_ == 3) {
       const auto bus = controller_.busStatus(now);
       io_.print(F("configured slots=")); io_.print(bus.configured); io_.print(F(" responding addresses=")); io_.print(bus.responding);

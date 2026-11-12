@@ -18,10 +18,10 @@ with tempfile.TemporaryDirectory(prefix='psu-bus-') as folder:
     subprocess.run([binary],env=environment,check=True)
     for observer in (0,1):
         subprocess.run(cc+[f'-DPSU_CAN_OBSERVER={observer}','-DPSU_TEST_FAN_GPIO=1',
-            'src/can/Mcp2515Transport.cpp','src/protocol/HuaweiProtocol.cpp','test/test_bus_receive.cpp','-o',binary],cwd=root,check=True)
+            'src/diagnostics/RuntimeTiming.cpp','src/can/Mcp2515Transport.cpp','src/protocol/HuaweiProtocol.cpp','test/test_bus_receive.cpp','-o',binary],cwd=root,check=True)
         subprocess.run([binary],env=environment,check=True)
     subprocess.run(cc+['-DPSU_CAN_OBSERVER=1','-DPSU_TEST_FAN_GPIO=1','-DPSU_ACTIVE_PIN=30','-DPSU_WARNING_PIN=28','-DPSU_ERROR_PIN=29',
         'src/main.cpp','src/observer/BusObserver.cpp','src/can/Mcp2515Transport.cpp','src/io/ChargeAllowOutput.cpp',
-        'src/diagnostics/BusProfile.cpp','src/diagnostics/BusProfileText.cpp','src/protocol/HuaweiProtocol.cpp',
+        'src/diagnostics/RuntimeTiming.cpp','src/diagnostics/BusProfile.cpp','src/diagnostics/BusProfileText.cpp','src/protocol/HuaweiProtocol.cpp',
         'test/test_observer_main.cpp','-o',binary],cwd=root,check=True)
     subprocess.run([binary],env=environment,check=True)

@@ -35,7 +35,11 @@ struct FakeCan : CanTransport {
   bool asynchronous = false;
   bool receiveLoss = false;
   uint8_t losses = 0;
+  bool reportBacklog = false;
+  unsigned replenish = 0;
+  CanFrame replacement = {};
   uint8_t droppedFrames() const override { return losses; }
+  uint8_t receivePending() const override { return reportBacklog ? incoming.size() : 0; }
   bool takeReceiveLoss() override { const bool event=receiveLoss; receiveLoss=false; return event; }
   TransmitState txState = TransmitState::Sent;
   std::vector<CanFrame> sent;
@@ -49,7 +53,9 @@ struct FakeCan : CanTransport {
   TransmitState transmitState() const override { return txState; }
   bool receive(CanFrame& frame) override {
     if (incoming.empty()) return false;
-    frame = incoming.front(); incoming.pop_front(); return true;
+    frame = incoming.front(); incoming.pop_front();
+    if (replenish) { --replenish; incoming.push_back(replacement); }
+    return true;
   }
   std::vector<CanFrame> writes() const {
     std::vector<CanFrame> result;
@@ -985,6 +991,40 @@ void schedulerAndBounds() {
   Psu unit = {}; unit.occupied = true; unit.lastSeen = 0xfffffff0U;
   CHECK(unit.fresh(20, 100) && !unit.fresh(200, 100));
 }
+void receiveScheduling() {
+  Rig r(installation(1)); r.c.setAutoResume(false); r.step(5000);
+  r.can.incoming.clear(); r.can.reportBacklog = true;
+  r.can.replacement = data(1,0x7f,30*1024);
+  // A sustained burst keeps the 15-slot ring occupied while main processes it.
+  // Bounded drains yield with five frames left; don't solicit another burst.
+  for(unsigned n=0;n<15;++n) r.can.incoming.push_back(r.can.replacement);
+  r.can.replenish = 30; r.c.scan(); const auto before=r.can.sent.size();
+  r.c.tick(++r.now);
+  CHECK(r.can.replenish==0 && r.can.incoming.size()==5);
+  CHECK(r.can.sent.size()==before);
+  CHECK(r.c.serviceReceive(++r.now)==4 && r.can.incoming.size()==1);
+  CHECK(r.c.serviceReceive(++r.now)==1 && r.can.incoming.empty());
+  r.c.tick(r.now+=100); CHECK(r.can.sent.size()>before);
+
+  // INFO and setting ACKs behind telemetry survive the bounded phase drains.
+  // The production identity/ACK checks, not cached identity, authorize the write.
+  Rig identityBurst(installation(1)); identityBurst.answerIdentityQueries=false;
+  CHECK(identityBurst.c.queue(identityBurst.c.preview(Operation::Voltage,-1,identityBurst.now),false,identityBurst.now)==Result::Ok);
+  identityBurst.step(250,false,false);
+  CHECK(identityBurst.c.report().units[0].state==CommandState::VerifyingIdentity);
+  for(unsigned n=0;n<13;++n) identityBurst.can.incoming.push_back(data(1,0x7f,30*1024));
+  identityBurst.can.incoming.push_back(info(1,identity(1)));
+  for(unsigned n=0;n<4;++n) CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)>0);
+  identityBurst.c.tick(identityBurst.now+=250);
+  CHECK(identityBurst.c.report().units[0].state==CommandState::Waiting);
+  const auto writes=identityBurst.can.writes(); CHECK(writes.size()==1);
+  for(unsigned n=0;n<13;++n) identityBurst.can.incoming.push_back(data(1,0x7f,30*1024));
+  identityBurst.can.incoming.push_back(ack(writes.back()));
+  for(unsigned n=0;n<4;++n) CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)>0);
+  CHECK(identityBurst.c.report().units[0].state==CommandState::Success);
+  // No phase-service path itself sends settings or changes command deadlines.
+  CHECK(identityBurst.can.writes().size()==1);
+}
 void cooperativeCan() {
   // A transport still arbitrating does not prevent telemetry processing or
   // permit a second send. A later hardware failure belongs to its original job.
@@ -1795,7 +1835,7 @@ int main() {
     run("readinessQualification", readinessQualification); run("readinessFrameOrdering", readinessFrameOrdering); run("readinessAckOrdering", readinessAckOrdering); run("readinessDeadlineAndLatch", readinessDeadlineAndLatch); run("readinessTelemetryAndBoundary", readinessTelemetryAndBoundary); run("readinessSafetyEdges", readinessSafetyEdges); run("readinessMultiUnitAndWrap", readinessMultiUnitAndWrap);
     run("availabilityProtocol", availabilityProtocol); run("startupPowerPolicy", startupPowerPolicy); run("acceptedAbsences", acceptedAbsences); run("availabilityDecisionsAndStorage", availabilityDecisionsAndStorage); run("availabilityRefreshAndSoak", availabilityRefreshAndSoak); run("availabilityInterfaces", availabilityInterfaces);
     run("controlLifecycle", controlLifecycle); run("zeroHoldEdges", zeroHoldEdges); run("fanControl", fanControl); run("manualFanControl", manualFanControl); run("externalFanControl", externalFanControl); run("controlPresentation", controlPresentation); run("boundedCanTransmit", boundedCanTransmit); run("cooperativeCan", cooperativeCan); run("protocolAndConfiguration", protocolAndConfiguration); run("discoveryAndTelemetry", discoveryAndTelemetry); run("orderedApplyAndDraftIsolation", orderedApplyAndDraftIsolation);
-    run("missingMembersAndConfirmations", missingMembersAndConfirmations); run("acknowledgementsAndFailures", acknowledgementsAndFailures); run("restorationAndDeployment", restorationAndDeployment); run("schedulerAndBounds", schedulerAndBounds);
+    run("missingMembersAndConfirmations", missingMembersAndConfirmations); run("acknowledgementsAndFailures", acknowledgementsAndFailures); run("restorationAndDeployment", restorationAndDeployment); run("schedulerAndBounds", schedulerAndBounds); run("receiveScheduling", receiveScheduling);
     run("eepromAndMigration", eepromAndMigration); run("serialFanControl", serialFanControl); run("serialWorkflow", serialWorkflow); run("serialLifecycleAndParity", serialLifecycleAndParity); run("cooperativeSerialAndStorage", cooperativeSerialAndStorage); run("boundedFrameChanges", boundedFrameChanges);
     run("uiWorkflows", uiWorkflows); run("uiPartialAndFailures", uiPartialAndFailures); run("presentationAndSessions", presentationAndSessions); run("uiLayouts", uiLayouts);
     if (failures) { std::cerr << failures << " suites failed\n"; return 1; }

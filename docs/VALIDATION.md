@@ -4,6 +4,57 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Bounded receive and clock diagnostics (2026-11-12)
+
+The receive adapter replaces the library's unbounded ISR loop with a two-buffer
+snapshot and burst transfers. Controller/application phase boundaries now service
+RX, and routine reads defer to queued frames and the existing negotiation quiet
+interval. No fan, readiness-recovery, allocation or persistence policy changes
+are included in this change. See [the capture comparison](BUS_PROFILING.md#receivetiming-patch-comparison).
+
+- Ordinary host suite: **3,358,431 checks**; profiled host suite: **3,485,315**.
+  Added bounded-backlog scheduling and fresh INFO/ACK-behind-telemetry cases.
+  Negotiation regression now requires zero application TX until quiet ends.
+- Production RX adapter tests cover both buffers refilling immediately after
+  CS release, a fixed maximum of three transactions / 31 SPI bytes per ISR,
+  full-ring loss, malformed DLC, nonextended/RTR frames, negotiation counts,
+  error-flag preservation, timestamp wrap/backsteps and observer transmit isolation.
+- Production renderer passes at 500 kHz, 1/2/4/8 MHz, including a backwards clock
+  sample after a completed transfer, final-pixel correctness and valid rollover.
+  Invalid measurements remain visible through dedicated diagnostics; they cannot
+  poison duration maxima or prolong a cooperative rendering slice.
+- Touch/application simulation: **1,310 checks**. Route-search budget passes for
+  two/nine configured units and partial/full presence. No extra scene buffer or
+  configuration copy was introduced.
+- All **22 Mega profiles** build and fit physical flash/RAM; the advisory 1 KiB
+  warnings remain. Observer/three UI-debug isolation checks, real-wheel **19,652
+  checks**, CSV parser regressions and AVR-format checks pass.
+
+Representative affected builds:
+
+| Environment | Flash bytes | Static RAM | Static free |
+| --- | ---: | ---: | ---: |
+| `mega2560_wheel_alerts` | 200892 | 7165 | 1027 |
+| `mega2560_wheel_profile` | 208490 | 7317 | 875 |
+| `mega2560_serial_profile` | 128466 | 5447 | 2745 |
+| `mega2560_can_observer` | 16736 | 1891 | 6301 |
+
+These add **10 static bytes** over their previous images. The linked wheel
+profiler's unpruned direct main-loop chain is 765 bytes. The actual registered
+RX handler is a 32-byte direct chain; including the indirect external-interrupt
+wrapper/call and hardware return gives approximately 54 bytes of overlap. That
+leaves only 56 bytes in the unpruned profiler estimate before other indirect
+callee/argument uncertainty; the ordinary wheel build has 152 bytes more room.
+`analyze_avr_stack.py` now explicitly includes our adapter's ISR rather than
+mistaking the library's retained but unregistered virtual ISR path for its owner.
+Continue using `diag memory` under the actual loaded workload; static graph
+analysis and the previous observed watermark do not prove worst-case stack safety.
+
+The unbounded old ISR is a concrete defect and a plausible source of missed
+Timer0 overflows. The logs alone do not prove it caused every backwards clock
+sample or UI pause. Hardware must confirm ISR duration, software/hardware loss,
+ACK reception, display responsiveness and actual clock stability after this fix.
+
 ## Bounded bus profiling and isolated observer (2026-11-12)
 
 The [capture guide](BUS_PROFILING.md) covers production profiling, the separate

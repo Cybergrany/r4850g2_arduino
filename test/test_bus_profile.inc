@@ -31,8 +31,8 @@ void busProfiling() {
   const auto rx=r.c.busProfile().dataRx;
   t.input("hello\n"); CHECK(r.c.busProfile().dataRx==rx && r.c.busProfile().streaming());
 
-  // Observe the existing read-scheduler negotiation gap; instrumentation must
-  // neither hide traffic nor change policy. A later policy patch may close it.
+  // All application requests respect the existing negotiation quiet interval;
+  // counting continues so the capture can verify silence rather than hide TX.
   r.c.scan();
   CanFrame negotiation={}; negotiation.id=0x1001107e; negotiation.extended=true; negotiation.length=8;
   negotiation.data[0]=0x30; negotiation.data[1]=1;
@@ -43,10 +43,12 @@ void busProfiling() {
   for(unsigned n=0;n<10;++n) { r.step(100); t.drain(50); }
   CHECK(r.c.discovery().negotiating());
   CHECK(r.can.writes().size()==writesBefore);
-  CHECK(r.can.sent.size()>txBefore && r.c.busProfile().infoTx>infoBefore);
-  CHECK(uint16_t(r.c.busProfile().duringNegotiation-negBefore)==r.can.sent.size()-txBefore);
+  CHECK(r.can.sent.size()==txBefore && r.c.busProfile().infoTx==infoBefore);
+  CHECK(r.c.busProfile().duringNegotiation==negBefore);
   CHECK(r.c.busProfile().negotiationRx==1);
   CHECK(t.io.output.find("negotiation addr=1")!=std::string::npos);
+  r.step(control::availabilitySettleMs+1000);
+  CHECK(!r.c.discovery().negotiating() && r.c.busProfile().infoTx>infoBefore);
   // Event storms and slow UARTs do not suppress command processing once the
   // ordinary bounded reply buffer drains. Alert/status output still gets turns.
   for(unsigned n=0;n<2000;++n) {

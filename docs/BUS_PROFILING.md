@@ -1,8 +1,46 @@
 # CAN startup and fan captures
 
 These builds investigate startup, address negotiation, receive loss and fan mode
-changes. They **do not fix or change the controller's charging policy**. Use the
+changes. Profiling itself does not change the controller's charging policy. Use the
 same source revision for all captures and keep the original terminal logs.
+
+## Receive/timing patch comparison
+
+The MCP2515 adapter now owns reception: one interrupt reads a snapshot of at most
+two hardware buffers, using one 14-byte SPI burst per buffer. It no longer calls
+the library's drain-until-empty interrupt handler. The software ring remains 15
+usable frames. Main-loop receive passes also run between control, storage,
+serial and display work. Routine bulk reads wait while that ring is backlogged
+or the existing address-negotiation quiet interval is active. Protective setting
+commands retain their priority, identity validation and existing deadlines.
+
+The burst uses MCP2515 `READ RX BUFFER`; raising CS clears only the selected
+buffer's receive flag. See [Microchip DS20001801K, section 12.4](https://ww1.microchip.com/downloads/aemDocuments/documents/APID/ProductDocuments/DataSheets/MCP2515-Family-Data-Sheet-DS20001801K.pdf).
+Every SPI transaction finishes before returning to other work. No new framebuffer,
+larger software queue, deliberate CAN loss or startup delay was added.
+
+For a nine-PSU comparison, use the same normal-startup setup and run at least five
+minutes, then exercise menu navigation and the previously failing scoped apply.
+Record `diag bus`, `diag ui`, `diag memory` before and after. Keep `watch off` and
+`raw off`; use the profile build for a second run when individual traffic events
+are needed. Retain both the successful and unsuccessful captures.
+
+`diag bus` adds `rx-isr-max-us`, `clock-invalid-samples` and `max-backstep-us`.
+The first is the measured maximum inside our bounded receive handler (excluding
+the external-interrupt wrapper). The clock counter counts invalid **short timing
+measurements**, not unique hardware events. Ordinary 32-bit `micros()` rollover
+is valid; a backwards sample ends a cooperative render slice and is counted
+instead of turning into a roughly 4.29-billion-microsecond maximum. These counters
+are sticky until reboot, including across `diag ui reset` and serial reconnect.
+They do not change the millisecond clock or safety/control deadlines.
+
+Expected evidence is no increasing receive loss, no clock-invalid samples, a
+bounded ISR well below Timer0's 1,024 us overflow interval, responsive navigation,
+and no lost INFO/setting acknowledgements. Existing receive-loss counters may
+saturate, so compare a fresh boot and the profile's wider counter when needed.
+Nonzero counters, long ISR measurements, or resumed stalls still need diagnosis;
+the patch does not suppress their alerts. Software tests establish bounded work
+and state handling, not physical bus timing, fan response or PSU regulation.
 
 ## Choose the build
 

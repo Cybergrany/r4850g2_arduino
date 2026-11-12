@@ -8,8 +8,9 @@ std::vector<std::pair<int,int>> gpio;
 uint32_t clockMs=0;
 uint32_t millis() { return clockMs; }
 uint32_t micros() { return clockMs*1000; }
-void digitalWrite(uint8_t pin,uint8_t value) { gpio.emplace_back(pin,value); }
+void digitalWrite(uint8_t pin,uint8_t value) { gpio.emplace_back(pin,value); if(pin==10) SPI.select(value); }
 void pinMode(uint8_t pin,uint8_t mode) { gpio.emplace_back(pin,10+mode); }
+void attachInterrupt(uint8_t,void (*fn)(),int) { CAN.callback=fn; }
 void setup(); void loop();
 void command(const char* text) { Serial.input+=text; for(int n=0;n<100;++n) loop(); }
 int cutoffLevel() { int value=-1; for(auto e:gpio) if(e.first==27 && e.second<2) value=e.second; return value; }

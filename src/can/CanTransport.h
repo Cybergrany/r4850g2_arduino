@@ -32,7 +32,9 @@ class CanTransport {
   virtual bool receive(CanFrame& frame) = 0;
   virtual uint8_t droppedFrames() const { return 0; }
   virtual uint8_t receiveHighWater() const { return 0; }
+  virtual uint8_t receivePending() const { return 0; }
   virtual uint16_t hardwareOverflows() const { return 0; }
+  virtual uint16_t receiveInterruptMaxUs() const { return 0; }
   // Consume recent loss independently of saturating diagnostic counters.
   virtual bool takeReceiveLoss() { return false; }
 #if PSU_BUS_PROFILE

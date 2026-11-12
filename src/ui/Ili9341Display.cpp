@@ -1,4 +1,5 @@
 #include "Ili9341Display.h"
+#include "../diagnostics/RuntimeTiming.h"
 #if PSU_ENABLE_DISPLAY
 #include "../config/BoardConfig.h"
 #include "../config/TouchConfig.h"
@@ -178,8 +179,8 @@ void Ili9341Display::transfer(Rect r, uint16_t* pixels) {
   tft_.startWrite(); tft_.setAddrWindow(r.x,r.y,r.w,r.h);
   if (solid) tft_.writeColor(pixels[0],count); else tft_.writePixels(pixels,count);
   tft_.endWrite();
-  const uint32_t elapsed=micros()-started;
-  if (elapsed>stats_.transactionMaxUs) stats_.transactionMaxUs=elapsed;
+  const uint32_t elapsed=timing::elapsed(started,micros());
+  if (elapsed!=timing::invalid && elapsed>stats_.transactionMaxUs) stats_.transactionMaxUs=elapsed;
 }
 bool Ili9341Display::outlineStep(const UiFrame& frame, bool eraseOnly) {
   if (!outlineStage_) {
@@ -222,7 +223,7 @@ bool Ili9341Display::outlineStep(const UiFrame& frame, bool eraseOnly) {
 void Ili9341Display::service(const UiFrame& frame) {
   if (!available_ || !pending()) return;
   const uint32_t started=micros(); uint8_t transfers=0;
-  while (transfers<ui::burstsPerTick(board::displaySpiHz) && uint32_t(micros()-started)<ui::renderBudgetUs) {
+  while (transfers<ui::burstsPerTick(board::displaySpiHz) && timing::elapsed(started,micros())<ui::renderBudgetUs) {
     if (scanRow_==ui::cellHeight) {
       if (sceneCheck_ && !outlineStage_) {
         sceneCheck_=false; outlinesAfterText_=false;
@@ -267,7 +268,7 @@ void Ili9341Display::service(const UiFrame& frame) {
         if (dirtyColumns_[y/2]) dirtyRows_ |= uint16_t(3U<<y);
       }
       scanRow_=0;
-      if (uint32_t(micros()-started)>=ui::renderBudgetUs) break;
+      if (timing::elapsed(started,micros())>=ui::renderBudgetUs) break;
     }
     while (scanRow_<ui::cellHeight && !(dirtyRows_ & (1U<<scanRow_))) ++scanRow_;
     if (scanRow_==ui::cellHeight) { previous_.cell(activeIndex_,active_); continue; }
@@ -297,8 +298,8 @@ void Ili9341Display::service(const UiFrame& frame) {
     while (scanRow_<ui::cellHeight && !(dirtyRows_ & (1U<<scanRow_))) ++scanRow_;
     if (scanRow_==ui::cellHeight) previous_.cell(activeIndex_,active_);
   }
-  const uint32_t elapsed = micros() - started;
-  if (elapsed > stats_.renderMaxUs) stats_.renderMaxUs = elapsed;
+  const uint32_t elapsed = timing::elapsed(started, micros());
+  if (elapsed != timing::invalid && elapsed > stats_.renderMaxUs) stats_.renderMaxUs = elapsed;
   if (!pending()) {
     stats_.sceneMs = millis() - sceneStarted_;
     if (stats_.sceneMs > stats_.sceneMaxMs) stats_.sceneMaxMs = stats_.sceneMs;

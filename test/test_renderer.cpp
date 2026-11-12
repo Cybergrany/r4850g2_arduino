@@ -5,6 +5,7 @@
 #include <sstream>
 #include "ui/Ili9341Display.h"
 #include "config/BoardConfig.h"
+#include "diagnostics/RuntimeTiming.h"
 #include <glcdfont.c>
 #define CHECK(x) do { if(!(x)) throw std::runtime_error(std::string(__FILE__)+":"+std::to_string(__LINE__)+" " #x); } while(0)
 namespace raster {
@@ -70,6 +71,7 @@ void changeDuringTransfer() {
   interruptedFrame->cell(0,{'Z',Accent}); interruptedFrame->largeNumber(8,"-0.5",Warning);
   interruptedDisplay->invalidate(); raster::afterTransfer=nullptr;
 }
+void clockBackstep() { raster::clockUs-=1000; raster::afterTransfer=nullptr; }
 void area(UiFrame& f,uint8_t row,uint8_t col,uint8_t width,uint8_t height,uint8_t style) {
   for(uint8_t y=row;y<row+height;++y) f.text(y,col,width,y==row?"Settings":"",style);
 }
@@ -176,6 +178,18 @@ void run() {
   raster::wireScale=20; frame.text(0,0,26,"Slow transaction",Good); display.invalidate(); finish(display,frame);
   CHECK(display.statistics().renderMaxUs>ui::renderBudgetUs && display.statistics().transactionMaxUs>ui::renderBudgetUs);
   raster::wireScale=1;
+  // Inject the observed negative elapsed sample after a completed transaction.
+  // SPI must already be released, cached pixels remain accurate, and the next
+  // service call must finish rather than poisoning all maxima with UINT32_MAX.
+  const auto invalidBefore=timing::diagnostics().invalidSamples;
+  raster::clockUs=100000; display.resetStatistics();
+  frame.text(0,0,26,"Clock moved back",Error); display.invalidate();
+  raster::afterTransfer=clockBackstep; display.service(frame);
+  CHECK(!raster::open && !raster::afterTransfer);
+  CHECK(timing::diagnostics().invalidSamples>invalidBefore);
+  CHECK(timing::diagnostics().maxBackstepUs>0);
+  finish(display,frame);
+  CHECK(display.statistics().renderMaxUs<100000 && display.statistics().transactionMaxUs<100000);
   // Costly preparation must yield but never keep discarding the first strip.
   raster::cpuCost=250; frame.text(0,0,26,"Prepared work",Good);
   display.invalidate(true); finish(display,frame); raster::cpuCost=1;

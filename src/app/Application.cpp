@@ -1,5 +1,6 @@
 #include "../util/FlashString.h"
 #include "Application.h"
+#include "../diagnostics/RuntimeTiming.h"
 #include <Arduino.h>
 #include <string.h>
 #include <new>
@@ -9,8 +10,8 @@ namespace psu {
 #if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
 namespace {
 void phaseTime(uint32_t& maximum, uint32_t& started) {
-  const uint32_t now = micros(), elapsed = now - started;
-  if (elapsed > maximum) maximum = elapsed;
+  const uint32_t now = micros(), elapsed = timing::elapsed(started, now);
+  if (elapsed != timing::invalid && elapsed > maximum) maximum = elapsed;
   started = now;
 }
 }
@@ -108,6 +109,7 @@ void Application::tick() {
 #if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
   phaseTime(phaseMaxUs_[0], phaseStarted);
 #endif
+  controller_.serviceReceive(millis());
   controller_.serviceProtection(memory_, millis());
   memory_.stepSave();
   controller_.profileTick(memory_);
@@ -118,12 +120,14 @@ void Application::tick() {
 #if PSU_ENABLE_DISPLAY && PSU_ENABLE_SERIAL
   phaseTime(phaseMaxUs_[1], phaseStarted);
 #endif
+  controller_.serviceReceive(millis());
 #if PSU_ENABLE_SERIAL
   console_.tick(millis());
 #if PSU_ENABLE_DISPLAY
   phaseTime(phaseMaxUs_[2], phaseStarted);
 #endif
 #endif
+  controller_.serviceReceive(millis());
 #if PSU_ENABLE_DISPLAY
   localUi_.tick(millis());
   // A foreground page/highlight gets consecutive short slices. Service the RX
@@ -131,7 +135,7 @@ void Application::tick() {
   // availability, presentation and serial work for every few pixels.
   const uint32_t paintStarted = micros();
   for (uint8_t n = 0; localUi_.priorityDrawing() && n < ui::priorityRenderSlices &&
-      uint32_t(micros() - paintStarted) < ui::priorityRenderUs; ++n) {
+      timing::elapsed(paintStarted, micros()) < ui::priorityRenderUs; ++n) {
     controller_.serviceReceive(millis());
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
     chargeAllow_.write(controller_.chargeAllowed());
@@ -149,6 +153,7 @@ void Application::tick() {
   if (request.kind != ActionKind::None) debugRequest_ = request;
 #endif
 #endif
+  controller_.serviceReceive(millis());
 #if PSU_CHG_ALLOW_PIN >= 0 && !PSU_UI_DEBUG
   chargeAllow_.write(controller_.chargeAllowed()); // Includes serial and local UI hard stops.
 #endif
@@ -158,7 +163,8 @@ void Application::tick() {
 #if !PSU_UI_DEBUG && (PSU_WARNING_PIN >= 0 || PSU_ERROR_PIN >= 0)
   alertOutputs_.write(controller_.alerts());
 #endif
-  controller_.recordLoopTime(uint32_t(micros() - started));
+  const uint32_t elapsed = timing::elapsed(started, micros());
+  if (elapsed != timing::invalid) controller_.recordLoopTime(elapsed);
 }
 }
 

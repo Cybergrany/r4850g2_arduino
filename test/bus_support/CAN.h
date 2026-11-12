@@ -1,15 +1,41 @@
 #pragma once
 #include <Arduino.h>
 #include "can/CanTransport.h"
+#include <cassert>
+#include <vector>
 constexpr uint8_t MSBFIRST=1, SPI_MODE0=0;
+constexpr uint8_t INPUT=0;
+inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin; }
+void attachInterrupt(uint8_t, void (*)(), int);
 struct SPISettings { SPISettings(uint32_t,uint8_t,uint8_t) {} };
 struct TestSpi {
   unsigned operations=0;
+  bool open=false, selected=false, registered=false;
+  uint8_t bytes=0;
+  void (*boundary)()=nullptr;
+  void (*duringTransfer)()=nullptr;
+  std::vector<uint8_t> bursts, lengths;
   uint8_t registers[128]={}, phase=0, command=0, address=0, mask=0;
-  void beginTransaction(SPISettings) { ++operations; phase=0; }
-  void endTransaction() {}
+  void usingInterrupt(uint8_t pin) { assert(pin==2); registered=true; }
+  void beginTransaction(SPISettings) { assert(!open); open=true; ++operations; phase=0; bytes=0; }
+  void endTransaction() {
+    assert(open && !selected); open=false; lengths.push_back(bytes);
+    if (boundary) boundary();
+  }
+  void select(uint8_t level) {
+    if (!level) { assert(open && !selected); selected=true; }
+    else {
+      assert(open && selected); selected=false;
+      if (command==0x90 || command==0x94) {
+        registers[0x2c] &= uint8_t(~(command==0x90 ? 1 : 2)); bursts.push_back(command);
+      }
+    }
+  }
   uint8_t transfer(uint8_t value) {
-    if (!phase++) { command=value; return 0; }
+    assert(open && selected); ++bytes;
+    if (duringTransfer) duringTransfer();
+    if (!phase++) { command=value; if (command==0x90 || command==0x94) address=command==0x90 ? 0x61 : 0x71; return 0; }
+    if (command==0x90 || command==0x94) return registers[address++];
     if (phase==2) { address=value; return 0; }
     if (command==3) return registers[address++];
     if (command==2) registers[address++]=value;
@@ -19,20 +45,24 @@ struct TestSpi {
     }
     return 0;
   }
+  void load(const psu::CanFrame& frame, uint8_t buffer) {
+    assert(buffer<2 && !(registers[0x2c] & (1<<buffer)));
+    uint8_t* r=registers+(buffer ? 0x71 : 0x61);
+    r[0]=frame.id>>21;
+    r[1]=((frame.id>>13)&0xe0)|((frame.id>>16)&3)|(frame.extended ? 8 : 0);
+    r[2]=frame.id>>8; r[3]=frame.id;
+    r[4]=frame.length|(frame.rtr ? 0x40 : 0);
+    for (uint8_t i=0;i<8;++i) r[i+5]=frame.data[i];
+    registers[0x2c] |= 1<<buffer;
+  }
 };
 extern TestSpi SPI;
 struct TestCan {
-  psu::CanFrame frame={}; uint8_t offset=0; void (*callback)(int)=nullptr;
+  void (*callback)()=nullptr;
   void setPins(uint8_t,uint8_t) {}
   void setClockFrequency(uint32_t) {}
   void setSPIFrequency(uint32_t) {}
   bool begin(uint32_t) { return true; }
-  void onReceive(void (*fn)(int)) { callback=fn; }
-  bool packetExtended() const { return frame.extended; }
-  bool packetRtr() const { return frame.rtr; }
-  uint32_t packetId() const { return frame.id; }
-  int available() const { return frame.length-offset; }
-  int read() { return frame.data[offset++]; }
-  void inject(psu::CanFrame value) { frame=value; offset=0; callback(frame.length); }
+  void inject(const psu::CanFrame& value) { SPI.load(value,0); assert(callback && SPI.registered); callback(); }
 };
 extern TestCan CAN;

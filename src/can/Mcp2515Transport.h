@@ -6,7 +6,7 @@
 #include "../config/BoardConfig.h"
 
 namespace psu {
-// Adapts arduino-CAN's singleton MCP2515. All business logic stays outside this driver.
+// arduino-CAN initializes the MCP2515; bounded RX/TX belong to this adapter.
 class Mcp2515Transport : public CanTransport {
  public:
   bool begin() override;
@@ -22,13 +22,16 @@ class Mcp2515Transport : public CanTransport {
   bool receive(CanFrame& frame) override;
   uint8_t droppedFrames() const override { return dropped_; }
   uint8_t receiveHighWater() const override { return highWater_; }
+  uint8_t receivePending() const override { return (head_ + board::canReceiveSlots - tail_) % board::canReceiveSlots; }
   uint16_t hardwareOverflows() const override { return hardwareOverflows_; }
+  uint16_t receiveInterruptMaxUs() const override;
   bool takeReceiveLoss() override;
 #if PSU_BUS_PROFILE
   void busReceiveStats(BusReceiveStats& stats) const override;
 #endif
  private:
-  static void onReceive(int length);
+  static void onInterrupt();
+  void receiveBuffer(uint8_t buffer);
   static Mcp2515Transport* instance_;
   CanFrame queue_[board::canReceiveSlots];
   volatile uint8_t head_ = 0;
@@ -36,6 +39,7 @@ class Mcp2515Transport : public CanTransport {
   volatile uint8_t dropped_ = 0;
   volatile uint8_t highWater_ = 0;
   volatile bool receiveLoss_ = false;
+  volatile uint16_t interruptMaxUs_ = 0;
   uint16_t hardwareOverflows_ = 0;
 #if !PSU_CAN_OBSERVER
   mcp2515::Transmitter transmitter_;

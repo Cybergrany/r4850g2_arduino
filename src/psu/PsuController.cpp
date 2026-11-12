@@ -617,6 +617,9 @@ void PsuController::tick(uint32_t now) {
 #endif
   thermalTick(now);
   controlTick(now);
+  // Safe phase boundary: no control-loop references survive this receive pass.
+  // Accept identity/setting replies and fresh temperatures before later jobs.
+  serviceReceive(now);
   availabilityTick(now);
   // Revalidate saved decisions against this tick's received identities and
   // power state before making any newly authorized participant eligible.
@@ -625,8 +628,12 @@ void PsuController::tick(uint32_t now) {
   if (busy()) runJob(now);
   if (!busy() && !availabilitySaving()) refreshSettings(now);
   alertTick(now);
+  serviceReceive(now);
   // Identity and telemetry refresh continue even during a long multi-unit job.
-  if (sentThisTick_ || txPending_ || uint32_t(now - lastProbe_) < limits::readRequestGapMs) return;
+  // Do not solicit another multi-frame INFO/DATA burst while replies are still
+  // queued. Protective commands retain their priority and normal validation.
+  if (sentThisTick_ || txPending_ || discovery_.negotiating() || transport_.receivePending() ||
+      uint32_t(now - lastProbe_) < limits::readRequestGapMs) return;
   // Round-robin due requests, without consuming a timeslot on an idle entry.
   // Established devices take priority over manual reads and unused addresses;
   // repeated manual polls must not starve identity leases or other members.

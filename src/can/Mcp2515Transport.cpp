@@ -2,12 +2,13 @@
 #if !PSU_UI_DEBUG
 #include "Mcp2515Transport.h"
 #include "Mcp2515Transmit.h"
+#include "../diagnostics/RuntimeTiming.h"
 #include <CAN.h>
 #include <util/atomic.h>
 
 namespace psu {
 namespace {
-// SPI transactions use the same CS and clock as arduino-CAN. Its registered RX
+// SPI transactions use the same CS and clock as arduino-CAN. Our registered RX
 // interrupt is masked by SPI.beginTransaction while a register access is active.
 class Registers {
  public:
@@ -44,65 +45,93 @@ bool Mcp2515Transport::begin() {
   // Let RXB0 overflow into RXB1 while SPI briefly masks the receive interrupt.
   registers.modify(0x60, 0x04, 0x04); // RXB0CTRL.BUKT
   instance_ = this;
-  CAN.onReceive(onReceive);
+  // The library's handler drains until empty inside a LOW-level ISR. A burst
+  // can therefore mask Timer0 for multiple overflows. Own the handler instead:
+  // at most the two buffers in one snapshot, each read in one SPI transaction.
+  SPI.usingInterrupt(digitalPinToInterrupt(board::canInterrupt));
+  pinMode(board::canInterrupt, INPUT);
+  attachInterrupt(digitalPinToInterrupt(board::canInterrupt), onInterrupt, LOW);
 #if PSU_BUS_PROFILE
   profileReady_ = true;
 #endif
   return true;
 }
-void Mcp2515Transport::onReceive(int length) {
+void Mcp2515Transport::onInterrupt() {
   auto& self = *instance_;
+  const uint32_t started = micros();
+  Registers registers;
+  const uint8_t pending = registers.read(0x2c) & 3; // CANINTF.RX0IF/RX1IF
+  if (pending & 1) self.receiveBuffer(0);
+  if (pending & 2) self.receiveBuffer(1);
+  // New arrivals remain pending for the next interrupt, never extend this one.
+  const uint32_t us = timing::elapsed(started, micros());
+  if (us != timing::invalid && us > self.interruptMaxUs_)
+    self.interruptMaxUs_ = us > UINT16_MAX ? UINT16_MAX : us;
+}
+void Mcp2515Transport::receiveBuffer(uint8_t buffer) {
+  // The unused head slot is safe scratch even when the ring is full. Publish
+  // only after decoding/validation; main never reads an unpublished slot.
+  auto& frame = queue_[head_];
+  SPI.beginTransaction(SPISettings(board::canSpiHz, MSBFIRST, SPI_MODE0));
+  digitalWrite(board::canChipSelect, LOW);
+  SPI.transfer(buffer ? 0x94 : 0x90); // READ RX BUFFER, starting at SIDH
+  const uint8_t sidh = SPI.transfer(0), sidl = SPI.transfer(0);
+  frame.id = uint32_t(sidh) << 21 | uint32_t(sidl & 0xe0) << 13 | uint32_t(sidl & 3) << 16;
+  frame.id |= uint32_t(SPI.transfer(0)) << 8;
+  frame.id |= SPI.transfer(0);
+  const uint8_t dlc = SPI.transfer(0);
+  frame.length = dlc & 0x0f; frame.extended = (sidl & 8) != 0; frame.rtr = (dlc & 0x40) != 0;
+  for (uint8_t i = 0; i < 8; ++i) frame.data[i] = SPI.transfer(0);
+  // MCP2515 DS20001801K section 12.4: CS rising clears only this RXnIF.
+  // A later frame cannot be erased by a separate, delayed flag-clear command.
+  digitalWrite(board::canChipSelect, HIGH);
+  SPI.endTransaction();
 #if PSU_BUS_PROFILE
-  ++self.profileReceived_;
+  ++profileReceived_;
 #endif
-  if (length != 8 || !CAN.packetExtended() || CAN.packetRtr()) {
+  if (frame.length != 8 || !frame.extended || frame.rtr) {
 #if PSU_BUS_PROFILE
-    ++self.profileInvalid_;
+    ++profileInvalid_;
 #endif
-    while (CAN.available()) CAN.read();
     return;
   }
-  const uint8_t next = (self.head_ + 1) % board::canReceiveSlots;
+  const uint8_t next = (head_ + 1) % board::canReceiveSlots;
 #if PSU_BUS_PROFILE
-  const uint32_t id = CAN.packetId();
-  const uint8_t first = CAN.read(), second = CAN.read();
   // Count negotiation even if the application queue drops the frame. This
   // distinguishes unseen negotiation from lost telemetry without doing policy in ISR.
-  if ((id & 0xff80ffffUL) == 0x1000107eUL && first == 0x30 && (second == 1 || second == 2))
-    ++self.profileNegotiation_;
+  if ((frame.id & 0xff80ffffUL) == 0x1000107eUL && frame.data[0] == 0x30 && (frame.data[1] == 1 || frame.data[1] == 2))
+    ++profileNegotiation_;
 #endif
-  if (next == self.tail_) {
+  if (next == tail_) {
 #if PSU_BUS_PROFILE
-    ++self.profileDropped_;
+    ++profileDropped_;
 #endif
-    self.receiveLoss_ = true;
-    if (self.dropped_ != UINT8_MAX) ++self.dropped_;
-    while (CAN.available()) CAN.read();
+    receiveLoss_ = true;
+    if (dropped_ != UINT8_MAX) ++dropped_;
     return;
   }
-  auto& frame = self.queue_[self.head_];
 #if PSU_BUS_PROFILE
-  frame.id = id; frame.length = 8; frame.extended = true; frame.rtr = false;
-  frame.data[0] = first; frame.data[1] = second;
-  for (uint8_t i = 2; i < 8; ++i) frame.data[i] = CAN.read();
-  self.arrived_[self.head_] = uint16_t(millis());
-#else
-  frame.id = CAN.packetId(); frame.length = 8; frame.extended = true; frame.rtr = false;
-  for (uint8_t i = 0; i < 8; ++i) frame.data[i] = CAN.read();
+  arrived_[head_] = uint16_t(millis());
 #endif
   // Publish only a complete frame. No Serial, display, configuration, or EEPROM in ISR.
   asm volatile("" ::: "memory");
-  self.head_ = next;
-  const uint8_t used = (next + board::canReceiveSlots - self.tail_) % board::canReceiveSlots;
-  if (used > self.highWater_) self.highWater_ = used;
+  head_ = next;
+  const uint8_t used = (next + board::canReceiveSlots - tail_) % board::canReceiveSlots;
+  if (used > highWater_) highWater_ = used;
+}
+uint16_t Mcp2515Transport::receiveInterruptMaxUs() const {
+  uint16_t result;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { result = interruptMaxUs_; }
+  return result;
 }
 bool Mcp2515Transport::receive(CanFrame& frame) {
 #if PSU_BUS_PROFILE
-  const uint32_t clock = micros(), gap = clock - lastReceiveCallUs_;
-  if (receiveCalled_ && gap > maxReceiveGapUs_) maxReceiveGapUs_ = gap;
+  const uint32_t clock = micros();
+  const uint32_t gap = receiveCalled_ ? timing::elapsed(lastReceiveCallUs_, clock) : 0;
+  if (gap != timing::invalid && gap > maxReceiveGapUs_) maxReceiveGapUs_ = gap;
   // Queue timestamps are modulo milliseconds. If service was absent for over
   // their range, mark the age as saturated rather than reporting a false small age.
-  if (receiveCalled_ && gap >= 65535000UL) maxQueueAgeMs_ = UINT16_MAX;
+  if (gap != timing::invalid && gap >= 65535000UL) maxQueueAgeMs_ = UINT16_MAX;
   receiveCalled_ = true; lastReceiveCallUs_ = clock;
 #endif
   if (tail_ == head_) return false;

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[1]
 sources = [
+    "src/diagnostics/RuntimeTiming.cpp",
     "src/ui/UiAlerts.cpp", "src/ui/UiAlertView.cpp", "src/ui/UiRecovery.cpp", "src/ui/UiRecoveryView.cpp",
     'src/psu/Alerts.cpp', 'src/psu/PsuThermal.cpp', 'src/psu/PsuAlerts.cpp', 'src/io/AlertOutputs.cpp',
     'src/psu/PsuAvailability.cpp', 'src/io/ChargeAllowOutput.cpp', 'src/io/PsuActiveOutput.cpp',
