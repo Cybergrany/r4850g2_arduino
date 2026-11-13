@@ -172,6 +172,7 @@ class PsuController {
   uint8_t receiveHighWater() const { return transport_.receiveHighWater(); }
   uint16_t hardwareOverflows() const { return transport_.hardwareOverflows(); }
   uint16_t receiveInterruptMaxUs() const { return transport_.receiveInterruptMaxUs(); }
+  ReceiveInterruptStatus receiveInterruptStatus() const { return transport_.receiveInterruptStatus(); }
   uint16_t readFailures() const { return readFailures_; }
   uint32_t maxLoopUs() const { return maxLoopUs_; }
   void recordLoopTime(uint32_t us) { if (us > maxLoopUs_) maxLoopUs_ = us; }

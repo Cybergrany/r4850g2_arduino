@@ -19,6 +19,11 @@ struct CanFrame {
   bool rtr;
 };
 enum class TransmitState : uint8_t { Idle, Pending, Sent, Failed };
+struct ReceiveInterruptStatus {
+  uint16_t yields = 0;
+  uint8_t flags = 0;
+  bool polling = false, pinLow = false;
+};
 
 // Protocol and PSU objects do not depend on Arduino, SPI, or a particular CAN IC.
 class CanTransport {
@@ -35,6 +40,7 @@ class CanTransport {
   virtual uint8_t receivePending() const { return 0; }
   virtual uint16_t hardwareOverflows() const { return 0; }
   virtual uint16_t receiveInterruptMaxUs() const { return 0; }
+  virtual ReceiveInterruptStatus receiveInterruptStatus() const { return {}; }
   // Consume recent loss independently of saturating diagnostic counters.
   virtual bool takeReceiveLoss() { return false; }
 #if PSU_BUS_PROFILE

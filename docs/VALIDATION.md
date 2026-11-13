@@ -4,6 +4,67 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Idle CAN interrupt starvation guard (2026-11-13)
+
+The first hardware run of the preceding patch reported almost stalled UI/serial
+with PSU AC off. Diagnostics showed no received frames, a 32 us maximum receive
+handler, 14,832 invalid clock samples and a 996 us maximum backstep. A short
+individual handler does not rule out starvation from immediate LOW-level
+re-entry. The original host SPI fake invoked each interrupt only once, missing
+this failure mode. The physical cause of the asserted interrupt remains to be
+confirmed with the new pin/flag diagnostics; these observations do not establish
+that the MCP2515's documented READ RX BUFFER flag clear is faulty.
+
+The adapter now detaches its interrupt if INT remains LOW after one bounded
+snapshot. Foreground receive passes continue polling with other interrupts
+enabled, preserve queued frames, and re-arm only after INT releases. No settings,
+enable, fan, persistence or readiness-retry policy is changed. `diag bus` exposes
+the yield count, polling state, sampled pin level and flags at the last yield.
+Its extra output has its own bounded row rather than overflowing the serial
+response reservation.
+
+Validation passed:
+
+- Production RX/observer host tests now model LOW-level retriggering, an idle
+  stuck pin, continuous buffer refills, FIFO preservation with a full ring,
+  bounded foreground polling, and arrival during interrupt re-arm.
+- Ordinary host **3,368,449 checks** and profiled host **3,495,980 checks**; AVR
+  format, renderer at five clocks, touch **1,310 checks**, real wheel **19,652
+  checks**, bus-log parser, route budget, and debug/observer isolation.
+- All **22 Mega builds** and physical flash/RAM bounds.
+- `tools/test_avr_interrupt_guard.py` executes the built wheel/profile Mega ELF
+  in simavr with idle MCP/TFT register models and INT4 continuously asserted.
+  The pre-fix ELF reproduces repeated IRQ entry and starvation. The patched ELF
+  enters the CAN handler once, boots, answers `diag bus`, advances the display,
+  and retains Timer0 progress with zero invalid clock samples. This validates
+  actual AVR instructions/masking; simulated SPI speed is not a bench latency
+  measurement. The fixture explicitly models LOW-level INT4 retriggering, which
+  simavr 1.6's PE4 implementation does not generate by itself.
+
+To run the optional AVR test, install `libsimavr-dev` and build
+`mega2560_wheel_profile`, then run `python3 tools/test_avr_interrupt_guard.py`.
+`--simavr-prefix` supports locally extracted packages; `--elf` and
+`--expect-starvation` allow checking the pre-fix ELF without flashing it.
+
+| Build | Flash bytes | Static RAM bytes | Static free bytes |
+|---|---:|---:|---:|
+| mega2560_wheel_alerts | 202744 | 7180 | 1012 |
+| mega2560_wheel_profile | 210270 | 7332 | 860 |
+| mega2560_touch_wheel | 213614 | 7410 | 782 |
+| mega2560_serial_profile | 129944 | 5462 | 2730 |
+| mega2560_can_observer | 17186 | 1897 | 6295 |
+
+Static state grows by six bytes including the added virtual-table entry. The
+wheel/profile direct main-chain estimate remains 765 bytes; receive interrupt
+overlap is approximately 60 bytes including wrapper/return addresses. The
+remaining arithmetic margin is 35 bytes before indirect/argument uncertainty;
+the existing detailed stack caveats still apply. Use `diag memory` during bench
+stress rather than treating this estimate as proof of runtime margin.
+
+Follow the USB-only and nine-unit checks in [BUS_PROFILING.md](BUS_PROFILING.md).
+Hardware confirmation of responsiveness and the interrupt's underlying cause
+is still required.
+
 ## Integration review (2026-11-12)
 
 Reviewed the receive-buffer reads against MCP2515 DS20001801K section 12.4 and

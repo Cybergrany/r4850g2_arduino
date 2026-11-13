@@ -7,10 +7,13 @@ constexpr uint8_t MSBFIRST=1, SPI_MODE0=0;
 constexpr uint8_t INPUT=0;
 inline uint8_t digitalPinToInterrupt(uint8_t pin) { return pin; }
 void attachInterrupt(uint8_t, void (*)(), int);
+void detachInterrupt(uint8_t);
+int digitalRead(uint8_t);
 struct SPISettings { SPISettings(uint32_t,uint8_t,uint8_t) {} };
 struct TestSpi {
   unsigned operations=0;
   bool open=false, selected=false, registered=false;
+  bool heldLow=false;
   uint8_t bytes=0;
   void (*boundary)()=nullptr;
   void (*duringTransfer)()=nullptr;
@@ -55,14 +58,26 @@ struct TestSpi {
     for (uint8_t i=0;i<8;++i) r[i+5]=frame.data[i];
     registers[0x2c] |= 1<<buffer;
   }
+  bool interruptLow() const { return heldLow || (registers[0x2c] & 3); }
 };
 extern TestSpi SPI;
 struct TestCan {
   void (*callback)()=nullptr;
+  void (*onArm)()=nullptr;
+  unsigned interrupts=0;
   void setPins(uint8_t,uint8_t) {}
   void setClockFrequency(uint32_t) {}
   void setSPIFrequency(uint32_t) {}
   bool begin(uint32_t) { return true; }
-  void inject(const psu::CanFrame& value) { SPI.load(value,0); assert(callback && SPI.registered); callback(); }
+  void dispatch() {
+    unsigned budget=8;
+    // Model LOW-level retriggering, not merely one synthetic function call.
+    while (callback && SPI.interruptLow()) {
+      assert(budget-- && "CAN interrupt storm starves foreground/Timer0");
+      ++interrupts; callback();
+    }
+  }
+  void arm(void (*fn)()) { callback=fn; if (onArm) onArm(); }
+  void inject(const psu::CanFrame& value) { SPI.load(value,0); assert(SPI.registered); dispatch(); }
 };
 extern TestCan CAN;

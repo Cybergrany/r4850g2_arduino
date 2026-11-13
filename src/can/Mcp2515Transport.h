@@ -25,12 +25,15 @@ class Mcp2515Transport : public CanTransport {
   uint8_t receivePending() const override { return (head_ + board::canReceiveSlots - tail_) % board::canReceiveSlots; }
   uint16_t hardwareOverflows() const override { return hardwareOverflows_; }
   uint16_t receiveInterruptMaxUs() const override;
+  ReceiveInterruptStatus receiveInterruptStatus() const override;
   bool takeReceiveLoss() override;
 #if PSU_BUS_PROFILE
   void busReceiveStats(BusReceiveStats& stats) const override;
 #endif
  private:
   static void onInterrupt();
+  uint8_t receiveBuffers();
+  void pollReceiveInterrupt();
   void receiveBuffer(uint8_t buffer);
   static Mcp2515Transport* instance_;
   CanFrame queue_[board::canReceiveSlots];
@@ -40,6 +43,9 @@ class Mcp2515Transport : public CanTransport {
   volatile uint8_t highWater_ = 0;
   volatile bool receiveLoss_ = false;
   volatile uint16_t interruptMaxUs_ = 0;
+  volatile uint16_t interruptYields_ = 0;
+  volatile uint8_t interruptFlags_ = 0;
+  volatile bool receivePolling_ = false;
   uint16_t hardwareOverflows_ = 0;
 #if !PSU_CAN_OBSERVER
   mcp2515::Transmitter transmitter_;

@@ -904,23 +904,29 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" hw-overflow-events=")); io_.println(controller_.hardwareOverflows());
       io_.print(F("trace-drops=")); io_.print(traceDrops_); io_.print(F(" output-overruns=")); io_.print(io_.overruns());
       io_.print(F(" queued-read-failures=")); io_.println(controller_.readFailures());
+    } else if (row_ == 3) {
       const auto timing = psu::timing::diagnostics();
       io_.print(F("rx-isr-max-us=")); io_.print(controller_.receiveInterruptMaxUs());
       io_.print(F(" clock-invalid-samples=")); io_.print(timing.invalidSamples);
       io_.print(F(" max-backstep-us=")); io_.println(timing.maxBackstepUs);
-    } else if (row_ == 3) {
+      const auto interrupt = controller_.receiveInterruptStatus();
+      io_.print(F("rx-irq-yields=")); io_.print(interrupt.yields);
+      io_.print(F(" rx-polling=")); io_.print(interrupt.polling);
+      io_.print(F(" irq-low=")); io_.print(interrupt.pinLow);
+      io_.print(F(" flags-at-yield=0x")); io_.println(interrupt.flags, HEX);
+    } else if (row_ == 4) {
       const auto bus = controller_.busStatus(now);
       io_.print(F("configured slots=")); io_.print(bus.configured); io_.print(F(" responding addresses=")); io_.print(bus.responding);
       io_.print(F(" verified identities=")); io_.print(bus.verified); io_.print(F(" broadcasting=")); io_.println(bus.broadcasting);
-    } else if (row_ < Discovery::capacity + 4) {
-      const auto& d = controller_.discovery().device(row_ - 4);
+    } else if (row_ < Discovery::capacity + 5) {
+      const auto& d = controller_.discovery().device(row_ - 5);
       if (d.occupied) {
         io_.print(F("addr=")); io_.print(d.address); io_.print(F(" id=")); printIdentity(d.identity);
         io_.print(F(" verified=")); io_.print(d.verified(now)); io_.print(F(" conflict=")); io_.print(d.conflict);
         io_.print(F(" response-age-ms=")); io_.print(uint32_t(now - d.lastSeen));
         io_.print(F(" broadcast-age-ms=")); if (d.telemetry.broadcastSeen) io_.println(uint32_t(now - d.telemetry.lastBroadcast)); else io_.println(F("none"));
       }
-    } else if (row_ == Discovery::capacity + 4) printControl(now);
+    } else if (row_ == Discovery::capacity + 5) printControl(now);
     else { io_.println(F("Addresses are temporary; count responders, not the highest address. Unbound devices receive no setting writes.")); view_ = View::None; }
     ++row_;
   } else if (view_ == View::Telemetry) {

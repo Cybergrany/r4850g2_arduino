@@ -59,14 +59,37 @@ bool Mcp2515Transport::begin() {
 void Mcp2515Transport::onInterrupt() {
   auto& self = *instance_;
   const uint32_t started = micros();
-  Registers registers;
-  const uint8_t pending = registers.read(0x2c) & 3; // CANINTF.RX0IF/RX1IF
-  if (pending & 1) self.receiveBuffer(0);
-  if (pending & 2) self.receiveBuffer(1);
-  // New arrivals remain pending for the next interrupt, never extend this one.
+  const uint8_t flags = self.receiveBuffers();
+  // Bounding one LOW-level ISR does not bound its immediate retriggering. An
+  // asserted INT with no RX flags can otherwise starve Timer0/UART indefinitely.
+  // Also yield if both buffers refilled: main will drain a bounded snapshot and
+  // re-arm only after INT releases. Finish all SPI transactions before detaching.
+  if (digitalRead(board::canInterrupt) == LOW) {
+    detachInterrupt(digitalPinToInterrupt(board::canInterrupt));
+    self.receivePolling_ = true;
+    self.interruptFlags_ = flags;
+    if (self.interruptYields_ != UINT16_MAX) ++self.interruptYields_;
+  }
   const uint32_t us = timing::elapsed(started, micros());
   if (us != timing::invalid && us > self.interruptMaxUs_)
     self.interruptMaxUs_ = us > UINT16_MAX ? UINT16_MAX : us;
+}
+uint8_t Mcp2515Transport::receiveBuffers() {
+  Registers registers;
+  const uint8_t flags = registers.read(0x2c); // CANINTF.RX0IF/RX1IF
+  if (flags & 1) receiveBuffer(0);
+  if (flags & 2) receiveBuffer(1);
+  return flags;
+}
+void Mcp2515Transport::pollReceiveInterrupt() {
+  // The CAN interrupt is detached, so this is the only producer until re-arm.
+  // Timer0/UART/wheel interrupts remain enabled throughout foreground polling.
+  receiveBuffers();
+  if (digitalRead(board::canInterrupt) != LOW) {
+    receivePolling_ = false;
+    // LOW mode catches arrivals between the pin check and re-arm as well.
+    attachInterrupt(digitalPinToInterrupt(board::canInterrupt), onInterrupt, LOW);
+  }
 }
 void Mcp2515Transport::receiveBuffer(uint8_t buffer) {
   // The unused head slot is safe scratch even when the ring is full. Publish
@@ -124,6 +147,15 @@ uint16_t Mcp2515Transport::receiveInterruptMaxUs() const {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { result = interruptMaxUs_; }
   return result;
 }
+ReceiveInterruptStatus Mcp2515Transport::receiveInterruptStatus() const {
+  ReceiveInterruptStatus result;
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+    result.yields = interruptYields_; result.flags = interruptFlags_;
+    result.polling = receivePolling_;
+  }
+  result.pinLow = digitalRead(board::canInterrupt) == LOW;
+  return result;
+}
 bool Mcp2515Transport::receive(CanFrame& frame) {
 #if PSU_BUS_PROFILE
   const uint32_t clock = micros();
@@ -134,6 +166,9 @@ bool Mcp2515Transport::receive(CanFrame& frame) {
   if (gap != timing::invalid && gap >= 65535000UL) maxQueueAgeMs_ = UINT16_MAX;
   receiveCalled_ = true; lastReceiveCallUs_ = clock;
 #endif
+  // Free two ring slots before reading another two-buffer snapshot. Never drop
+  // queued frames merely to make progress after an interrupt has yielded.
+  if (receivePolling_ && receivePending() < board::canReceiveSlots - 2) pollReceiveInterrupt();
   if (tail_ == head_) return false;
 #if PSU_BUS_PROFILE
   const uint16_t age = uint16_t(uint16_t(millis()) - arrived_[tail_]);

@@ -1411,6 +1411,9 @@ void cooperativeSerialAndStorage() {
   CHECK(diagnostic.find("output-overruns=0") != std::string::npos);
   CHECK(diagnostic.find("hw-overflow-events=") != std::string::npos);
   CHECK(diagnostic.find("rx-high-water=") != std::string::npos);
+  CHECK(diagnostic.find("rx-irq-yields=") != std::string::npos);
+  CHECK(diagnostic.find("flags-at-yield=0x") != std::string::npos);
+  CHECK(diagnostic.find("Addresses are temporary") != std::string::npos);
 
   t.io.feed("save\n"); t.drain(1); // Snapshot only; no synchronous byte writes.
   CHECK(t.memory.saving()); const auto snapshot = t.bytes.bytes;

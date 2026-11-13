@@ -19,6 +19,13 @@ buffer's receive flag. See [Microchip DS20001801K, section 12.4](https://ww1.mic
 Every SPI transaction finishes before returning to other work. No new framebuffer,
 larger software queue, deliberate CAN loss or startup delay was added.
 
+If INT remains LOW after that snapshot, the adapter detaches the Mega's CAN
+interrupt and drains at most two hardware buffers per foreground receive pass.
+It waits for room in the software ring and re-arms the interrupt only after INT
+releases. Timer0, UART and wheel interrupts remain available during polling.
+This bounds repeated interrupt entry as well as the work inside a single entry.
+A persistently asserted pin is contained, not treated as proof of healthy CAN.
+
 For a nine-PSU comparison, use the same normal-startup setup and run at least five
 minutes, then exercise menu navigation and the previously failing scoped apply.
 Record `diag bus`, `diag ui`, `diag memory` before and after. Keep `watch off` and
@@ -33,6 +40,24 @@ is valid; a backwards sample ends a cooperative render slice and is counted
 instead of turning into a roughly 4.29-billion-microsecond maximum. These counters
 are sticky until reboot, including across `diag ui reset` and serial reconnect.
 They do not change the millisecond clock or safety/control deadlines.
+
+The additional `diag bus` line reports:
+
+- `rx-irq-yields`: saturating count of interrupt entries that handed remaining
+  work to foreground polling because INT was still LOW.
+- `rx-polling`: whether that fallback is currently active.
+- `irq-low`: the current sampled level of the Mega's CAN INT input.
+- `flags-at-yield`: CANINTF at the start of the last yielded interrupt. Bits 0/1
+  indicate RX0/RX1; other bits are retained for diagnosis, not blindly cleared.
+
+For the USB-only regression check, keep PSU AC off and ENABLE_IN off, then use
+`watch off`, `raw off`, `diag bus`, `diag ui` and `diag memory`. Move a selection
+and repeat the diagnostics. Serial and navigation should remain usable and
+`clock-invalid-samples` should not grow. Normally idle INT is HIGH with polling
+off. Persistent `rx-polling=1 irq-low=1` with no RX flags identifies a condition
+needing further INT/module/SPI investigation even when the UI has recovered.
+Then repeat under normal nine-unit traffic while OFF, checking fresh identities,
+telemetry, receive losses and command results before testing output current.
 
 Expected evidence is no increasing receive loss, no clock-invalid samples, a
 bounded ISR well below Timer0's 1,024 us overflow interval, responsive navigation,
