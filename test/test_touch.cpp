@@ -105,8 +105,19 @@ void gestures() {
   CHECK(!g.update(true,1,false,true,1900)); CHECK(!release(1920)); // Nor a single down sample.
 }
 
+struct BacklogCan : SimulatedCan {
+  uint8_t queued=0; unsigned served=0; bool replenish=false;
+  uint8_t receivePending() const override { return queued; }
+  bool receive(CanFrame& frame) override {
+    if (!queued) return SimulatedCan::receive(frame);
+    --queued; ++served; if(replenish) ++queued;
+    frame=protocol::request(1); frame.id=(frame.id & ~0x80UL)|1;
+    frame.data[0]=1; frame.data[1]=0x7f; frame.data[6]=0x78; // Fresh 30 C output temperature.
+    return true;
+  }
+};
 struct Rig {
-  SimulatedCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
+  BacklogCan can; PsuController controller; RamStorage bytes; MemoryManager memory;
   Rig():controller(can),memory(bytes) { can.reset(); CHECK(controller.configure(debugConfiguration(),true)==Result::Ok); CHECK(controller.begin()); }
   void step(uint32_t ms=20) { clockNow+=ms; controller.tick(clockNow); controller.serviceProtection(memory,clockNow); memory.stepSave(); controller.profileTick(memory); controller.serviceProtection(memory,clockNow); }
   void ready() {
@@ -157,9 +168,10 @@ void snapshot(const char* name,const UiFrame& frame) {
 }
 struct FakeDisplay : Display {
   UiFrame shown; uint8_t remaining=0; bool dimmed=false;
+  unsigned compositions=0;
   DisplayStats timers;
   bool begin() override { return true; }
-  void invalidate(bool = false) override { remaining=3; }
+  void invalidate(bool = false) override { remaining=3; ++compositions; }
   bool pending() const override { return remaining!=0; }
   void service(const UiFrame& f) override { shown=f; if(remaining) --remaining; }
   bool canDim() const override { return true; }
@@ -188,6 +200,42 @@ void drawingPriority() {
   appPaintCalls=0; appPaintDelay=1; app.tick();
   CHECK(appPaintCalls==1+ui::priorityRenderUs/1000);
   appDrawCells=255; appPaintDelay=0;
+}
+bool hasText(const UiFrame& f,const char* text);
+void receiveBacklogUi() {
+  Rig r; r.ready(); r.controller.alerts().acknowledgeAll();
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; wheel={}; ui.begin();
+  ui.tick(clockNow); ui.paint(); ui.paint(); CHECK(!ui.priorityDrawing());
+  auto compositions=display.compositions;
+  r.can.queued=15; r.can.replenish=true; clockNow+=ui::refreshMs;
+  for(unsigned n=0;n<10;++n) {
+    const auto received=r.can.served; ui.tick(++clockNow);
+    CHECK(r.can.served-received==12 && r.can.queued==15);
+    CHECK(display.compositions==compositions && !ui.priorityDrawing());
+  }
+  // An input-driven redraw still composes and drains arrivals after composition.
+  wheel={1,false,false}; const auto received=r.can.served; ui.tick(++clockNow);
+  CHECK(display.compositions==++compositions && r.can.served-received==24 && ui.priorityDrawing());
+  ui.paint(); ui.paint(); CHECK(!ui.priorityDrawing());
+  // Touch remains armed on an unchanged deferred scene, so opening a group works.
+  auto tick=[&]() { clockNow+=20; ui.tick(clockNow); };
+  for(unsigned n=0;n<3;++n) tick();
+  input={40*8,80*8,1000,true}; for(unsigned n=0;n<5;++n) tick();
+  input={}; for(unsigned n=0;n<8;++n) tick();
+  CHECK(hasText(display.shown,"PSU") && display.compositions>compositions);
+  compositions=display.compositions;
+  r.controller.alerts().event(AlertManager::Receive,AlertCode::ReceiveLoss,clockNow);
+  tick(); CHECK(display.compositions>compositions && hasText(display.shown,"Acknowledge"));
+  CHECK(!r.controller.alerts().at(AlertManager::Receive).acknowledged);
+  // Once pressure clears, a due periodic update is neither lost nor postponed
+  // by repeatedly resetting its last-draw timestamp during deferred ticks.
+  r.can.replenish=false; r.can.queued=0;
+  for(unsigned n=0;n<4;++n) tick();
+  compositions=display.compositions; clockNow+=ui::refreshMs; tick();
+  CHECK(display.compositions==compositions+1);
+  // Navigation and notification did not change configured targets.
+  CHECK(r.controller.configuration().current[0]==debugConfiguration().current[0]);
 }
 void layoutAndLocalUi() {
   Rig r; r.ready(); UiModel model(r.controller,r.memory); model.tick(clockNow); UiFrame frame;
@@ -617,6 +665,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); receiveBacklogUi(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

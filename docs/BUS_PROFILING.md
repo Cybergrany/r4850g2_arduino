@@ -4,6 +4,64 @@ These builds investigate startup, address negotiation, receive loss and fan mode
 changes. Profiling itself does not change the controller's charging policy. Use the
 same source revision for all captures and keep the original terminal logs.
 
+## Software queue pressure comparison
+
+The responsive nine-PSU soak still showed occasional software drops with the
+15-slot ring full, no hardware overflow, no IRQ yields and no invalid clocks.
+Whole-loop and control/UI phase maxima include receive processing and interrupts;
+they do not establish the interval during which the ring was unserviced.
+
+Safe-boundary receive passes now retain the ordinary four-frame allowance, but
+at eight queued frames permit up to twelve, stopping early at two remaining.
+Discovery/temperature checks still run after every four frames and any final
+partial batch. A continuous producer cannot turn this into an unbounded drain.
+The main controller's initial 32-frame ceiling, transport IRQ guard, SPI clocks,
+command deadlines and charging policy remain unchanged.
+
+Periodic UI composition waits for an empty receive queue. Wheel/touch handling,
+notifications, explicit redraws and already-started painting continue. RX is
+serviced before/after composition, never from inside a view. Under sustained
+pressure metrics can refresh later than the ordinary 500 ms cadence; navigation
+and acknowledgement do not wait for that periodic refresh.
+
+`diag bus` now includes:
+
+- `rx-service-gap-max-us`: lifetime maximum valid interval between calls to
+  transport `receive()`, including empty calls. This is a service-opportunity
+  interval, **not the age of a particular frame**. Invalid clock samples remain
+  visible in the existing counters and cannot poison this maximum.
+- `gap-ended-in`: foreground phase when that maximum interval ended.
+- `last-drop-in`: foreground phase captured when the latest valid frame was
+  rejected by the full software ring, even if the alert was displayed later.
+  `unknown` means no recorded context yet (including early boot).
+
+Labels are `control`, `storage`, `serial`, `ui-input`, `ui-compose`, `ui-paint` or
+`unknown`. They include boundary receive processing. A drop observed during UI
+work can follow backlog accumulated earlier; the maximum gap and latest drop
+can also be different events. These fields guide the next capture, not a claim
+that the named phase alone caused the loss. All remain sticky across serial
+reconnect and `diag ui reset`. Profile `queue_age_ms` still measures enqueue to
+dequeue separately; profile `rx_drop` provides the wider loss counter.
+
+Bench comparison, using the same nine-unit setup and firmware build profile:
+
+1. Cold boot with enable OFF. Run `watch off`, `raw off`, `diag bus`, `diag ui`
+   and `diag memory`; retain the complete startup capture.
+2. Leave the overview idle for at least twenty minutes, repeating those three
+   diagnostics every few minutes. Compare **growth** in software/hardware loss,
+   IRQ yields and invalid clocks, plus the new service-gap/drop context.
+3. Navigate groups, individual details and configuration/recovery screens. Type
+   `hello`, open an alert and acknowledge it. Confirm input remains responsive
+   and acknowledgement does not change participation/enable or clear protection.
+4. Compare during the previously authorized scoped-apply bench test. Keep INFO
+   and command results, readiness faults and the smallest memory watermark. If
+   loss recurs, repeat with the profiling build to correlate unit traffic and
+   queue age; ordinary phase maxima alone cannot identify its cause.
+
+The software regression demonstrates a bounded drain creating room for a second
+burst, preserves ACK/identity/protection/OFF handling, and checks input/alerts
+during deferred refresh. It does not establish zero loss or latency on hardware.
+
 ## Receive/timing patch comparison
 
 The MCP2515 adapter now owns reception: one interrupt reads a snapshot of at most

@@ -4,6 +4,67 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Bounded software-queue pressure handling (2026-11-13)
+
+Intermediate receive passes expand from four to at most twelve frames only when
+backlog reaches eight, stopping early with two remaining. Four-frame discovery
+and thermal checkpoints are retained. Optional periodic UI composition waits for
+an empty queue; input, notifications, explicit redraws and bounded painting
+remain active. Added safe boundaries bracket composition. No receive processing
+runs reentrantly inside a controller loop or a view's live references.
+
+Ordinary `diag bus` now reports actual receive-attempt gaps, the phase when the
+maximum gap ended, and the phase captured at the latest software-ring loss. These
+are distinct from phase/loop totals and from profile frame queue age. See the
+[bench comparison and interpretation](BUS_PROFILING.md#software-queue-pressure-comparison).
+
+Validation passed:
+
+- Ordinary host **3,371,301 checks**, profiled host **3,498,832**: bounded
+  continuous replenishment, low/high-pressure boundaries, room for a following
+  burst with nine identities, INFO/ACK behind telemetry, unchanged readiness
+  deadline, newer OFF versus a stale positive ACK, input-only overheating and
+  negotiation. A hot first four-frame batch remains latched when later frames
+  cool during the same extended pass.
+- Touch/simulator **1,351 checks**: repeated periodic deferral keeps input armed,
+  wheel and touch navigation redraw, a new alert remains actionable without
+  automatic acknowledgement, and periodic refresh resumes once the queue clears.
+- Production MCP2515/observer regressions: bounded IRQ/refill/held-LOW/re-arm,
+  FIFO, software/hardware loss, clock rollover/backstep and loss context captured
+  before the reporting phase. No larger ring or per-frame storage was added.
+- Production renderer at 500 kHz / 1 / 2 / 4 / 8 MHz, real wheel **19,652 checks**,
+  route-search budget, AVR format and bus-log parser checks. Layout/pixels and
+  generated preview scenes are unchanged.
+- All **22 Mega builds**, physical memory limits, three UI-debug isolation checks
+  and observer isolation. The actual wheel/profile ELF also passes the simavr
+  held-LOW interrupt regression; its clock, UART and TFT continue progressing.
+
+| Build | Flash bytes | Static RAM bytes | Static free bytes |
+|---|---:|---:|---:|
+| mega2560_wheel_alerts | 204192 | 7194 | 998 |
+| mega2560_wheel_profile | 211432 | 7337 | 855 |
+| mega2560_touch_wheel | 215056 | 7424 | 768 |
+| mega2560_serial_profile | 130428 | 5467 | 2725 |
+| mega2560_can_observer | 17282 | 1902 | 6290 |
+
+Ordinary production builds add **14 static bytes**; profile/observer builds add
+**five**, reusing their existing receive clock fields. Debug builds add three
+bytes. No additional scene, queue or configuration copy is introduced. The
+wheel/profile direct main-chain estimate remains 765 bytes; registered RX
+interrupt overlap remains about 60 bytes, leaving 30 bytes before outgoing
+argument/indirect-call uncertainty. The fullest touch+wheel source-reviewed
+runtime path remains 668 bytes; the previous 12-byte argument/virtual-call
+allowance and 60-byte IRQ leave an estimated **28 bytes**. The new receive path's
+228-byte direct chain does not become the peak. Existing source constraints
+about caller-owned EEPROM scratch still apply; raw unpruned paths must not be
+mistaken for reachable duplicate candidates.
+
+These margins are narrow estimates, not measured worst-case guarantees. Keep
+`diag memory` in the bench capture, including profile loads/saves, recovery,
+calibration and normal CAN traffic; investigate a near-zero watermark. The
+advisory 1 KiB policy remains, and software/simavr results are not PSU hardware
+timing or electrical-response proof.
+
 ## Idle CAN interrupt starvation guard (2026-11-13)
 
 The first hardware run of the preceding patch reported almost stalled UI/serial

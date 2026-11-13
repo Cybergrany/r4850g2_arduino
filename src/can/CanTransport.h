@@ -19,6 +19,11 @@ struct CanFrame {
   bool rtr;
 };
 enum class TransmitState : uint8_t { Idle, Pending, Sent, Failed };
+enum class ReceiveWork : uint8_t { Unknown, Control, Storage, Serial, UiInput, UiCompose, UiPaint };
+struct ReceiveServiceStatus {
+  uint32_t maxGapUs = 0; // Between receive attempts, not per-frame queue age.
+  ReceiveWork gapEndedIn = ReceiveWork::Unknown, lastDropIn = ReceiveWork::Unknown;
+};
 struct ReceiveInterruptStatus {
   uint16_t yields = 0;
   uint8_t flags = 0;
@@ -41,11 +46,15 @@ class CanTransport {
   virtual uint16_t hardwareOverflows() const { return 0; }
   virtual uint16_t receiveInterruptMaxUs() const { return 0; }
   virtual ReceiveInterruptStatus receiveInterruptStatus() const { return {}; }
+  virtual ReceiveServiceStatus receiveServiceStatus() const { return {}; }
+  void receiveWork(ReceiveWork work) { receiveWork_ = work; }
   // Consume recent loss independently of saturating diagnostic counters.
   virtual bool takeReceiveLoss() { return false; }
 #if PSU_BUS_PROFILE
   virtual void busReceiveStats(BusReceiveStats& stats) const { stats = {}; }
 #endif
   virtual ~CanTransport() = default;
+ protected:
+  volatile ReceiveWork receiveWork_ = ReceiveWork::Unknown;
 };
 }

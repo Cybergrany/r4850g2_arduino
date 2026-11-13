@@ -1,5 +1,6 @@
 #include "PsuController.h"
 #include "../config/Deployment.h"
+#include "../config/CanScheduling.h"
 #include <string.h>
 namespace psu {
 PsuController::PsuController(CanTransport& t) : transport_(t), config_(defaultConfiguration()) {}
@@ -617,6 +618,7 @@ void PsuController::restore(uint32_t now) {
   waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
 }
 void PsuController::tick(uint32_t now) {
+  receiveWork(ReceiveWork::Control);
   now_ = now;
   startupTick(now);
   if (!ready_) { thermalTick(now); alertTick(now); finishAvailability(now); return; }
@@ -624,14 +626,7 @@ void PsuController::tick(uint32_t now) {
   serviceTransmit(now);
   CanFrame f;
   for (uint8_t n = 0; n < 32 && transport_.receive(f); ++n) receive(f, now);
-#if PSU_BUS_PROFILE
-  const bool negotiating = discovery_.negotiating();
-#endif
-  discovery_.tick(now, staleMs());
-#if PSU_BUS_PROFILE
-  if (negotiating && !discovery_.negotiating()) busProfile_.note(BusEvent::Quiet,0,0,0,now);
-#endif
-  thermalTick(now);
+  updateReceived(now);
   controlTick(now);
   // Safe phase boundary: no control-loop references survive this receive pass.
   // Accept identity/setting replies and fresh temperatures before later jobs.
@@ -695,18 +690,29 @@ uint8_t PsuController::serviceReceive(uint32_t now) {
   if (!ready_) return 0;
   now_ = now;
   CanFrame frame; uint8_t received = 0;
-  while (received < 4 && transport_.receive(frame)) { receive(frame, now); ++received; }
-  if (received) {
-#if PSU_BUS_PROFILE
-    const bool negotiating = discovery_.negotiating();
-#endif
-    discovery_.tick(now, staleMs());
-#if PSU_BUS_PROFILE
-    if (negotiating && !discovery_.negotiating()) busProfile_.note(BusEvent::Quiet,0,0,0,now);
-#endif
-    thermalTick(now);
+  bool boosted = false;
+  while (received < canScheduling::burstFrames) {
+    const uint8_t pending = transport_.receivePending();
+    boosted |= pending >= canScheduling::highWater;
+    if (received >= canScheduling::normalFrames && (!boosted || pending <= canScheduling::lowWater)) break;
+    if (!transport_.receive(frame)) break;
+    receive(frame, now); ++received;
+    // Preserve the original four-frame protection checkpoint while releasing
+    // additional slots. A later cool reading cannot erase an earlier hot batch.
+    if (received % canScheduling::normalFrames == 0) updateReceived(now);
   }
+  if (received % canScheduling::normalFrames) updateReceived(now);
   return received;
+}
+void PsuController::updateReceived(uint32_t now) {
+#if PSU_BUS_PROFILE
+  const bool negotiating = discovery_.negotiating();
+#endif
+  discovery_.tick(now, staleMs());
+#if PSU_BUS_PROFILE
+  if (negotiating && !discovery_.negotiating()) busProfile_.note(BusEvent::Quiet,0,0,0,now);
+#endif
+  thermalTick(now);
 }
 Result PsuController::requestDescription(uint8_t address) {
   if (!address || address > 127) return Result::Invalid;

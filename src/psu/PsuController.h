@@ -65,6 +65,8 @@ class PsuController {
   // Bounded RX/protection service between drawing slices. No new setting or
   // read requests are dispatched; the normal tick owns command scheduling.
   uint8_t serviceReceive(uint32_t now);
+  bool receivePending() const { return transport_.receivePending() != 0; }
+  void receiveWork(ReceiveWork work) { transport_.receiveWork(work); }
   const Configuration& configuration() const { return config_; }
   Result configure(const Configuration& config, bool resumeSaved = false);
   Result setCount(uint8_t count);
@@ -173,6 +175,7 @@ class PsuController {
   uint16_t hardwareOverflows() const { return transport_.hardwareOverflows(); }
   uint16_t receiveInterruptMaxUs() const { return transport_.receiveInterruptMaxUs(); }
   ReceiveInterruptStatus receiveInterruptStatus() const { return transport_.receiveInterruptStatus(); }
+  ReceiveServiceStatus receiveServiceStatus() const { return transport_.receiveServiceStatus(); }
   uint16_t readFailures() const { return readFailures_; }
   uint32_t maxLoopUs() const { return maxLoopUs_; }
   void recordLoopTime(uint32_t us) { if (us > maxLoopUs_) maxLoopUs_ = us; }
@@ -238,6 +241,7 @@ class PsuController {
   void serviceTransmit(uint32_t now);
   void reconcileSessions(const Configuration& next);
   void receive(const CanFrame& frame, uint32_t now);
+  void updateReceived(uint32_t now);
   void advance(bool success);
   void beginReport(Operation operation, UnitMask requested, UnitMask recipients, UnitMask skipped = 0);
   void runJob(uint32_t now);

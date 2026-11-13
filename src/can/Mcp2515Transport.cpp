@@ -130,6 +130,7 @@ void Mcp2515Transport::receiveBuffer(uint8_t buffer) {
     ++profileDropped_;
 #endif
     receiveLoss_ = true;
+    lastDropIn_ = receiveWork_; // Capture at the loss, not later alert rendering.
     if (dropped_ != UINT8_MAX) ++dropped_;
     return;
   }
@@ -156,16 +157,23 @@ ReceiveInterruptStatus Mcp2515Transport::receiveInterruptStatus() const {
   result.pinLow = digitalRead(board::canInterrupt) == LOW;
   return result;
 }
+ReceiveServiceStatus Mcp2515Transport::receiveServiceStatus() const {
+  ReceiveServiceStatus result;
+  result.maxGapUs = maxReceiveGapUs_; result.gapEndedIn = gapEndedIn_; result.lastDropIn = lastDropIn_;
+  return result;
+}
 bool Mcp2515Transport::receive(CanFrame& frame) {
-#if PSU_BUS_PROFILE
   const uint32_t clock = micros();
   const uint32_t gap = receiveCalled_ ? timing::elapsed(lastReceiveCallUs_, clock) : 0;
-  if (gap != timing::invalid && gap > maxReceiveGapUs_) maxReceiveGapUs_ = gap;
+  if (gap != timing::invalid && gap > maxReceiveGapUs_) {
+    maxReceiveGapUs_ = gap; gapEndedIn_ = receiveWork_;
+  }
+#if PSU_BUS_PROFILE
   // Queue timestamps are modulo milliseconds. If service was absent for over
   // their range, mark the age as saturated rather than reporting a false small age.
   if (gap != timing::invalid && gap >= 65535000UL) maxQueueAgeMs_ = UINT16_MAX;
-  receiveCalled_ = true; lastReceiveCallUs_ = clock;
 #endif
+  receiveCalled_ = true; lastReceiveCallUs_ = clock;
   // Free two ring slots before reading another two-buffer snapshot. Never drop
   // queued frames merely to make progress after an interrupt has yielded.
   if (receivePolling_ && receivePending() < board::canReceiveSlots - 2) pollReceiveInterrupt();

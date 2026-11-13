@@ -29,12 +29,14 @@ int main() {
   for(unsigned n=0;n<15;++n) CAN.inject(valid);
   CanFrame negotiation={}; negotiation.id=0x1001107e; negotiation.length=8; negotiation.extended=true;
   negotiation.data[0]=0x30; negotiation.data[1]=1;
+  can.receiveWork(ReceiveWork::UiCompose);
   CAN.inject(negotiation); // Count negotiation even though the full queue drops it.
   for(unsigned n=0;n<300;++n) CAN.inject(valid);
   auto invalid=valid; invalid.extended=false; CAN.inject(invalid);
   invalid=valid; invalid.length=7; CAN.inject(invalid);
   invalid=valid; invalid.rtr=true; CAN.inject(invalid);
   invalid=valid; invalid.length=15; CAN.inject(invalid); // Malformed DLC never reads past eight bytes.
+  can.receiveWork(ReceiveWork::UiPaint); // Alert/diagnostic consumption is later.
   clockUs=100; clockMs=65540;
   for(unsigned n=0;n<15;++n) { assert(can.receive(f)); assert(f.id==valid.id); }
   assert(!can.receive(f));
@@ -42,6 +44,9 @@ int main() {
   assert(s.received==320 && s.dropped==301 && s.invalid==4 && s.negotiationFrames==1);
   assert(s.highWater==15 && s.maxQueueAgeMs==10 && s.maxServiceGapUs==201);
   assert(can.droppedFrames()==255 && can.takeReceiveLoss() && !can.takeReceiveLoss());
+  const auto diagnostics=can.receiveServiceStatus();
+  assert(diagnostics.maxGapUs==201 && diagnostics.gapEndedIn==ReceiveWork::UiPaint);
+  assert(diagnostics.lastDropIn==ReceiveWork::UiCompose); // Capture loss context, not its reporting phase.
   SPI.registers[0x2d]=0xa5; SPI.registers[0x1c]=23; SPI.registers[0x1d]=78;
   can.service(clockMs); can.busReceiveStats(s);
   assert(s.hardwareOverflows==1 && s.errorFlags==0x25 && s.txErrorCount==23 && s.rxErrorCount==78);
@@ -71,6 +76,7 @@ int main() {
   can.busReceiveStats(s); const auto maximum=s.maxServiceGapUs;
   clockUs-=500; assert(!can.receive(f)); can.busReceiveStats(s);
   assert(s.maxServiceGapUs==maximum && timing::diagnostics().invalidSamples==1);
+  assert(can.receiveServiceStatus().maxGapUs==maximum);
   assert(timing::diagnostics().maxBackstepUs==500);
   // Reproduce the idle-bus failure: INT stays LOW with no RX flags. Return to
   // foreground after exactly one ISR; no repeated interrupts can starve time,

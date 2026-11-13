@@ -26,6 +26,7 @@ class Mcp2515Transport : public CanTransport {
   uint16_t hardwareOverflows() const override { return hardwareOverflows_; }
   uint16_t receiveInterruptMaxUs() const override;
   ReceiveInterruptStatus receiveInterruptStatus() const override;
+  ReceiveServiceStatus receiveServiceStatus() const override;
   bool takeReceiveLoss() override;
 #if PSU_BUS_PROFILE
   void busReceiveStats(BusReceiveStats& stats) const override;
@@ -47,6 +48,10 @@ class Mcp2515Transport : public CanTransport {
   volatile uint8_t interruptFlags_ = 0;
   volatile bool receivePolling_ = false;
   uint16_t hardwareOverflows_ = 0;
+  uint32_t lastReceiveCallUs_ = 0, maxReceiveGapUs_ = 0;
+  ReceiveWork gapEndedIn_ = ReceiveWork::Unknown;
+  volatile ReceiveWork lastDropIn_ = ReceiveWork::Unknown;
+  bool receiveCalled_ = false;
 #if !PSU_CAN_OBSERVER
   mcp2515::Transmitter transmitter_;
 #endif
@@ -54,9 +59,7 @@ class Mcp2515Transport : public CanTransport {
   uint16_t arrived_[board::canReceiveSlots] = {};
   volatile uint32_t profileReceived_ = 0, profileDropped_ = 0, profileInvalid_ = 0;
   volatile uint16_t profileNegotiation_ = 0;
-  uint32_t lastReceiveCallUs_ = 0, maxReceiveGapUs_ = 0;
   uint16_t maxQueueAgeMs_ = 0;
-  bool receiveCalled_ = false;
   bool profileReady_ = false;
 #endif
 };

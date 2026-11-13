@@ -110,6 +110,7 @@ void Application::tick() {
   phaseTime(phaseMaxUs_[0], phaseStarted);
 #endif
   controller_.serviceReceive(millis());
+  controller_.receiveWork(ReceiveWork::Storage);
   controller_.serviceProtection(memory_, millis());
   memory_.stepSave();
   controller_.profileTick(memory_);
@@ -122,6 +123,7 @@ void Application::tick() {
 #endif
   controller_.serviceReceive(millis());
 #if PSU_ENABLE_SERIAL
+  controller_.receiveWork(ReceiveWork::Serial);
   console_.tick(millis());
 #if PSU_ENABLE_DISPLAY
   phaseTime(phaseMaxUs_[2], phaseStarted);

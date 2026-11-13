@@ -1,6 +1,7 @@
 #include "config_helpers.h"
 #include "config/ChargerConfig.h"
 #include "config/ConsoleConfig.h"
+#include "config/CanScheduling.h"
 #include "config/Deployment.h"
 #include "can/Mcp2515Transmit.h"
 #include "psu/PsuController.h"
@@ -996,34 +997,84 @@ void receiveScheduling() {
   r.can.incoming.clear(); r.can.reportBacklog = true;
   r.can.replacement = data(1,0x7f,30*1024);
   // A sustained burst keeps the 15-slot ring occupied while main processes it.
-  // Bounded drains yield with five frames left; don't solicit another burst.
+  // Even continuously replenished pressure has an explicit per-boundary cap;
+  // don't solicit another burst while replies remain queued.
   for(unsigned n=0;n<15;++n) r.can.incoming.push_back(r.can.replacement);
-  r.can.replenish = 30; r.c.scan(); const auto before=r.can.sent.size();
+  r.can.replenish = 100; r.c.scan(); const auto before=r.can.sent.size();
   r.c.tick(++r.now);
-  CHECK(r.can.replenish==0 && r.can.incoming.size()==5);
+  CHECK(r.can.replenish==100-32-2*canScheduling::burstFrames && r.can.incoming.size()==15);
   CHECK(r.can.sent.size()==before);
-  CHECK(r.c.serviceReceive(++r.now)==4 && r.can.incoming.size()==1);
-  CHECK(r.c.serviceReceive(++r.now)==1 && r.can.incoming.empty());
+  CHECK(r.c.serviceReceive(++r.now)==canScheduling::burstFrames && r.can.incoming.size()==15);
+  r.can.replenish=0;
+  CHECK(r.c.serviceReceive(++r.now)==canScheduling::burstFrames && r.can.incoming.size()==3);
+  CHECK(r.c.serviceReceive(++r.now)==3 && r.can.incoming.empty());
+  for(unsigned n=0;n<7;++n) r.can.incoming.push_back(r.can.replacement);
+  CHECK(r.c.serviceReceive(++r.now)==canScheduling::normalFrames && r.can.incoming.size()==3);
+  CHECK(r.c.serviceReceive(++r.now)==3);
+  for(unsigned n=0;n<9;++n) r.can.incoming.push_back(r.can.replacement);
+  CHECK(r.c.serviceReceive(++r.now)==7 && r.can.incoming.size()==canScheduling::lowWater);
+  CHECK(r.c.serviceReceive(++r.now)==2);
   r.c.tick(r.now+=100); CHECK(r.can.sent.size()>before);
+
+  // Leave enough space for the next eight-frame arrival during optional work.
+  // A fixed four-frame pass leaves eleven occupied and fails this regression.
+  Rig burst(installation(9)); burst.can.reportBacklog=true; burst.can.incoming.clear();
+  for(uint8_t n=0;n<15;++n) burst.can.incoming.push_back(data(n%9+1,0x7f,30*1024));
+  CHECK(burst.c.serviceReceive(++burst.now)==12);
+  for(uint8_t n=0;n<8;++n) {
+    CHECK(burst.can.incoming.size()<15);
+    burst.can.incoming.push_back(data(n%9+1,0x7f,30*1024));
+  }
 
   // INFO and setting ACKs behind telemetry survive the bounded phase drains.
   // The production identity/ACK checks, not cached identity, authorize the write.
   Rig identityBurst(installation(1)); identityBurst.answerIdentityQueries=false;
+  identityBurst.can.reportBacklog=true;
   CHECK(identityBurst.c.queue(identityBurst.c.preview(Operation::Voltage,-1,identityBurst.now),false,identityBurst.now)==Result::Ok);
   identityBurst.step(250,false,false);
   CHECK(identityBurst.c.report().units[0].state==CommandState::VerifyingIdentity);
   for(unsigned n=0;n<13;++n) identityBurst.can.incoming.push_back(data(1,0x7f,30*1024));
   identityBurst.can.incoming.push_back(info(1,identity(1)));
-  for(unsigned n=0;n<4;++n) CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)>0);
+  CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)==12);
+  CHECK(identityBurst.c.report().units[0].state==CommandState::VerifyingIdentity);
+  CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)==2);
   identityBurst.c.tick(identityBurst.now+=250);
   CHECK(identityBurst.c.report().units[0].state==CommandState::Waiting);
   const auto writes=identityBurst.can.writes(); CHECK(writes.size()==1);
   for(unsigned n=0;n<13;++n) identityBurst.can.incoming.push_back(data(1,0x7f,30*1024));
   identityBurst.can.incoming.push_back(ack(writes.back()));
-  for(unsigned n=0;n<4;++n) CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)>0);
+  CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)==12);
+  CHECK(identityBurst.c.report().units[0].state==CommandState::Waiting);
+  CHECK(identityBurst.c.serviceReceive(identityBurst.now+=10)==2);
   CHECK(identityBurst.c.report().units[0].state==CommandState::Success);
   // No phase-service path itself sends settings or changes command deadlines.
   CHECK(identityBurst.can.writes().size()==1);
+
+  // Nine-unit burst: hot input telemetry, a new unbound identity and a
+  // negotiation announcement take the same production receive path. Service
+  // does not issue a setting or extend the operation's readiness deadline.
+  Rig protection(installation(9)); protection.c.setAutoResume(false); protection.step(5000);
+  protection.can.reportBacklog=true; protection.can.incoming.clear();
+  protection.can.incoming.push_back(info(20,identity(20)));
+  for(uint8_t i=1;i<=9;++i) protection.can.incoming.push_back(data(i,0x80,76*1024));
+  CanFrame negotiate={}; negotiate.id=0x1001107e; negotiate.length=8; negotiate.extended=true;
+  negotiate.data[0]=0x30; negotiate.data[1]=1;
+  protection.can.incoming.push_back(negotiate);
+  const auto commands=protection.can.sent.size();
+  CHECK(protection.c.serviceReceive(++protection.now)==9);
+  CHECK(protection.c.discovery().identity(identity(20),protection.now));
+  CHECK(protection.c.configuration().thermalStop==ThermalStop::Temperature);
+  while(protection.c.receivePending()) CHECK(protection.c.serviceReceive(++protection.now)<=canScheduling::burstFrames);
+  CHECK(protection.c.configuration().thermalStop==ThermalStop::Temperature && !protection.c.enableControl().enabled());
+  CHECK(protection.c.discovery().negotiating());
+  CHECK(protection.can.sent.size()==commands);
+  protection.c.tick(++protection.now); CHECK(protection.can.sent.size()==commands);
+
+  Rig hotBatch(installation(1)); hotBatch.can.reportBacklog=true; hotBatch.can.incoming.clear();
+  for(uint8_t n=0;n<12;++n) hotBatch.can.incoming.push_back(data(1,0x80,(n==3 ? 76 : 30)*1024));
+  CHECK(hotBatch.c.serviceReceive(++hotBatch.now)==10); // Ends at the low-water target.
+  CHECK(hotBatch.c.configuration().thermalStop==ThermalStop::Temperature);
+  CHECK(!hotBatch.c.enableControl().enabled()); // Four-frame checkpoint retained inside the boost.
 }
 void cooperativeCan() {
   // A transport still arbitrating does not prevent telemetry processing or

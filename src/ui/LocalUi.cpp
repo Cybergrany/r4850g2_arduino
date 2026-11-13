@@ -46,6 +46,7 @@ void LocalUi::storageTick() {
 }
 void LocalUi::tick(uint32_t now) {
   if (!available_) return;
+  controller_.receiveWork(ReceiveWork::UiInput);
   const auto oldPage=model_.page(); const auto oldNotice=model_.notice();
   const auto oldAlert=model_.alertDisplayId();
   model_.notifications(now); model_.tick(now);
@@ -97,19 +98,27 @@ void LocalUi::tick(uint32_t now) {
 #endif
   }
   if (oldNotice!=model_.notice()) dirty_=true;
+  // No UI/controller references survive this boundary. Input and notices have
+  // run even when telemetry composition must wait for the receive backlog.
+  controller_.serviceReceive(millis()); now = millis();
   // Finish a new page before enabling touch. Periodic telemetry cannot keep
   // restarting its scan and leave the page permanently unarmed.
-  if (dirty_ || (pageReady_ && !display_.pending() && uint32_t(now-lastDraw_)>=ui::refreshMs)) {
+  if (dirty_ || (pageReady_ && !display_.pending() && !controller_.receivePending() && uint32_t(now-lastDraw_)>=ui::refreshMs)) {
+    controller_.receiveWork(ReceiveWork::UiCompose);
     UiView::compose(frame_,model_,controller_,now);
 #if PSU_ENABLE_TOUCH
     drawTouch();
 #endif
     display_.invalidate(dirty_); lastDraw_=now; dirty_=false;
+    // Compose is synchronous; service arrivals after it, never reentrantly
+    // inside a view holding references or making presentation decisions.
+    controller_.serviceReceive(millis());
   }
   paint();
 }
 void LocalUi::paint() {
   if (!available_) return;
+  controller_.receiveWork(ReceiveWork::UiPaint);
   display_.service(frame_);
   if (!display_.pending()) pageReady_=true;
 }

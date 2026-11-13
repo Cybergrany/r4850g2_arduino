@@ -308,9 +308,12 @@ display ID disables local controls while serial/CAN remain available.
 
 Foreground navigation, initial pages and notifications can use an additional
 **8 ms cooperative drawing window**, capped at twelve extra service calls.
-Between every slice, `PsuController::serviceReceive` processes at most four
-queued frames, expires discovery state and runs temperature protection when
-frames arrived. It sends no requests or settings; normal `tick` retains command
+Between every slice, `PsuController::serviceReceive` normally processes at most
+four queued frames. At eight queued frames it permits up to twelve, stopping
+early once only two remain. The bound is in `config/CanScheduling.h`; continuous
+arrivals cannot extend a pass indefinitely. Discovery expiry and temperature
+protection still run after each four processed frames and the final partial
+batch. It sends no requests or settings; normal `tick` retains command
 scheduling and its deadlines. ACKs, identity changes and readiness observations
 use the usual receive handlers. CHG_ALLOW and an OFF PSU_ACTIVE request reach
 GPIOs during this window. RX interrupts remain enabled between the normal short
@@ -321,6 +324,22 @@ interrupts can overrun it. This is a rendering-priority window, not a CAN blacko
 or hard real-time guarantee. Periodic telemetry keeps one render service per
 main loop, and composition waits for an existing periodic paint to finish.
 The UI phase maximum includes the CAN/protection work performed during drawing.
+
+`LocalUi` services RX after input/notification handling and after synchronous
+composition, without calling receive handlers from inside a view holding
+controller references. Periodic composition also waits for an empty RX queue;
+deferral leaves the existing scene/input targets armed and does not advance the
+refresh timestamp. Input-driven changes, alerts, recovery/results and calibration
+retain their normal redraw paths. Already-started painting continues in bounded
+slices. No additional frame/configuration buffers are allocated.
+
+`diag bus` measures the maximum interval between transport `receive()` attempts,
+including empty attempts. This is neither whole-loop/phase duration nor per-frame
+queue age. A byte-sized foreground phase marks control/storage/serial/UI work;
+the adapter records the phase when the maximum interval ends and captures the
+phase at the latest software drop. Phase labels include adjacent receive drains
+and do not prove which earlier work caused the backlog. The profiler retains its
+independent per-frame `queue_age_ms` measurement.
 
 Text composition fills contiguous character/style ranges, preserving neighbouring packed colours and truncation. The group-current maximum is calculated exactly from
 each member's ceiling and allocation rank (`ceiling * member_count + rank`),

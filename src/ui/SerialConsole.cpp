@@ -915,18 +915,24 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" irq-low=")); io_.print(interrupt.pinLow);
       io_.print(F(" flags-at-yield=0x")); io_.println(interrupt.flags, HEX);
     } else if (row_ == 4) {
+      const auto receive = controller_.receiveServiceStatus();
+      io_.print(F("rx-service-gap-max-us=")); io_.print(receive.maxGapUs);
+      io_.print(F(" gap-ended-in=")); io_.print(receiveWorkName(receive.gapEndedIn));
+      io_.print(F(" last-drop-in=")); io_.println(receiveWorkName(receive.lastDropIn));
+      io_.println(F("Gap is between receive attempts, not frame age. Phase includes boundary drains."));
+    } else if (row_ == 5) {
       const auto bus = controller_.busStatus(now);
       io_.print(F("configured slots=")); io_.print(bus.configured); io_.print(F(" responding addresses=")); io_.print(bus.responding);
       io_.print(F(" verified identities=")); io_.print(bus.verified); io_.print(F(" broadcasting=")); io_.println(bus.broadcasting);
-    } else if (row_ < Discovery::capacity + 5) {
-      const auto& d = controller_.discovery().device(row_ - 5);
+    } else if (row_ < Discovery::capacity + 6) {
+      const auto& d = controller_.discovery().device(row_ - 6);
       if (d.occupied) {
         io_.print(F("addr=")); io_.print(d.address); io_.print(F(" id=")); printIdentity(d.identity);
         io_.print(F(" verified=")); io_.print(d.verified(now)); io_.print(F(" conflict=")); io_.print(d.conflict);
         io_.print(F(" response-age-ms=")); io_.print(uint32_t(now - d.lastSeen));
         io_.print(F(" broadcast-age-ms=")); if (d.telemetry.broadcastSeen) io_.println(uint32_t(now - d.telemetry.lastBroadcast)); else io_.println(F("none"));
       }
-    } else if (row_ == Discovery::capacity + 5) printControl(now);
+    } else if (row_ == Discovery::capacity + 6) printControl(now);
     else { io_.println(F("Addresses are temporary; count responders, not the highest address. Unbound devices receive no setting writes.")); view_ = View::None; }
     ++row_;
   } else if (view_ == View::Telemetry) {

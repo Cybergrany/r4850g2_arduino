@@ -86,12 +86,17 @@ void readinessFrameOrdering() {
 }
 void readinessAckOrdering() {
   Rig r(zeroHoldConfiguration()); startOutput(r);
+  const auto since=r.c.unitControl(0).outputSince;
   const auto command = r.can.writes().back(); CHECK(command.data[1] == protocol::OnlineCurrent);
   r.dropRegister = protocol::OnlineCurrent; r.noBroadcast = 1; r.step(100);
+  r.can.reportBacklog=true;
+  for(uint8_t n=0;n<11;++n) r.can.incoming.push_back(data(1,0x7f,30*1024));
   // These frames precede the ACK in one drain. None may count toward its run.
   r.can.incoming.push_back(broadcast(1)); r.can.incoming.push_back(broadcast(1));
-  r.can.incoming.push_back(ack(command)); r.c.tick(r.now);
+  r.can.incoming.push_back(ack(command));
+  CHECK(r.c.serviceReceive(r.now)==12 && r.c.serviceReceive(r.now)==2);
   CHECK(r.c.currentSynchronized(0) && r.c.readinessStatus(0,r.now).frames == 0);
+  CHECK(r.c.unitControl(0).outputSince==since); // Boosted service never renews the deadline.
   r.can.incoming.push_back(broadcast(1)); r.c.tick(r.now);
   CHECK(r.c.readinessStatus(0,r.now).frames == 1);
   r.can.incoming.push_back(ack(command)); r.c.tick(r.now); // Duplicate ACK cannot restart the timer.
@@ -110,6 +115,15 @@ void readinessAckOrdering() {
   CHECK(rejected.c.report().units[0].state == CommandState::Rejected);
   CHECK(!rejected.c.currentSynchronized(0) && rejected.c.readinessStatus(0,rejected.now).frames == 0);
   rejected.step(15000); CHECK(rejected.c.unitControl(0).fault == CommandState::ReadinessTimeout);
+
+  Rig off(zeroHoldConfiguration()); startOutput(off);
+  const auto old=off.can.writes().back(); off.can.incoming.clear(); off.can.reportBacklog=true;
+  CHECK(off.c.setAutoResume(false)==Result::Ok);
+  for(uint8_t n=0;n<13;++n) off.can.incoming.push_back(data(1,0x7f,30*1024));
+  off.can.incoming.push_back(ack(old)); const auto writes=off.can.writes().size();
+  CHECK(off.c.serviceReceive(++off.now)==12 && off.c.serviceReceive(++off.now)==2);
+  CHECK(!off.c.enableControl().enabled() && !off.c.psuActive(off.now) && !off.c.currentSynchronized(0));
+  CHECK(off.can.writes().size()==writes); // Stale positive ACK cannot undo newer OFF.
 }
 void readinessDeadlineAndLatch() {
   Rig r(zeroHoldConfiguration()); startOutput(r); const auto since = r.now; r.step();

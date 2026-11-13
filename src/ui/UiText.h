@@ -2,6 +2,14 @@
 #include <Arduino.h>
 #include "../psu/PsuController.h"
 namespace psu {
+inline const __FlashStringHelper* receiveWorkName(ReceiveWork work) {
+  switch (work) {
+    case ReceiveWork::Control: return F("control"); case ReceiveWork::Storage: return F("storage");
+    case ReceiveWork::Serial: return F("serial"); case ReceiveWork::UiInput: return F("ui-input");
+    case ReceiveWork::UiCompose: return F("ui-compose"); case ReceiveWork::UiPaint: return F("ui-paint");
+    default: return F("unknown");
+  }
+}
 inline const __FlashStringHelper* operationName(Operation op) {
   switch (op) {
     case Operation::All: return F("scoped-voltage-and-current");
