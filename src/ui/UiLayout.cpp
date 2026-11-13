@@ -155,6 +155,10 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
   }
   return n;
 }
+UiAction UiLayout::buttonAction(const UiModel& m, uint8_t index) {
+  UiButton buttons[capacity]; const auto count = UiLayout::buttons(m, buttons);
+  return index < count ? buttons[index].action : UiAction{};
+}
 uint8_t UiLayout::hit(const UiModel& m,int16_t x,int16_t y,UiAction& action) {
   UiButton b[capacity]; const auto n=buttons(m,b);
   for (uint8_t i=0;i<n;++i) if (x>=4+b[i].col*12 && x<4+(b[i].col+b[i].width)*12 &&

@@ -114,12 +114,15 @@ void UiModel::queue(uint32_t now, bool confirmed) {
   const auto r = c_.queue(plan_, confirmed, now);
   if (r != Result::Ok) {
     result(r == Result::Changed ? UiNotice::Changed : r == Result::Busy ? UiNotice::Busy : UiNotice::Blocked,
-           c_.preview(plan_.scope, plan_.fields, now, plan_.partial).blocker);
+           planBlocker(now));
     return;
   }
   operationSequence_ = c_.report().sequence; operationRevision_ = c_.configurationRevision();
   succeeded_ = failed_ = 0;
   result(UiNotice::Applying);
+}
+Issue UiModel::planBlocker(uint32_t now) const {
+  return c_.preview(plan_.scope, plan_.fields, now, plan_.partial).blocker;
 }
 void UiModel::commit(uint32_t now) {
   if (c_.configurationRevision() != editRevision_) { result(UiNotice::Changed); return; }
@@ -133,17 +136,26 @@ void UiModel::commit(uint32_t now) {
   const auto r = c_.set(scope_, fields, edit_);
   if (r != Result::Ok) { result(r == Result::Busy ? UiNotice::Busy : UiNotice::Blocked, Issue::Invalid); return; }
   editing_ = false; editRevision_ = c_.configurationRevision();
+  if (prepareApply(fields, now)) queue(now, false);
+}
+bool UiModel::prepareApply(SettingFields fields, uint32_t now) {
   plan_ = c_.preview(scope_, fields, now);
   if (plan_.blocker != Issue::None) {
     if (field_ == UiField::Current && plan_.missing) {
       const auto partial = c_.preview(scope_, SettingFields::Current, now, true);
       if (partial.blocker == Issue::None) {
-        plan_ = partial; confirmYes_ = false; notice_ = UiNotice::None; page_ = UiPage::Confirm; return;
+        plan_ = partial; confirmYes_ = false; notice_ = UiNotice::None; page_ = UiPage::Confirm; return false;
       }
     }
-    result(UiNotice::Blocked, plan_.blocker); return;
+    result(UiNotice::Blocked, plan_.blocker); return false;
   }
-  queue(now, false);
+  return true;
+}
+UiAction UiModel::buttonInput(UiInput event, uint8_t& selected, bool clamp) const {
+  UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
+  if (event.delta) selected = move(selected, event.delta, count);
+  if (clamp && selected >= count) selected = 0;
+  return event.clicked && count ? buttons[selected % count].action : UiAction{};
 }
 void UiModel::input(UiInput event, uint32_t now) {
   uiNow_ = now;
@@ -154,9 +166,8 @@ void UiModel::input(UiInput event, uint32_t now) {
       if (event.delta) alertSelection_ = move(alertSelection_, event.delta, c_.alerts().count());
       if (event.clicked) action({ActionKind::OpenAlert, alertSelection_}, now);
     } else {
-      UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
-      if (event.delta) alertSelection_ = move(alertSelection_, event.delta, count);
-      if (event.clicked && count) action(buttons[alertSelection_ % count].action, now);
+      const auto selected = buttonInput(event, alertSelection_);
+      if (selected.kind != ActionKind::None) action(selected, now);
     }
     return;
   }
@@ -165,10 +176,9 @@ void UiModel::input(UiInput event, uint32_t now) {
   if (recovering() && event.held) { action({ActionKind::Back}, now); return; }
   if (page_ == UiPage::Recovery || page_ == UiPage::RecoveryConfirm ||
       (recovering() && page_ == UiPage::Detail) || (page_ == UiPage::Result && !working() && recoveryLink().kind != RecoveryKind::None)) {
-    UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
     if (event.held) { action({ActionKind::Back}, now); return; }
-    if (event.delta) recovery_.selection = move(recovery_.selection, event.delta, count);
-    if (event.clicked && count) action(buttons[recovery_.selection % count].action, now);
+    const auto selected = buttonInput(event, recovery_.selection);
+    if (selected.kind != ActionKind::None) action(selected, now);
     return;
   }
   if (page_ == UiPage::AvailabilityOverview || page_ == UiPage::AvailabilityUnits) {
@@ -193,11 +203,9 @@ void UiModel::input(UiInput event, uint32_t now) {
   }
   if (availabilityPage() || page_ == UiPage::Tools) {
     if (event.held) { action({ActionKind::Back}, now); return; }
-    UiButton buttons[UiLayout::capacity]; const uint8_t count = UiLayout::buttons(*this, buttons);
     auto& selected = page_ == UiPage::Tools ? toolSelection_ : availabilitySelection_;
-    if (event.delta) selected = move(selected, event.delta, count);
-    if (selected >= count) selected = 0;
-    if (event.clicked && count) action(buttons[selected].action, now);
+    const auto chosen = buttonInput(event, selected, true);
+    if (chosen.kind != ActionKind::None) action(chosen, now);
     return;
   }
   if (page_ == UiPage::Tools || page_ == UiPage::Scenarios) {

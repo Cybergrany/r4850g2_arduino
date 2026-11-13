@@ -102,7 +102,7 @@ class UiModel {
  private:
   void openRecovery(uint32_t now, RecoveryLink link = {RecoveryKind::None, PSU_MAX_UNITS});
   __attribute__((noinline)) bool recoveryAction(UiAction action, uint32_t now);
-  void returnFromRecovery();
+  __attribute__((noinline)) void returnFromRecovery();
   void reviewRecovery(RecoveryCommand command, uint32_t now);
   bool recoveryFresh(uint32_t now) const;
   void recoveryTick(uint32_t now);
@@ -135,6 +135,11 @@ class UiModel {
   uint8_t alertOverlay_ = 0, alertSelection_ = 0;
   void refresh(uint32_t now);
   void commit(uint32_t now);
+  // Release button/preview arrays before dispatching an action or validating
+  // another plan. These boundaries must survive AVR link-time optimization.
+  __attribute__((noinline)) UiAction buttonInput(UiInput input, uint8_t& selection, bool clamp = false) const;
+  __attribute__((noinline)) bool prepareApply(SettingFields fields, uint32_t now);
+  __attribute__((noinline)) Issue planBlocker(uint32_t now) const;
   // Keep mutually exclusive navigation/profile temporaries off each other's
   // AVR stack paths, including when LTO is enabled.
   __attribute__((noinline)) bool settingsAction(UiAction action, uint32_t now);
@@ -143,7 +148,7 @@ class UiModel {
   void openSettings(SettingScope scope);
   __attribute__((noinline)) void reviewProfile(uint32_t now);
   __attribute__((noinline)) void confirmProfile(uint32_t now);
-  void chooseProfile(uint8_t slot, uint32_t now);
+  __attribute__((noinline)) void chooseProfile(uint8_t slot, uint32_t now);
   void settingsTick(uint32_t now);
   void queue(uint32_t now, bool confirmed);
   void result(UiNotice notice, Issue issue = Issue::None);

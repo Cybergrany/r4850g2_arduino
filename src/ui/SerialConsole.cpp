@@ -320,29 +320,7 @@ void SerialConsole::execute() {
   if (!PSU_STRCMP(args[0], "reconcile") && argc == 1) {
     controller_.reconcile(); io_.println(F("Reconciliation restarted; active apply cancelled; authorized profile retained. diag control")); return;
   }
-  if (!PSU_STRCMP(args[0], "startup")) {
-    availabilityConfirmation_ = confirmation_ = false;
-    if (argc == 2 && !PSU_STRCMP(args[1], "stop")) {
-      reply(controller_.hardStop()); startView(View::Startup); return;
-    }
-    if (argc == 2 && !PSU_STRCMP(args[1], "status")) { startView(View::Startup); return; }
-    const bool probe = argc == 2 && !PSU_STRCMP(args[1], "probe");
-    if (!probe && (argc < 3 || argc > 4 || (argc == 4 && PSU_STRCMP(args[3], "remember")))) { reply(Result::Invalid); return; }
-    AvailabilityAction action = AvailabilityAction::Probe;
-    if (!probe) {
-      if (!PSU_STRCMP(args[1], "accept")) action = AvailabilityAction::Accept;
-      else if (!PSU_STRCMP(args[1], "exclude")) action = AvailabilityAction::Exclude;
-      else if (!PSU_STRCMP(args[1], "include")) action = AvailabilityAction::Include;
-      else if (!PSU_STRCMP(args[1], "require")) action = AvailabilityAction::Require;
-      else { reply(Result::Invalid); return; }
-      const int8_t g = controller_.groupIndex(args[2]);
-      if (g >= 0) mask = controller_.configuration().groups[g].members;
-      else if (!selection(args[2], controller_.count(), mask)) { reply(Result::Invalid); return; }
-    }
-    availabilityPlan_ = controller_.previewAvailability(action, mask, argc == 4, now_);
-    availabilityConfirmation_ = availabilityPlan_.blocker == Issue::None;
-    startView(View::AvailabilityPlan); return;
-  }
+  if (!PSU_STRCMP(args[0], "startup")) { startupCommand(argc, args); return; }
   if (!PSU_STRCMP(args[0], "fan")) {
     if (argc != 3 || (PSU_STRCMP(args[2], "auto") && PSU_STRCMP(args[2], "max") && PSU_STRCMP(args[2], "policy"))) {
       io_.println(F("ERR fan <all|GROUP|slots> <auto|max|policy>; slots: 1 or 1,3-4")); return;
@@ -372,25 +350,7 @@ void SerialConsole::execute() {
   }
   if (!PSU_STRCMP(args[0], "interval") && argc == 2 && integer(args[1], limits::maxPollMs, n)) { reply(controller_.setPollInterval(n)); return; }
   if ((!PSU_STRCMP(args[0], "apply") || !PSU_STRCMP(args[0], "preview") || !PSU_STRCMP(args[0], "offline")) && argc >= 2 && argc <= 3) {
-    const bool offline = !PSU_STRCMP(args[0], "offline"), partial = argc == 3 && !PSU_STRCMP(args[2], "partial");
-    SettingScope scope; SettingFields fields = SettingFields::Both;
-    if (!PSU_STRCMP(args[1], "voltage")) fields = SettingFields::Voltage;
-    else if (!parseScope(args[1], scope)) { reply(Result::Invalid); return; }
-    if (argc == 3) {
-      if (!PSU_STRCMP(args[2], "voltage")) fields = SettingFields::Voltage;
-      else if (!PSU_STRCMP(args[2], "current") || partial) fields = SettingFields::Current;
-      else { reply(Result::Invalid); return; }
-    }
-    if (offline && (argc != 2 || PSU_STRCMP(args[1], "all"))) { reply(Result::Invalid); return; }
-    plan_ = offline ? controller_.preview(Operation::Offline, -1, now_) : controller_.preview(scope, fields, now_, partial);
-    confirmation_ = availabilityConfirmation_ = false; profilePending_ = 0;
-    if (!PSU_STRCMP(args[0], "preview")) io_.println(F("PREVIEW ONLY; no settings sent"));
-    else {
-      const auto r = controller_.queue(plan_, false, now_); reply(r);
-      if (r == Result::Ok) { io_.println(plan_.prepared ? F("Prepared for next ON; current remains OFF; save to persist") : F("QUEUED; acknowledgements/results determine success")); wasBusy_ = controller_.busy(); }
-      if (r == Result::ConfirmRequired) confirmation_ = true;
-    }
-    startView(View::Plan); return;
+    applyCommand(argc, args); return;
   }
   if (!PSU_STRCMP(args[0], "confirm") && argc == 2) {
     if (profilePending_ && (!PSU_STRCMP(args[1], "yes") || !PSU_STRCMP(args[1], "no"))) { profileConfirm(!PSU_STRCMP(args[1], "yes")); return; }
@@ -432,6 +392,51 @@ void SerialConsole::execute() {
     return;
   }
   io_.println(F("ERR syntax; help. set current GROUP1 55 / set voltage psu:1 54"));
+}
+void SerialConsole::startupCommand(uint8_t argc, char** args) {
+  UnitMask mask = 0;
+  availabilityConfirmation_ = confirmation_ = false;
+  if (argc == 2 && !PSU_STRCMP(args[1], "stop")) {
+    reply(controller_.hardStop()); startView(View::Startup); return;
+  }
+  if (argc == 2 && !PSU_STRCMP(args[1], "status")) { startView(View::Startup); return; }
+  const bool probe = argc == 2 && !PSU_STRCMP(args[1], "probe");
+  if (!probe && (argc < 3 || argc > 4 || (argc == 4 && PSU_STRCMP(args[3], "remember")))) { reply(Result::Invalid); return; }
+  AvailabilityAction action = AvailabilityAction::Probe;
+  if (!probe) {
+    if (!PSU_STRCMP(args[1], "accept")) action = AvailabilityAction::Accept;
+    else if (!PSU_STRCMP(args[1], "exclude")) action = AvailabilityAction::Exclude;
+    else if (!PSU_STRCMP(args[1], "include")) action = AvailabilityAction::Include;
+    else if (!PSU_STRCMP(args[1], "require")) action = AvailabilityAction::Require;
+    else { reply(Result::Invalid); return; }
+    const int8_t g = controller_.groupIndex(args[2]);
+    if (g >= 0) mask = controller_.configuration().groups[g].members;
+    else if (!selection(args[2], controller_.count(), mask)) { reply(Result::Invalid); return; }
+  }
+  availabilityPlan_ = controller_.previewAvailability(action, mask, argc == 4, now_);
+  availabilityConfirmation_ = availabilityPlan_.blocker == Issue::None;
+  startView(View::AvailabilityPlan); return;
+}
+void SerialConsole::applyCommand(uint8_t argc, char** args) {
+  const bool offline = !PSU_STRCMP(args[0], "offline"), partial = argc == 3 && !PSU_STRCMP(args[2], "partial");
+  SettingScope scope; SettingFields fields = SettingFields::Both;
+  if (!PSU_STRCMP(args[1], "voltage")) fields = SettingFields::Voltage;
+  else if (!parseScope(args[1], scope)) { reply(Result::Invalid); return; }
+  if (argc == 3) {
+    if (!PSU_STRCMP(args[2], "voltage")) fields = SettingFields::Voltage;
+    else if (!PSU_STRCMP(args[2], "current") || partial) fields = SettingFields::Current;
+    else { reply(Result::Invalid); return; }
+  }
+  if (offline && (argc != 2 || PSU_STRCMP(args[1], "all"))) { reply(Result::Invalid); return; }
+  plan_ = offline ? controller_.preview(Operation::Offline, -1, now_) : controller_.preview(scope, fields, now_, partial);
+  confirmation_ = availabilityConfirmation_ = false; profilePending_ = 0;
+  if (!PSU_STRCMP(args[0], "preview")) io_.println(F("PREVIEW ONLY; no settings sent"));
+  else {
+    const auto r = controller_.queue(plan_, false, now_); reply(r);
+    if (r == Result::Ok) { io_.println(plan_.prepared ? F("Prepared for next ON; current remains OFF; save to persist") : F("QUEUED; acknowledgements/results determine success")); wasBusy_ = controller_.busy(); }
+    if (r == Result::ConfirmRequired) confirmation_ = true;
+  }
+  startView(View::Plan); return;
 }
 void SerialConsole::storageCommand(const char* command) {
     if (controller_.busy()) { reply(Result::Busy); return; }

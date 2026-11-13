@@ -103,9 +103,8 @@ void UiModel::settingsInput(UiInput event, uint32_t now) {
     }
     return;
   }
-  UiButton buttons[UiLayout::capacity]; const auto count = UiLayout::buttons(*this, buttons);
-  if (event.delta) settingsSelection_ = moved(settingsSelection_, event.delta, count);
-  if (count && event.clicked) action(buttons[settingsSelection_ % count].action, now);
+  const auto selected = buttonInput(event, settingsSelection_);
+  if (selected.kind != ActionKind::None) action(selected, now);
 }
 bool UiModel::settingsAction(UiAction a, uint32_t now) {
   if (a.kind == ActionKind::SettingsChoice) {

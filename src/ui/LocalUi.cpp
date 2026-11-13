@@ -157,12 +157,12 @@ void LocalUi::touchTick(uint32_t now) {
   if (raw_.down && mapped) UiLayout::hit(model_,p.x,p.y,action);
   const auto result=gesture_.update(raw_.down,hit_,action.kind==ActionKind::Adjust,pageReady_ && calibration_.valid,now);
   if (result) {
-    UiButton b[UiLayout::capacity]; const auto n=UiLayout::buttons(model_,b);
-    if (result<=n) {
-      if (model_.page()!=UiPage::TouchDebug || b[result-1].action.kind==ActionKind::Back) model_.action(b[result-1].action,now);
+    const auto selected = UiLayout::buttonAction(model_, result-1);
+    if (selected.kind != ActionKind::None) {
+      if (model_.page()!=UiPage::TouchDebug || selected.kind==ActionKind::Back) model_.action(selected,now);
       // Paging changes targets even if the page enum stays the same. Keep
       // held +/- repeats live, but gate navigation until its new content lands.
-      if (b[result-1].action.kind!=ActionKind::Adjust) { pageReady_=false; gesture_.cancel(); }
+      if (selected.kind!=ActionKind::Adjust) { pageReady_=false; gesture_.cancel(); }
       dirty_=true;
     }
   }

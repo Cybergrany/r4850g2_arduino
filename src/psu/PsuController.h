@@ -69,12 +69,14 @@ class PsuController {
   void receiveWork(ReceiveWork work) { transport_.receiveWork(work); }
   const Configuration& configuration() const { return config_; }
   Result configure(const Configuration& config, bool resumeSaved = false);
-  Result setCount(uint8_t count);
-  Result setGroup(const char* name, UnitMask members);
-  Result removeGroup(uint8_t group);
-  Result bind(uint8_t slot, const Identity& identity, uint16_t ratedCurrent, uint32_t now);
+  // Topology edits validate a configuration snapshot. Keep that frame out of
+  // the general serial dispatcher and its unrelated save/profile paths.
+  __attribute__((noinline)) Result setCount(uint8_t count);
+  __attribute__((noinline)) Result setGroup(const char* name, UnitMask members);
+  __attribute__((noinline)) Result removeGroup(uint8_t group);
+  __attribute__((noinline)) Result bind(uint8_t slot, const Identity& identity, uint16_t ratedCurrent, uint32_t now);
   // Also permits releasing a retained inactive slot. This does not turn off a PSU.
-  Result unbind(uint8_t slot);
+  __attribute__((noinline)) Result unbind(uint8_t slot);
   Result setVoltage(uint16_t voltage, bool offline = false);
   // Online value is PER PSU; offline retains its explicitly separate group total.
   Result setCurrent(uint8_t group, uint16_t current, bool offline = false);
@@ -195,8 +197,10 @@ class PsuController {
 #if PSU_BUS_PROFILE
   BusProfile busProfile_;
 #endif
-  __attribute__((noinline)) Result applyProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
+  __attribute__((noinline)) Result applyProfile(const ProfileReview& review, uint32_t now);
   __attribute__((noinline)) Result stageProfile(MemoryManager& memory, const ProfileReview& review);
+  __attribute__((noinline)) Issue profileBlocker(const uint16_t* voltage, const uint16_t* current,
+      UnitMask included, bool inclusion, uint32_t now) const;
   static constexpr int8_t unknownRoute = -4, unboundRoute = -3;
   // Keep the common lookup small: no variable-bit loop or out-of-line register
   // save on each metric/status query. Resolving and validation stay in one path.

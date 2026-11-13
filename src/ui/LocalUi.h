@@ -28,8 +28,8 @@ class LocalUi {
  private:
   void request(uint32_t now);
 #if PSU_ENABLE_TOUCH
-  void touchTick(uint32_t now);
-  void drawTouch();
+  __attribute__((noinline)) void touchTick(uint32_t now);
+  __attribute__((noinline)) void drawTouch();
   Xpt2046Input touchInput_;
   TouchCalibration calibration_;
   CalibrationWizard wizard_;

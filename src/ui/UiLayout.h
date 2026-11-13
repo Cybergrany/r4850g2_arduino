@@ -11,7 +11,8 @@ struct UiButton {
 class UiLayout {
  public:
   static uint8_t buttons(const UiModel& model, UiButton* output);
-  static uint8_t hit(const UiModel& model, int16_t x, int16_t y, UiAction& action);
+  __attribute__((noinline)) static UiAction buttonAction(const UiModel& model, uint8_t index);
+  __attribute__((noinline)) static uint8_t hit(const UiModel& model, int16_t x, int16_t y, UiAction& action);
   static void controls(UiFrame& frame, const UiModel& model);
   static void extras(UiFrame& frame, const UiModel& model, const PsuController& controller, uint32_t now);
   static uint8_t settingsButtons(const UiModel& model, UiButton* output);

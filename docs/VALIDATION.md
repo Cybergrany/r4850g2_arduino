@@ -41,34 +41,83 @@ Validation passed:
 
 | Build | Flash bytes | Static RAM bytes | Static free bytes |
 |---|---:|---:|---:|
-| mega2560_wheel_alerts | 204192 | 7194 | 998 |
-| mega2560_wheel_profile | 211432 | 7337 | 855 |
-| mega2560_touch_wheel | 215056 | 7424 | 768 |
-| mega2560_serial_profile | 130428 | 5467 | 2725 |
+| mega2560_wheel_alerts | 204864 | 7194 | 998 |
+| mega2560_wheel_profile | 212044 | 7337 | 855 |
+| mega2560_touch_wheel | 215818 | 7424 | 768 |
+| mega2560_serial_profile | 130222 | 5467 | 2725 |
 | mega2560_can_observer | 17282 | 1902 | 6290 |
 
 Ordinary production builds add **14 static bytes**; profile/observer builds add
 **five**, reusing their existing receive clock fields. Debug builds add three
 bytes. No additional scene, queue or configuration copy is introduced.
 
-**Stack-audit correction:** the previous 765/668-byte peak estimates and positive
-RAM margins below are superseded. `analyze_avr_stack.py` accepted partial
+**Stack-audit correction:** all earlier stack estimates and positive margins in
+this document, including the 765/668-byte figures, are superseded by this audit.
+`analyze_avr_stack.py` accepted partial
 hexadecimal operands: the touch UI's `0x6A` allocation was read as `0x6`, hiding
 100 bytes; other frames were affected too. The parser now accepts either case
 and rejects malformed operands instead of accepting a prefix. Regressions in
 `python3 test/test_avr_stack.py` exercise the production parser.
 
-A separate rebuild of `d65554a`, compared with `10b4d72`, finds the same existing
+A separate rebuild of `d65554a`, compared with `10b4d72`, found the same existing
 serial participation-save direct chain in both: 978 bytes for wheel/profile and
-993 for touch/wheel, before interrupt/argument allowances. These exceed the
-available RAM in the largest builds and need reduced overlapping frames. The
-new complete `main -> Application::tick -> LocalUi::tick -> serviceReceive`
-paths are 315 bytes (wheel/profile), 431 (touch/wheel) and 318 (wheel/alerts),
-including saved registers and three-byte calls; those paths fit with the
-60-byte registered RX-interrupt allowance. The receive change did not create
-the existing serial/save concentration. Caller-owned EEPROM scratch still
-excludes the raw graph's duplicate candidate during production loading, but
-ordinary saves legitimately validate a separate candidate.
+993 for touch/wheel, before interrupt/argument allowances. The actual
+`SerialConsole::execute` frame was 450 bytes and `validCurrentRecord` held a
+267-byte configuration plus saved registers. Touch-driven apply also retained
+unrelated button/calibration and multiple preview arrays. These were reachable
+exhaustion risks, not a consequence of the added receive calls.
+
+The follow-up keeps topology snapshots, serial startup/apply/profile parsing,
+calibration solving and recovery-return copies in separate non-inlined helpers.
+Button arrays are released before dispatching their actions. UI/profile plan
+preparation and error previews finish before another plan or EEPROM validation
+is allocated. Validation order, mutations, confirmations and save ownership are
+unchanged; no shared scratch, extra static state or packing was introduced.
+
+The corrected production runtime comparison below includes `main`, saved
+registers and three-byte calls. Margins subtract a further **60 bytes** for the
+registered CAN interrupt and **12 bytes** for outgoing arguments and virtual
+EEPROM reads. Negative historical margins identify the risk that prompted the
+fix; these are not measurements of a particular previous bench failure.
+
+| Build | d65554a free / direct peak / margin | 10b4d72 free / direct peak / margin | After stack fix free / direct peak / margin |
+|---|---:|---:|---:|
+| wheel_alerts | 1012 / 978 / -38 | 998 / 978 / -52 | 998 / 641 / **285** |
+| wheel_profile | 860 / 978 / -190 | 855 / 978 / -195 | 855 / 643 / **140** |
+| touch_wheel | 782 / 993 / -283 | 768 / 993 / -297 | 768 / 657 / **39** |
+
+The final largest direct runtime path is profile-detail composition:
+`main -> Application::tick -> LocalUi::tick -> UiView::compose -> UiLayout::extras
+-> MemoryManager::profileTargets -> newestProfile -> read32 -> read16`.
+In touch/wheel, complete serial-command, protection-migration and boot paths are
+603, 558 and 520 bytes respectively. Boot dispatch can only enter calibration;
+it cannot follow the raw call graph into profile/application actions.
+Production `loadCandidate` and migrated protection pass caller-owned scratch,
+so the raw graph's nested `validCurrentRecord` candidate is unreachable there.
+Ordinary saves legitimately validate a separate candidate and remain included.
+
+The final complete `main -> Application::tick -> LocalUi::tick -> serviceReceive`
+paths are **315 / 334 / 318 bytes** for wheel/profile, touch/wheel and wheel/alerts.
+The thermal/discovery branch is deepest. Actual transport receive and serial
+frame-observer callbacks have direct chains of 46 and 26 bytes and do not exceed
+it; their arguments fit registers. CAN IRQ overlap is 38 bytes in the registered
+handler plus 16 in the external-interrupt wrapper, a three-byte indirect call
+and the three-byte hardware return address. Encoder/Timer0/UART handlers are
+smaller and do not enable interrupt nesting. EEPROM's actual read implementation
+has no local frame; the allowance covers its indirect call and the extra outgoing
+arguments on profile reads. The serial extension only exposes diagnostics,
+calibration and touch-debug navigation in production, not profile/apply actions.
+No reachable allocating `new`/`malloc` path was found.
+
+The final 22 builds, host/profiled-host, touch, real wheel, renderer, receive,
+route-budget, format, parser and debug/observer-isolation checks above were rerun
+after the stack changes. The actual wheel/profile ELF passes
+`python3 tools/test_avr_interrupt_guard.py --simavr-prefix /tmp/r4850-simavr/usr`:
+one IRQ entry under held LOW, progressing UART/TFT, and no invalid clock samples.
+Reproduce the disassembly audit with `python3 tools/analyze_avr_stack.py
+.pio/build/mega2560_touch_wheel/firmware.elf` (and the wheel/profile and wheel/alerts
+ELFs); apply only the documented production argument/boot constraints when
+reviewing its deliberately unpruned output.
 
 These are source/disassembly estimates, not measured worst-case guarantees. Keep
 `diag memory` in the bench capture, including profile loads/saves, recovery,

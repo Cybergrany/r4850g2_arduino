@@ -28,7 +28,9 @@ enum class CalibrationState : uint8_t { Idle, Collecting, Ready, Failed };
 class CalibrationWizard {
  public:
   void begin(uint32_t now);
-  void sample(TouchSample sample, uint32_t now);
+  // The solver's temporary coefficients must finish before a touch gesture
+  // dispatches a profile/save action from LocalUi::touchTick.
+  __attribute__((noinline)) void sample(TouchSample sample, uint32_t now);
   void cancel() { state_ = CalibrationState::Idle; }
   CalibrationState state() const { return state_; }
   uint8_t targetIndex() const { return target_; }

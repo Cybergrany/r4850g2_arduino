@@ -24,8 +24,12 @@ class SerialConsole {
   enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile };
   __attribute__((noinline)) void storageCommand(const char* command);
   __attribute__((noinline)) void restoreCommand(bool defaults);
-  bool profileCommand(char* line);
-  void profileConfirm(bool yes);
+  // LTO must not keep mutually exclusive preview/profile temporaries alive
+  // while a later command validates or saves an EEPROM configuration.
+  __attribute__((noinline)) void startupCommand(uint8_t argc, char** args);
+  __attribute__((noinline)) void applyCommand(uint8_t argc, char** args);
+  __attribute__((noinline)) bool profileCommand(char* line);
+  __attribute__((noinline)) void profileConfirm(bool yes);
   void profileRow();
 #if PSU_BUS_PROFILE
   __attribute__((noinline)) void busProfileRow(uint32_t now, bool summary);
@@ -50,7 +54,7 @@ class SerialConsole {
   uint32_t lastAlertBroadcast_ = 0, alertInterval_ = console::alertIntervalMs;
   uint16_t controlNotice_ = 0xffff;
   uint32_t lastStatus_ = 0;
-  void execute();
+  __attribute__((noinline)) void execute();
   void resetSession();
   void beginOutput();
   void prompt();

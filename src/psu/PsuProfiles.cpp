@@ -13,13 +13,19 @@ ProfileReview PsuController::previewProfile(MemoryManager& memory, uint8_t slot,
   if (r.storage != StorageResult::Ok) return r;
   if (inclusion && !info.hasInclusion) { r.storage = StorageResult::InvalidConfig; return r; }
   if (!inclusion) r.included = participants();
+  r.blocker = profileBlocker(volts, amps, r.included, inclusion, now);
+  return r;
+}
+Issue PsuController::profileBlocker(const uint16_t* volts, const uint16_t* amps,
+    UnitMask included, bool inclusion, uint32_t now) const {
+  // These plan temporaries are needed after EEPROM validation, not while its
+  // record buffer is on the stack. Keep the two stages in separate frames.
   if (inclusion) {
-    const auto participation = previewParticipation(membersMask(count()), membersMask(count()) & UnitMask(~r.included), true, now);
-    if (participation.blocker != Issue::None) { r.blocker = participation.blocker; return r; }
+    const auto participation = previewParticipation(membersMask(count()), membersMask(count()) & UnitMask(~included), true, now);
+    if (participation.blocker != Issue::None) return participation.blocker;
   }
   const auto plan = preview({}, SettingFields::Both, now, false, volts, amps);
-  r.blocker = plan.blocker;
-  return r;
+  return plan.blocker;
 }
 Result PsuController::loadProfile(MemoryManager& memory, const ProfileReview& r, uint32_t now) {
   if (busy() || availabilitySaving() || memory.saving()) return Result::Busy;
@@ -28,12 +34,12 @@ Result PsuController::loadProfile(MemoryManager& memory, const ProfileReview& r,
   const auto fresh = previewProfile(memory, r.slot, r.restoreInclusion, now);
   if (fresh.storage != StorageResult::Ok || fresh.blocker != Issue::None) return Result::Blocked;
   if (fresh.generation != r.generation || fresh.included != r.included) return Result::Changed;
-  return applyProfile(memory, r, now);
-}
-Result PsuController::applyProfile(MemoryManager& memory, const ProfileReview& r, uint32_t now) {
   // Release the temporary target arrays before preview/queue allocate plans.
   const auto staged = stageProfile(memory, r);
   if (staged != Result::Ok) return staged;
+  return applyProfile(r, now);
+}
+Result PsuController::applyProfile(const ProfileReview& r, uint32_t now) {
   const auto plan = preview({}, SettingFields::Both, now);
   const auto result = queue(plan, false, now);
   if (result != Result::Ok) return result;
