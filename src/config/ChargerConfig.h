@@ -35,7 +35,7 @@ struct SettingScope {
 };
 enum class SettingFields : uint8_t { Voltage = 1, Current = 2, Both = 3 };
 inline bool includes(SettingFields fields, SettingFields field) { return uint8_t(fields) & uint8_t(field); }
-struct SettingSummary { uint16_t minimum, maximum; bool custom; };
+struct SettingSummary { uint16_t minimum, maximum; };
 // Separate from drafts: only an explicitly queued online apply authorizes these.
 struct OperatingProfile {
   uint16_t voltage[PSU_MAX_UNITS];
@@ -64,6 +64,7 @@ bool sameName(const char* a, const char* b);
 UnitMask membersMask(uint8_t count);
 uint8_t population(UnitMask mask);
 int8_t groupFor(const Configuration& config, uint8_t slot);
+// Legacy totals / PSU offline defaults only. Online settings are per PSU.
 // Deterministic rounding: the first remainder members receive one extra centiamp.
 uint16_t allocation(UnitMask members, uint16_t total, uint8_t slot);
 uint16_t groupCurrent(const Configuration& config, uint8_t group);

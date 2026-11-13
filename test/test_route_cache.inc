@@ -96,8 +96,8 @@ void drawingReceiveService() {
 }
 
 void exactGroupRange() {
-  // Check the fast bound against the independent allocation/validation path,
-  // including sparse memberships and every rank for the limiting PSU.
+  // Check the per-PSU bound against validation,
+  // including sparse memberships and every position for the limiting PSU.
   for (uint8_t n=1; n<=PSU_MAX_UNITS; ++n) {
     auto cfg = installation(PSU_MAX_UNITS); cfg.groups[0].members=0; draftGroupCurrent(cfg, 0, 0);
     for (uint8_t k=0; k<n; ++k) cfg.groups[0].members |= 1U << ((2*k)%PSU_MAX_UNITS);

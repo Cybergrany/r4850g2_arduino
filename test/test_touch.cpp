@@ -277,7 +277,7 @@ void layoutAndLocalUi() {
   tap(230,216); CHECK(!ui.editing());
   for(int i=0;i<400;++i) tick();
   Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok);
-  CHECK(groupCurrent(saved, 0)==old+100);
+  CHECK(groupCurrent(saved, 0)==old+100*population(saved.groups[0].members));
   CHECK(r.controller.report().failed==0 && r.controller.report().succeeded==7);
   snapshot("touch-saved",display.shown);
   // Actual touch hit boxes: whole-source acceptance, verified save and rejoin.
@@ -612,7 +612,7 @@ void applicationScenarios() {
   command("save"); tick(300);
   if (Serial.output.find("SIM RAM: EEPROM OK")==std::string::npos) throw std::runtime_error("Save console output: "+Serial.output);
   command("set current GROUP1 40"); command("ui-debug restart"); tick(1000);
-  command("config"); tick(100); CHECK(Serial.output.find("total A=35.00")!=std::string::npos);
+  command("config"); tick(100); CHECK(Serial.output.find("total A=105.00")!=std::string::npos);
   command("ui-debug reset"); tick(1000); command("config"); tick(100);
   CHECK(Serial.output.find("total A=30.00")!=std::string::npos);
   // Saved configurations need not authorize every fixture unit. Restart must
@@ -644,7 +644,7 @@ void applicationScenarios() {
   command("diag startup"); tick(150);
   CHECK(Serial.output.find("excluded=4,5")!=std::string::npos);
   command("diag psu 4"); tick(100);
-  CHECK(Serial.output.find("authorized A=13.00")!=std::string::npos && Serial.output.find("held-at-zero-awake")!=std::string::npos);
+  CHECK(Serial.output.find("authorized A=26.00")!=std::string::npos && Serial.output.find("held-at-zero-awake")!=std::string::npos);
   command("autoresume off"); tick(1200);
   command("startup include GROUP2 remember"); tick(100); CHECK(Serial.output.find("ARE YOU SURE?")!=std::string::npos);
   command("confirm yes"); tick(600); command("autoresume on"); tick(600);

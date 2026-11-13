@@ -3,6 +3,13 @@
 See [scoped settings and profiles](PROFILES.md) for `set`, `preview`, `apply`,
 `profiles`, `profile save/load/show`, optional participation and `diag memory`.
 
+Normal `set current all|GROUP|psu:N A` now sets **A on each selected PSU**.
+For example, `set current GROUP1 5` with three members stages 5 A each (15 A
+configured total). This changes the meaning of existing group/global command
+scripts; it does not convert values already saved in EEPROM or named profiles.
+Use `preview` before `apply`. The separate advanced `set offline-current`
+command retains its group-total meaning.
+
 For `diag startup`, whole-group/individual absence acceptance, remembered
 exceptions, returned-unit inclusion, commissioning probe and immediate AC stop,
 see [STARTUP.md](STARTUP.md). `startup accept/exclude/include/require GROUP|slots

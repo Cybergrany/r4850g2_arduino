@@ -50,7 +50,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::VoltageUnsynced: return F("PSU voltage not synchronized; apply target voltage or both");
     case Issue::DeploymentMismatch: return F("EEPROM deployment differs; review config, then defaults");
     case Issue::Busy: return F("operation in progress"); case Issue::Invalid: return F("invalid operation or CAN not initialized");
-    case Issue::Capacity: return F("per-PSU current share exceeds capability");
+    case Issue::Capacity: return F("per-PSU current limit exceeds capability");
     case Issue::Disabled: return F("disabled by effective enable control; diag control; autoresume on or switch edge to enable");
     case Issue::Reconciling: return F("reconciling zero/fan/voltage/wake; wait and inspect diag control");
     case Issue::ControlFault: return F("control fault latched; diag control/psu; correct cause then reconcile");

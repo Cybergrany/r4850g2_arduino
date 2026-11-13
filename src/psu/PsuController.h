@@ -33,7 +33,7 @@ struct BusStatus { uint8_t configured, responding, verified, broadcasting; };
 struct CurrentCheck {
   Issue issue;
   uint8_t slot;
-  uint16_t share, maximum;
+  uint16_t requested, maximum;
 };
 struct ControlStatus { Activity activity; Issue blocker; uint8_t slot; };
 struct ProfileReview {
@@ -76,11 +76,12 @@ class PsuController {
   // Also permits releasing a retained inactive slot. This does not turn off a PSU.
   Result unbind(uint8_t slot);
   Result setVoltage(uint16_t voltage, bool offline = false);
-  Result setCurrent(uint8_t group, uint16_t total, bool offline = false);
+  // Online value is PER PSU; offline retains its explicitly separate group total.
+  Result setCurrent(uint8_t group, uint16_t current, bool offline = false);
   Result set(SettingScope scope, SettingFields field, uint16_t value);
   uint16_t settingMaximum(SettingScope scope, SettingFields field) const;
-  CurrentCheck checkCurrent(uint8_t group, uint16_t total) const;
-  // Exact maximum accepted by checkCurrent, including unequal ratings/rounding.
+  CurrentCheck checkCurrent(uint8_t group, uint16_t perPsu) const;
+  // Lowest existing per-PSU limit in the selected group.
   uint16_t groupCurrentMaximum(uint8_t group) const;
   uint32_t configurationRevision() const { return revision_; }
   Result setAutoResume(bool enabled);

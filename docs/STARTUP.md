@@ -230,10 +230,10 @@ units are temperature-checked again. See [PROFILES.md](PROFILES.md) and
 
 ## Current intent, ACKs and refresh
 
-For two configured members, `set current GROUP2 55` still means 27.50 A each.
-`apply GROUP2` authorizes the latest shares for excluded members too, but sends
+For two configured members, `set current GROUP2 5` means 5 A each (10 A total).
+`apply GROUP2` authorizes the latest limits for excluded members too, but sends
 no positive current to them before inclusion. One participant still receives
-27.50 A, not 55 A. With none participating, apply updates pending intent and
+5 A; the absent unit's limit is never added to it. With none participating, apply updates pending intent and
 reports zero recipients/zero hardware successes. Voltage follows each PSU's scoped target.
 
 At low priority, volatile V/I settings are refreshed approximately every

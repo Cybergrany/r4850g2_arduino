@@ -192,7 +192,7 @@ A missing member does not prevent reachable units from staying awake at zero
 for cooling. Without an explicit absence acceptance, it still blocks initial
 charging and automatic current restoration. Accepted identities stay excluded,
 including on return, until separately included after reconciliation.
-Existing healthy online units keep their shares when another unit disappears;
+Existing healthy online units keep their limits when another unit disappears;
 no load is redistributed. A confirmed `apply GROUP1 partial` remains limited to
 already reconciled online recipients and cannot bypass initial charging checks.
 

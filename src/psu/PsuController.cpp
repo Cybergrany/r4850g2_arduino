@@ -121,32 +121,34 @@ Result PsuController::setVoltage(uint16_t v, bool offline) {
   if (v < limits::minOfflineVoltage || v > limits::maxVoltage) return Result::Invalid;
   config_.offlineVoltage = v; ++revision_; return Result::Ok;
 }
-Result PsuController::setCurrent(uint8_t g, uint16_t total, bool offline) {
-  if (!offline) return set({ScopeKind::Group, g}, SettingFields::Current, total);
+Result PsuController::setCurrent(uint8_t g, uint16_t current, bool offline) {
+  if (!offline) return set({ScopeKind::Group, g}, SettingFields::Current, current);
   if (busy() || availabilitySaving()) return Result::Busy;
-  if (checkCurrent(g, total).issue != Issue::None) return Result::Invalid;
-  config_.groups[g].offlineCurrent = total; ++revision_; return Result::Ok;
+  // PSU fallback defaults retain the old group-total representation and command.
+  if (g >= limits::maxGroups || !config_.groups[g].members) return Result::Invalid;
+  for (uint8_t i = 0; i < count(); ++i) if (config_.groups[g].members & (1U << i))
+    if (!allowedCurrent(allocation(config_.groups[g].members, current, i), config_.units[i].ratedCurrent)) return Result::Invalid;
+  config_.groups[g].offlineCurrent = current; ++revision_; return Result::Ok;
 }
-CurrentCheck PsuController::checkCurrent(uint8_t g, uint16_t total) const {
+CurrentCheck PsuController::checkCurrent(uint8_t g, uint16_t perPsu) const {
   CurrentCheck result = {};
   if (g >= limits::maxGroups || !config_.groups[g].members) { result.issue = Issue::Invalid; return result; }
   for (uint8_t i = 0; i < count(); ++i) if (config_.groups[g].members & (1U << i)) {
     const uint16_t maximum = currentMaximum(config_.units[i].ratedCurrent);
-    const uint16_t share = allocation(config_.groups[g].members, total, i);
-    if (share > maximum) return {Issue::Capacity, i, share, maximum};
+    if (perPsu > maximum) return {Issue::Capacity, i, perPsu, maximum};
   }
   return result;
 }
 uint16_t PsuController::settingMaximum(SettingScope scope, SettingFields field) const {
-  if (!scopeMembers(config_, scope)) return 0;
+  const auto members = scopeMembers(config_, scope);
+  if (!members) return 0;
   if (field == SettingFields::Voltage) return limits::maxVoltage;
-  if (scope.kind == ScopeKind::Unit) return currentMaximum(config_.units[scope.index].ratedCurrent);
-  if (scope.kind == ScopeKind::Group) return groupCurrentMaximum(scope.index);
-  uint16_t maximum = UINT16_MAX; UnitMask assigned = 0;
-  for (uint8_t g = 0; g < limits::maxGroups; ++g) if (config_.groups[g].members) {
-    assigned |= config_.groups[g].members; const uint16_t m = groupCurrentMaximum(g); if (m < maximum) maximum = m;
+  uint16_t maximum = UINT16_MAX;
+  for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
+    const auto bound = currentMaximum(config_.units[i].ratedCurrent);
+    if (bound < maximum) maximum = bound;
   }
-  return assigned == membersMask(count()) ? maximum : 0;
+  return maximum;
 }
 Result PsuController::set(SettingScope scope, SettingFields field, uint16_t value) {
   if (busy() || availabilitySaving()) return Result::Busy;
@@ -155,36 +157,18 @@ Result PsuController::set(SettingScope scope, SettingFields field, uint16_t valu
   if (field == SettingFields::Voltage) {
     if (value < limits::minVoltage || value > limits::maxVoltage) return Result::Invalid;
   } else {
-    if (scope.kind == ScopeKind::Unit) { if (!allowedCurrent(value, config_.units[scope.index].ratedCurrent)) return Result::Invalid; }
-    else {
-      UnitMask assigned = 0;
-      for (uint8_t g = 0; g < limits::maxGroups; ++g) if (config_.groups[g].members & members) {
-        assigned |= config_.groups[g].members;
-        if (checkCurrent(g, value).issue != Issue::None) return Result::Invalid;
-      }
-      if (assigned != members) return Result::Invalid;
-    }
+    for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i))
+      if (!allowedCurrent(value, config_.units[i].ratedCurrent)) return Result::Invalid;
   }
   // Validation is complete; mutate only the requested fields, without a full snapshot.
   for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
     if (field == SettingFields::Voltage) config_.voltage[i] = value;
-    else if (scope.kind == ScopeKind::Unit) config_.current[i] = value;
-    else config_.current[i] = allocation(config_.groups[groupFor(config_, i)].members, value, i);
+    else config_.current[i] = value;
   }
   ++revision_; return Result::Ok;
 }
 uint16_t PsuController::groupCurrentMaximum(uint8_t group) const {
-  if (group >= limits::maxGroups || !config_.groups[group].members) return 0;
-  const auto members = config_.groups[group].members;
-  const uint8_t n = population(members); uint8_t rank = 0;
-  uint16_t maximum = uint16_t(n) * limits::maxCurrent;
-  // At total q*n+r, rank k receives q+(k<r). Its exact largest allowed total
-  // is cap*n+k. Take the smallest member bound, including rounding remainders.
-  for (uint8_t i = 0; i < count(); ++i) if (members & (1U << i)) {
-    const uint16_t bound = currentMaximum(config_.units[i].ratedCurrent) * n + rank++;
-    if (bound < maximum) maximum = bound;
-  }
-  return maximum;
+  return settingMaximum({ScopeKind::Group, group}, SettingFields::Current);
 }
 void PsuController::reconcileSessions(const Configuration& next) {
   // This small snapshot follows stable identities through a load/reorder;

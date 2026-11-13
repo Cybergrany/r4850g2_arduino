@@ -52,7 +52,7 @@ void serialAlertCadence() {
   text=sample(1000); CHECK(broadcasts(text)==1 && text.find("active acknowledged:")!=std::string::npos);
   // No asynchronous summary interrupts a partial command or a requested report.
   t.input("set current GROUP1 ",false); CHECK(!broadcasts(sample(1000)));
-  text=t.input("1\n"); CHECK(groupCurrent(r.c.configuration(), 0)==100);
+  text=t.input("1\n"); CHECK(groupCurrent(r.c.configuration(), 0)==200);
   CHECK(text.find("OK")<text.find("ALERTS uptime-ms="));
   r.now+=1000; text=t.input("diag psu 1\n");
   CHECK(text.find("authorized/effective/acknowledged A=")<text.find("ALERTS uptime-ms="));
@@ -81,7 +81,7 @@ void serialAlertStorm() {
     }
   };
   tick(3000,0); CHECK(t.io.output.empty() && !t.io.available());
-  tick(5000,3); CHECK(groupCurrent(r.c.configuration(), 0)==1200);
+  tick(5000,3); CHECK(groupCurrent(r.c.configuration(), 0)==9600);
   CHECK(broadcasts(t.io.output)>0 && broadcasts(t.io.output)<=5);
   CHECK(t.io.output.find("ALERTS changed")==std::string::npos);
   CHECK(t.io.output.find("PSU 8 GROUP1")!=std::string::npos);

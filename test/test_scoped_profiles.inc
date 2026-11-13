@@ -6,21 +6,22 @@ void scopedSettings() {
   Rig r(cfg,false,false); r.finish();
   const SettingScope global, group(ScopeKind::Group,0), unit(ScopeKind::Unit,1);
   CHECK(r.c.set(global,SettingFields::Current,5001)==Result::Ok);
-  CHECK(r.c.configuration().current[0]==2501 && r.c.configuration().current[1]==2500 && r.c.configuration().current[2]==5001);
+  CHECK(r.c.configuration().current[0]==5001 && r.c.configuration().current[1]==5001 && r.c.configuration().current[2]==5001);
   CHECK(r.c.set(global,SettingFields::Voltage,5500)==Result::Ok);
   CHECK(r.c.set(group,SettingFields::Voltage,5600)==Result::Ok);
   CHECK(r.c.set(unit,SettingFields::Voltage,5700)==Result::Ok);
   CHECK(r.c.configuration().voltage[0]==5600 && r.c.configuration().voltage[1]==5700 && r.c.configuration().voltage[2]==5500);
   CHECK(r.c.set(unit,SettingFields::Current,1000)==Result::Ok);
   auto values=settingSummary(r.c.configuration(),global,SettingFields::Current);
-  CHECK(values.minimum==3501 && values.maximum==5001);
-  CHECK(settingSummary(r.c.configuration(),group,SettingFields::Current).custom);
+  CHECK(values.minimum==1000 && values.maximum==5001);
+  CHECK(settingSummary(r.c.configuration(),group,SettingFields::Current).minimum==1000);
   const auto before=r.c.configuration(); const auto revision=r.c.configurationRevision();
   CHECK(r.c.set(global,SettingFields::Current,6001)==Result::Invalid);
   CHECK(r.c.configurationRevision()==revision); checkSameProfile(r.c.configuration(),before);
   CHECK(r.c.set(group,SettingFields::Current,3001)==Result::Ok);
-  CHECK(r.c.configuration().current[0]==1501 && r.c.configuration().current[1]==1500);
-  CHECK(!settingSummary(r.c.configuration(),group,SettingFields::Current).custom);
+  CHECK(r.c.configuration().current[0]==3001 && r.c.configuration().current[1]==3001);
+  CHECK(settingSummary(r.c.configuration(),group,SettingFields::Current).minimum==3001 &&
+        settingSummary(r.c.configuration(),group,SettingFields::Current).maximum==3001);
   auto plan=r.c.preview(global,SettingFields::Both,r.now); const auto writes=r.can.writes().size();
   CHECK(plan.prepared && plan.blocker==Issue::None && !plan.recipients);
   CHECK(r.c.queue(plan,false,r.now)==Result::Ok && !r.c.busy() && r.can.writes().size()==writes);
@@ -37,7 +38,7 @@ void scopedSettings() {
   CHECK(r.c.set(unit,SettingFields::Current,900)==Result::Ok);
   plan=r.c.preview(unit,SettingFields::Current,r.now); CHECK(plan.blocker==Issue::None);
   CHECK(r.c.queue(plan,false,r.now)==Result::Ok); r.finish();
-  CHECK(r.c.configuration().operating.current[0]==1501 && r.c.configuration().operating.current[1]==900);
+  CHECK(r.c.configuration().operating.current[0]==3001 && r.c.configuration().operating.current[1]==900);
   CHECK(r.c.configuration().operating.voltage[1]==5700);
   // Membership changes preserve each configured allocation.
   const auto current0=r.c.configuration().current[0];
@@ -96,6 +97,71 @@ void profileRecords() {
   CHECK(memory.completedToken()==token && memory.completedResult()==StorageResult::Cancelled);
   CHECK(memory.profileInfo(0,info)==StorageResult::Ok && info.generation==1);
 }
+
+void perPsuCurrentScopes() {
+  auto cfg=installation(9); cfg.groups[0].members=7;
+  std::strcpy(cfg.groups[1].name,"SECOND"); cfg.groups[1].members=0x18;
+  std::strcpy(cfg.groups[2].name,"THIRD"); cfg.groups[2].members=0x1e0;
+  Rig r(cfg,false,false); r.finish();
+  CHECK(r.c.set({},SettingFields::Current,5000)==Result::Ok);
+  for(uint8_t i=0;i<9;++i) CHECK(r.c.configuration().current[i]==5000);
+  CHECK(groupCurrent(r.c.configuration(),0)==15000 && groupCurrent(r.c.configuration(),1)==10000 &&
+        groupCurrent(r.c.configuration(),2)==20000);
+  CHECK(r.c.settingMaximum({},SettingFields::Current)==6000);
+  CHECK(r.c.setCurrent(0,2501)==Result::Ok);
+  CHECK(groupCurrent(r.c.configuration(),0)==7503); // No centiamp division or remainder.
+  CHECK(r.c.set({ScopeKind::Unit,1},SettingFields::Current,700)==Result::Ok);
+  auto summary=settingSummary(r.c.configuration(),{ScopeKind::Group,0},SettingFields::Current);
+  CHECK(summary.minimum==700 && summary.maximum==2501);
+  UiRig u(r); u.config(); UiFrame frame;
+  UiView::compose(frame,u.ui,r.c,r.now); snapshot("settings-current-mixed",frame);
+  CHECK(rowText(frame,7).find("CURRENT PER PSU")!=std::string::npos);
+  CHECK(rowText(frame,8).find("MIXED")!=std::string::npos && rowText(frame,8).find("Total")!=std::string::npos);
+  const auto revision=r.c.configurationRevision();
+  u.click(); CHECK(u.ui.editValue()==700); u.turn(2); u.hold();
+  CHECK(r.c.configurationRevision()==revision && r.c.configuration().current[1]==700);
+  CHECK(r.c.setCurrent(0,2501)==Result::Ok); // Group replaces narrower override.
+  CHECK(r.c.configuration().current[1]==2501 && r.c.configuration().voltage[1]==5400);
+  CHECK(r.c.set({},SettingFields::Current,5000)==Result::Ok); // Global replaces every group.
+  UiRig review(r); review.hold(); review.click(); review.click(); review.click();
+  CHECK(review.ui.page()==UiPage::ScopeConfirm && review.ui.settingsSelection()==0);
+  UiView::compose(frame,review.ui,r.c,r.now); snapshot("settings-current-global-review",frame);
+  CHECK(rowText(frame,6).find("CURRENT PER PSU")!=std::string::npos);
+  CHECK(rowText(frame,9).find("9 PSUs")!=std::string::npos && rowText(frame,9).find("450.00A")!=std::string::npos);
+  const auto reviewRevision=r.c.configurationRevision(); review.click();
+  CHECK(r.c.configurationRevision()==reviewRevision); // Cancel-first review issues no writes.
+  auto plan=r.c.preview({},SettingFields::Both,r.now);
+  CHECK(plan.prepared && plan.blocker==Issue::None);
+  CHECK(r.c.queue(plan,false,r.now)==Result::Ok);
+  for(uint8_t i=0;i<9;++i) CHECK(r.c.configuration().operating.current[i]==5000 && r.current[i]==0);
+  // Offline defaults remain an explicit group TOTAL and never change online targets.
+  CHECK(r.c.setCurrent(0,9000,true)==Result::Ok);
+  plan=r.c.preview(Operation::Offline,-1,r.now);
+  CHECK(plan.current[0]==3000 && plan.current[1]==3000 && plan.current[2]==3000);
+  CHECK(r.c.configuration().current[0]==5000);
+  auto saved=r.c.configuration(); saved.disabled=0x100; saved.autoResume=true;
+  Rig reduced(saved,true,false); reduced.live=0xff; reduced.finish();
+  CHECK(reduced.c.participants()==0xff && reduced.current[8]==0);
+  for(uint8_t i=0;i<9;++i) CHECK(reduced.c.configuration().operating.current[i]==5000);
+  for(uint8_t i=0;i<8;++i) CHECK(reduced.current[i]>4990 && reduced.current[i]<=5000);
+
+  cfg.units[4].ratedCurrent=1001;
+  Rig limited(cfg,false,false); limited.finish(); const auto before=limited.c.configuration();
+  const auto beforeRevision=limited.c.configurationRevision();
+  CHECK(limited.c.settingMaximum({},SettingFields::Current)==1201);
+  CHECK(limited.c.groupCurrentMaximum(0)==6000 && limited.c.groupCurrentMaximum(1)==1201);
+  CHECK(limited.c.set({},SettingFields::Current,1202)==Result::Invalid);
+  CHECK(limited.c.configurationRevision()==beforeRevision); checkSameProfile(limited.c.configuration(),before);
+  Terminal t(limited);
+  CHECK(t.input("set current all 50\n").find("PSU 5 maximum A per PSU=12.01")!=std::string::npos);
+  CHECK(limited.c.configurationRevision()==beforeRevision);
+  CHECK(limited.c.set({},SettingFields::Current,1201)==Result::Ok);
+  for(uint8_t i=0;i<9;++i) CHECK(limited.c.configuration().current[i]==1201);
+  // Global scalar staging works before grouping, but application remains blocked.
+  Rig empty; CHECK(empty.c.removeGroup(0)==Result::Ok);
+  CHECK(empty.c.set({},SettingFields::Current,100)==Result::Ok);
+  CHECK(empty.c.preview({},SettingFields::Both,empty.now).blocker!=Issue::None);
+}
 void profileLoadAndParticipation() {
   Rig r(installation(),false,false); r.finish(); r.step(18000); r.finish();
   FakeEeprom bytes; MemoryManager memory(bytes); auto saved=r.c.configuration(); saved.current[0]=800; saved.current[1]=1200;
@@ -138,7 +204,7 @@ void profileLoadAndParticipation() {
 void profileUiAndSerial() {
   Rig r(installation(),false,false); r.finish(); Terminal t(r);
   CHECK(t.input("set voltage psu:1 55.1\n").find("OK")!=std::string::npos);
-  CHECK(t.input("set current all 20\n").find("TOTAL PER GROUP")!=std::string::npos);
+  CHECK(t.input("set current all 20\n").find("A PER PSU")!=std::string::npos);
   CHECK(t.input("apply all\n").find("Prepared for next ON")!=std::string::npos);
   CHECK(t.input("profile save 1 BENCH ONE\n").find("default NO")!=std::string::npos);
   CHECK(t.input("profile inclusion yes\n").find("YES")!=std::string::npos);
@@ -243,7 +309,7 @@ void scopedMigrationAndProtection() {
   CHECK(memory.load(loaded)==StorageResult::Ok && loaded.thermalStop==ThermalStop::Temperature);
 }
 void profileEnabledGuards() {
-  Rig r; r.c.setCurrent(0,2000); r.apply(); FakeEeprom bytes; MemoryManager memory(bytes);
+  Rig r; r.c.setCurrent(0,1000); r.apply(); FakeEeprom bytes; MemoryManager memory(bytes);
   auto cfg=r.c.configuration(); cfg.voltage[0]=5500; cfg.voltage[1]=5700; cfg.current[0]=1000; cfg.current[1]=2000;
   CHECK(memory.startProfileSave(0,"ON TEST",cfg,0)==StorageResult::Ok); while(memory.saving()) memory.stepSave();
   auto review=r.c.previewProfile(memory,0,false,r.now); CHECK(review.blocker==Issue::None);

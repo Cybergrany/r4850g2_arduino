@@ -52,17 +52,9 @@ UnitMask scopeMembers(const Configuration& c, SettingScope s) {
   return s.index < c.count ? UnitMask(1U << s.index) : 0;
 }
 SettingSummary settingSummary(const Configuration& c, SettingScope s, SettingFields field) {
-  SettingSummary r = {UINT16_MAX, 0, false};
+  SettingSummary r = {UINT16_MAX, 0};
   const UnitMask mask = scopeMembers(c, s);
-  if (field == SettingFields::Current && s.kind != ScopeKind::Unit) {
-    for (uint8_t g = 0; g < limits::maxGroups; ++g) if (c.groups[g].members & mask) {
-      const auto total = groupCurrent(c, g);
-      if (total < r.minimum) r.minimum = total;
-      if (total > r.maximum) r.maximum = total;
-      for (uint8_t i = 0; i < c.count; ++i) if (c.groups[g].members & (1U << i))
-        r.custom |= c.current[i] != allocation(c.groups[g].members, total, i);
-    }
-  } else for (uint8_t i = 0; i < c.count; ++i) if (mask & (1U << i)) {
+  for (uint8_t i = 0; i < c.count; ++i) if (mask & (1U << i)) {
     const auto value = field == SettingFields::Voltage ? c.voltage[i] : c.current[i];
     if (value < r.minimum) r.minimum = value;
     if (value > r.maximum) r.maximum = value;

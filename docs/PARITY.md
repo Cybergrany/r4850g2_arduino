@@ -18,7 +18,7 @@ Arduino sketch's fixed current multiplier.
 | Input/output V, A, W, frequency, temperatures | Per identity/slot, with validity and freshness; all available through `telemetry` |
 | Efficiency | Fraction internally, percent in serial telemetry |
 | Maximum available current `0x76` | Raw / 1024 × commissioned rated current |
-| Online voltage/current | `apply all`, `apply voltage`, `apply GROUP`; scoped per-PSU voltage/current, with group totals and individual overrides |
+| Online voltage/current | `apply all`, `apply voltage`, `apply GROUP`; scoped per-PSU voltage/current, with per-PSU limits in every scope and individual overrides |
 | Offline voltage/current | Global draft voltage and group draft totals; explicit `offline all` |
 | Online plus offline writes (`-s`) | `apply all`, wait/check result, then `offline all`, wait/check result |
 | Accepted/rejected setting ACK and value | Matching job outcome; decoded volts/amps and raw value in serial |
@@ -82,7 +82,7 @@ its own saved settings. [Craig's hardware review](https://www.beyondlogic.org/re
   change resets them. The discovery-local counter remains available to API users
   but can reset with its observation. Neither is a calibrated battery fuel gauge.
 - Per-unit configured current is bounded by 60 A and 120% of the commissioned
-  rating. Group totals exceeding any member's allowed share are rejected, never
+  rating. A scoped current exceeding any selected PSU's limit is rejected, never
   silently capped. Hardware can reject tighter model-specific bounds.
 - Voltage validation is 41.5–58.5 V online and 48–58.5 V offline. ACKs report PSU
   acceptance, not actual load delivery or protection status.

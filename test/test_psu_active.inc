@@ -12,7 +12,7 @@ void psuActiveLifecycle() {
   CHECK(boot.c.psuActive(boot.now)); // Query itself never changes state.
 
   Rig r; CHECK(r.c.enableControl().enabled() && !r.c.psuActive(r.now));
-  r.c.setCurrent(0, 2000); CHECK(!r.c.psuActive(r.now));
+  r.c.setCurrent(0, 1000); CHECK(!r.c.psuActive(r.now));
   r.apply(); CHECK(r.c.psuActive(r.now));
   Terminal t(r);
   CHECK(t.input("diag control\n").find("PSU_ACTIVE pin=-1 physical=0 logical=HIGH") != std::string::npos);
@@ -20,7 +20,7 @@ void psuActiveLifecycle() {
   CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent, 0, r.now), false, r.now) == Result::Ok);
   CHECK(!r.c.psuActive(r.now)); // New zero allocation, even before its ACK.
   r.finish(); CHECK(!r.c.psuActive(r.now));
-  r.c.setCurrent(0, 2000); r.apply(Operation::GroupCurrent, 0);
+  r.c.setCurrent(0, 1000); r.apply(Operation::GroupCurrent, 0);
   CHECK(r.c.psuActive(r.now));
   r.c.setAutoResume(false); CHECK(!r.c.psuActive(r.now));
   CHECK(r.current[0] > 0); // A LOW status is not physical stop confirmation.
@@ -45,7 +45,7 @@ void psuActiveLifecycle() {
   CHECK(!starting.c.psuActive(starting.now));
 }
 void psuActiveProtection() {
-  Rig r; r.c.setCurrent(0, 4000); r.apply();
+  Rig r; r.c.setCurrent(0, 2000); r.apply();
   r.temperature = 70; r.step(4000);
   CHECK(r.c.thermalStatus().percent == 30 && r.c.psuActive(r.now));
   r.temperature = 30; r.step(4000);
@@ -80,7 +80,7 @@ void psuActiveProtection() {
 
   Rig failed; failed.apply(); failed.can.initOk = false;
   CHECK(!failed.c.begin() && !failed.c.psuActive(failed.now));
-  Rig rejected; rejected.c.setCurrent(0, 2000); rejected.rejectRegister = protocol::OnlineCurrent;
+  Rig rejected; rejected.c.setCurrent(0, 1000); rejected.rejectRegister = protocol::OnlineCurrent;
   CHECK(rejected.c.queue(rejected.c.preview(Operation::All, -1, rejected.now), false, rejected.now) == Result::Ok);
   rejected.finish(); CHECK(rejected.c.report().failed && !rejected.c.psuActive(rejected.now));
 }

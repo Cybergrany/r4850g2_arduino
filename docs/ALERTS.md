@@ -223,7 +223,7 @@ a verified identity/group/profile. For a serial-only bench use
 1. `autoresume off`, `watch off`, `alerts`, `diag thermal`, `diag control`.
    Resolve actual faults. Check D28/D29 against active severities, not the badge
    count. `alerts ack all` must leave active GPIOs/protection unchanged.
-2. Stage the suitable common voltage and a small group total, then `apply all`
+2. Stage the suitable common voltage and a small per-PSU current limit, then `apply all`
    after `autoresume on`. Inspect `diag psu 1` for authorized/effective/acknowledged
    limits and `watch on` for measured output and input/output temperatures.
 3. Exercise the policy first in `mega2560_touch_debug` (or another SIM profile):
@@ -267,7 +267,7 @@ a verified identity/group/profile. For a serial-only bench use
    `diag thermal` reaches `saved=1 failed=0`. Reboot the Mega; with ENABLE_IN fitted,
    repeat with the switch held ON. Neither may restart charging. `load` and
    `reconcile` must also leave the thermal latch intact. Cool the units, make a
-   fresh ON action, wait for verification, and confirm the authorized shares
+   fresh ON action, wait for verification, and confirm the authorized limits
    return. A fresh OFF during that save must win.
 6. Restore the production threshold build before normal operation. Recheck the
    deployment, profile, temperature coverage and saved enable preference.

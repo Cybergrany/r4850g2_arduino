@@ -111,8 +111,8 @@ Field-only edits do not activate other drafts. See [scoped settings](PROFILES.md
 
 The original group selection is retained when returning. Holding does not also
 emit a short-click action. Edit steps default to 0.1 V and 0.5 A; wheel adjustment
-stops at backend limits, including the exact group capacity for its commissioned
-member ratings and equal-share rounding. Values are revalidated before applying.
+stops at backend limits, including the lowest per-PSU current limit among the
+selected members. Values are revalidated before applying.
 When no groups exist yet, the menu still opens; the group selector explains
 that group creation is a serial operation. Tools remains available from the
 overview for startup diagnostics and commissioning power.
@@ -166,8 +166,11 @@ No Ah history is written to EEPROM. The approximation is not a battery fuel gaug
 ## Apply, failure and persistence
 
 Long-press a group for global, group, individual, Load Config and Save Config
-choices. The editor labels the scope; global current is **TOTAL PER GROUP**.
-Mixed values and custom shares are explicit. A field commit changes only that
+choices. The editor labels global/group current **CURRENT PER PSU**.
+Different member targets show **MIXED** and their per-PSU range. Live current
+is labelled **Total** for multi-unit selections; group cards also label their
+aggregate current **TOTAL A**. The global review shows the selected count and
+configured aggregate limit. A field commit changes only that
 field. OFF prepares targets for the next ON. Global application and profile
 save/load have Cancel-first reviews. See [the settings/profile guide](PROFILES.md).
 
@@ -189,7 +192,7 @@ The completion/result screen appears even if you navigated away from progress.
 A missing group member blocks the ordinary apply. The UI can offer an explicit
 **No / Yes, apply partial** warning, defaulting to No, which lists missing slots
 and explains that their outputs may still be on. Confirmation sends only the
-responders' original shares. It neither changes membership nor redistributes
+responders' configured limits. It neither changes membership nor redistributes
 current. Other faults remain blocking. A partial success is labelled
 `PARTIAL APPLY SAVED`, never complete group success. Cancelling after that
 warning retains the staged draft in RAM without issuing the partial writes.

@@ -297,9 +297,18 @@ void SerialConsole::execute() {
       if (r == Result::Ok) {
         io_.print(F("STAGED ")); io_.print(value / 100.0f);
         io_.println(field == SettingFields::Voltage ? F(" V; selected PSUs only") : scope.kind == ScopeKind::Unit ? F(" A for this PSU") :
-          scope.kind == ScopeKind::Global ? F(" A TOTAL PER GROUP; each group splits this total") : F(" A TOTAL; equal configured-member shares"));
+          F(" A PER PSU; same limit for every selected PSU"));
         io_.print(F("across slots ")); printMembers(scopeMembers(controller_.configuration(), scope)); io_.println();
-      } else io_.println(F("No staging changes or clamping; inspect target/rating limits."));
+      } else {
+        io_.println(F("No staging changes or clamping; inspect target/rating limits."));
+        if (r == Result::Invalid && field == SettingFields::Current) {
+          const auto& cfg = controller_.configuration(); const auto members = scopeMembers(cfg, scope);
+          for (uint8_t i=0;i<cfg.count;++i) if ((members & (1U<<i)) && !allowedCurrent(value,cfg.units[i].ratedCurrent)) {
+            io_.print(F("PSU ")); io_.print(i+1); io_.print(F(" maximum A per PSU="));
+            io_.println(currentMaximum(cfg.units[i].ratedCurrent)/100.0f); break;
+          }
+        }
+      }
       return;
     }
     reply(Result::Invalid); return;
@@ -792,7 +801,7 @@ void SerialConsole::outputRow(uint32_t now) {
     } else {
       if (controller_.thermalStatus().contributors & p.selected & UnitMask(~p.participants))
         io_.println(F("Explicit missing-unit exclusion releases its thermal contribution; remembered/profile choices do not."));
-      if (availabilityConfirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; shares unchanged. Saved enable may resume charging. confirm yes/no within 15s."));
+      if (availabilityConfirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; per-PSU limits unchanged. Saved enable may resume charging. confirm yes/no within 15s."));
       view_ = View::None;
     }
     ++row_;
@@ -828,7 +837,7 @@ void SerialConsole::outputRow(uint32_t now) {
     switch (row_++) {
       case 0: io_.println(F("BUS / GROUP DIAGNOSTICS (read only; no battery/load needed)")); break;
       case 1: io_.println(F("discover: INFO sweep 1..127; diag bus: responders, identities, current addresses, broadcasts, CAN errors")); break;
-      case 2: io_.println(F("diag group NAME / diag psu N: bindings, readiness, ages, authorized shares and last failures")); break;
+      case 2: io_.println(F("diag group NAME / diag psu N: bindings, readiness, ages, authorized limits and last failures")); break;
       case 3: io_.println(F("Ready requires verified identity, fresh data/broadcasts and output-ready OR confirmed benign zero hold.")); break;
       case 4: io_.println(F("poll all/NAME; telemetry all/NAME; watch on/off. CAN ready alone does not prove a PSU is present.")); break;
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
@@ -842,12 +851,12 @@ void SerialConsole::outputRow(uint32_t now) {
     }
   } else if (view_ == View::Help) {
     switch (row_++) {
-      case 0: io_.println(F("Scopes: all / GROUP / psu:N. Global current = same TOTAL PER GROUP.")); break;
+      case 0: io_.println(F("Scopes: all / GROUP / psu:N. Online current is A PER PSU in every scope.")); break;
       case 1: io_.print(F("count <1..")); io_.print(PSU_MAX_UNITS); io_.println(F(">; group set <NAME> <1,2 or 1-2>; group delete <NAME>")); break;
       case 2: io_.println(F("discover; diag bus; diag group <NAME>; diag psu <slot>")); break;
       case 3: io_.println(F("bind <slot> <12-hex identity> <rated-A>; adopt replaces; unbind <slot> releases identity")); break;
       case 4: io_.println(F("set voltage <all|GROUP|psu:N> V; set voltage V aliases all")); break;
-      case 5: io_.println(F("set current <GROUP> <total-A>; set offline-current <GROUP> <total-A>")); break;
+      case 5: io_.println(F("set current <all|GROUP|psu:N> <A-per-PSU>; set offline-current <GROUP> <total-A>")); break;
       case 6: io_.println(F("preview <all|voltage|GROUP>; apply <all|voltage|GROUP>")); break;
       case 7: io_.println(F("apply GROUP partial; then confirm yes/no (missing only; no redistribution)")); break;
       case 8: io_.println(F("offline all = explicit PSU nonvolatile defaults; never automatic")); break;
@@ -966,10 +975,10 @@ void SerialConsole::outputRow(uint32_t now) {
       const uint8_t i = row_ - 1;
       if (plan_.members & (1U << i)) {
         io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" V=")); io_.print(plan_.voltage[i] / 100.0f);
-        io_.print(F(" share A=")); io_.print(plan_.current[i] / 100.0f); io_.print(' '); io_.println(issueName(plan_.issues[i]));
+        io_.print(F(" target A=")); io_.print(plan_.current[i] / 100.0f); io_.print(' '); io_.println(issueName(plan_.issues[i]));
       }
     } else {
-      if (confirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; only original shares sent, total request not fully configured. confirm yes/no within 15s."));
+      if (confirmation_) io_.println(F("ARE YOU SURE? Missing outputs unknown; only configured limits sent, total request not fully configured. confirm yes/no within 15s."));
       view_ = View::None;
     }
     ++row_;

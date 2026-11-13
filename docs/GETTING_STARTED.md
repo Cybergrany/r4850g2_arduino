@@ -193,7 +193,7 @@ See [fan test behavior and failures](CONTROL.md#manual-fan-tests-over-serial).
 
 ```text
 set voltage 54
-set current GROUP1 55
+set current GROUP1 1
 autoresume on
 preview all
 ```
@@ -204,10 +204,10 @@ older authorized profile exists, ON can restore it immediately; inspect it and
 let that restore finish before applying new drafts. Use an unloaded output for
 the first bench test.
 
-The preview should show the common 54 V and **27.50 A per member**. `set` and
-`preview` send no settings. Oversized shares are rejected with the limiting
+The preview should show the common 54 V and **1 A per PSU**, or 2 A total
+for this two-member group. `set` and
+`preview` send no settings. Oversized per-PSU requests are rejected with the limiting
 slot and configured maximum; the firmware does not silently clamp or rebalance.
-A remainder of one centiamp is assigned deterministically to lower slot numbers.
 The wire representation has its own small quantization, shown in decoded ACKs.
 
 ```text
@@ -317,8 +317,8 @@ not a later staged edit. `config` and `diag group` distinguish these values.
 
 During the same controller session, returning authorized units reconcile through
 zero current, checked fan mode, its authorized voltage and verified wake before
-restoring their shares. New/unaccepted missing members block charging-current release;
-unaffected healthy PSUs keep their shares. No current is increased to compensate for absence. Control
+restoring their limits. New/unaccepted missing members block charging-current release;
+unaffected healthy PSUs keep their limits. No current is increased to compensate for absence. Control
 failures latch visibly; inspect `diag control`, fix the cause, and use `reconcile`
 to request a new attempt. Reconciliation never applies later staged drafts.
 
@@ -404,10 +404,10 @@ address/identity changes, expired confirmation, or newly changed recipients
 invalidate it; request a new plan. A not-ready, unverified, unbound, conflicting,
 or voltage-unsynchronized member cannot be overridden as merely missing.
 
-If 55 A was staged for two members, the available member still gets **27.50 A**.
+If 5 A per PSU was staged for two members, the available member still gets **5 A**.
 The missing member receives nothing; it may still be producing power. If the
 request changed since the last full apply, the missing unit retains its previous
-authorized share for recovery. Diagnostics show the resulting authorized total;
+authorized limit for recovery. Diagnostics show the resulting authorized total;
 the new group request is not fully configured until an explicit complete apply.
 There is no inferred total-output guarantee and no automatic redistribution.
 
@@ -464,7 +464,7 @@ until recommissioned. Unbinding does not switch the old unit's output off.
 
 Freshness is `max(5 seconds, 3 × poll interval)`; identity expires after 15 seconds
 without a matching INFO reply. `diag psu N` shows response, data and broadcast
-ages, last command outcome, staged/authorized shares, and voltage ACK state.
+ages, last command outcome, staged/authorized limits, and voltage ACK state.
 The ready interpretation is based on observed R48xx traffic, not a universal
 vendor safety status. See [protocol evidence and limits](PARITY.md).
 
@@ -506,7 +506,8 @@ Wait for the new identity to be verified by two fresh INFO replies, then run
 `bind 9 <NEW_12_HEX_ID> <RATED_AMPS>` and add slot 9 to the appropriate group, for
 example `group set GROUP3 7-9`. Review the group's total current: changing its membership
 preserves individual targets and invalidates affected current authorization.
-Stage a new group total explicitly if equal redistribution is desired.
+Stage a new **per-PSU** group current explicitly to give every member the same
+limit. Membership edits alone never rescale existing targets.
 Check `diag group GROUP3` and `preview all`; complete the usual enable/apply checks
 before expecting output. The new unit has no inherited authorization. `save` and
 wait for `EEPROM OK` to retain the expanded configuration.
@@ -549,8 +550,9 @@ Commands are lowercase; group names are case-insensitive. Slot numbers here are
 | `unbind N` | Release an active or retained inactive binding; no physical output-disable command |
 | `group set NAME MEMBERS`, `group delete NAME` | Define disjoint source-group membership |
 | `set voltage V`, `set offline-voltage V` | Global drafts (online 41.5–58.5 V; offline 48–58.5 V) |
-| `set current NAME A`, `set offline-current NAME A` | Group total drafts; split against configured members/ratings |
-| `preview all`, `preview voltage`, `preview NAME [partial]` | Inspect proposed recipients, shares and blockers without applying |
+| `set current all\|NAME\|psu:N A` | Same per-PSU online draft for every selected unit |
+| `set offline-current NAME A` | Separate PSU fallback group TOTAL; retains legacy splitting |
+| `preview all`, `preview voltage`, `preview NAME [partial]` | Inspect proposed recipients, per-PSU targets and blockers without applying |
 | `apply all`, `apply voltage`, `apply NAME [partial]` | Queue global or group online operations |
 | `confirm yes`, `confirm no` | Resolve the current availability/profile/partial-apply review |
 | `profiles`, `profile show/save/load N` | Eight named target profiles; optional participation via `profile inclusion yes/no` |

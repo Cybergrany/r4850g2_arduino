@@ -107,8 +107,14 @@ void UiLayout::settingsExtras(UiFrame& f, const UiModel& m, const PsuController&
     }
   } else if (m.page()==UiPage::ScopeConfirm) {
     f.wrap(3,5,UI_TEXT("This will override ALL configured PSUs"),Warning);
-    f.text(6,0,26,m.field()==UiField::Voltage ? UI_TEXT("VOLTAGE ONLY") : UI_TEXT("CURRENT TOTAL PER GROUP"),Accent);
+    f.text(6,0,26,m.field()==UiField::Voltage ? UI_TEXT("VOLTAGE ONLY") : UI_TEXT("CURRENT PER PSU"),Accent);
     char value[12]; formatValue(value,sizeof(value),m.editValue()/100.0f,m.field()==UiField::Voltage ? "V" : "A",2); f.text(8,0,26,value);
+    if (m.field()==UiField::Current) {
+      const uint8_t units=population(m.settingsMembers());
+      PSU_SNPRINTF(value,sizeof(value),"%u PSUs",unsigned(units)); f.text(9,0,7,value,Muted);
+      f.text(9,8,6,UI_TEXT("Total"),Muted);
+      formatValue(value,sizeof(value),uint32_t(m.editValue())*units/100.0f,"A",2); f.text(9,14,12,value,Muted);
+    }
     f.text(10,0,26,c.enableControl().enabled() ? UI_TEXT("Apply now, then save") : UI_TEXT("Prepare for next ON"),Muted);
   }
 }

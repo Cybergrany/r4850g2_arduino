@@ -28,8 +28,11 @@ There are up to nine identity-bound PSU slots and eight disjoint named groups.
 Configured and authorized voltage/current are per PSU. Offline voltage and group
 offline totals remain separate explicit defaults. A shared `SettingScope` and
 `SettingFields` interface validates, previews and applies global/group/unit edits.
-Global current sets the same total per group; group current replaces allocations
-with deterministic equal shares. Group totals are derived from member targets.
+Global/group current copies the same per-PSU limit to every selected slot after
+validating every member. Group totals are derived from member targets.
+Scalar staging does not require group membership; apply still enforces the
+existing identity/group/participation/enable checks. Offline totals and legacy
+migration alone retain deterministic allocation/rounding.
 
 `Configuration::operating` contains per-unit authorized V/A and validity masks;
 configured drafts, thermally effective current and acknowledged values remain
@@ -81,7 +84,7 @@ controller.bind(1, id2, 5000, now);
 controller.setGroup("GROUP1", 0x03);  // slots 0 and 1
 const int8_t group = controller.groupIndex("GROUP1");
 controller.set({ScopeKind::Group, 0}, SettingFields::Voltage, 5400);
-controller.setCurrent(group, 5500);  // total 55 A, shares 27.50 A
+controller.setCurrent(group, 500);   // 5 A per PSU, 10 A total for these two units
 controller.setAutoResume(true);     // live enable; first wait for held-at-zero-awake
 
 const auto plan = controller.preview(psu::Operation::All, -1, now);
@@ -102,18 +105,18 @@ atomic in RAM and return Busy while a job runs. The old independent-pack
 | --- | --- |
 | `configuration()` | Per-unit drafts, deployment, groups, bindings, ratings, authorized targets |
 | `setGroup`, `removeGroup`, `setCount`, `bind`, `unbind` | Commissioning/membership; binding starts background reconciliation; removal does not stop retired hardware |
-| `checkCurrent(group,total)` | Structured capacity error with limiting slot, requested share and maximum |
+| `checkCurrent(group,perPsu)` | Structured capacity error with limiting slot, requested current and maximum |
 | `setCurrent`, `setVoltage` | Stage validated online/offline drafts; no automatic clamping |
 | `groupStatus(group,now)` | Membership/responding/ready/missing masks and requested/authorized totals |
 | `busStatus(now)` | Configured slots versus fresh responders, verified identities and broadcasting units |
 | `issue(slot,now)` | Missing, unbound, unassigned, conflict, identity pending, data stale, not ready, deployment mismatch |
 | `voltageSynchronized(slot)`, `currentSynchronized(slot)` | Runtime ACK flags; clear on boot/identity loss and affected writes |
 | `freshMetric`, `summarize`, `sessionTotal` | Per-field freshness, partial sums/means/maxima, and volatile session totals |
-| `groupCurrentMaximum(group)` | Exact accepted maximum using the same allocation/validation as serial |
+| `groupCurrentMaximum(group)` | Lowest per-PSU limit among group members, matching serial validation |
 | `configurationRevision()` | Invalidate an edit when another interface changes configuration |
 | `discovery()` | Read-only observed devices, identity verification, current addresses, epochs, registry counters |
 | `deviceForSlot`, `metric` | Last observed measurements; `issue`/timestamps must also be checked for freshness |
-| `preview(op,group,now,partial)` | Snapshot of recipients, missing members, shares, per-slot blockers, configuration/topology revisions |
+| `preview(op,group,now,partial)` | Snapshot of recipients, missing members, targets, per-slot blockers, configuration/topology revisions |
 | `queue(plan,confirmed,now)` | Revalidate the plan and queue work, or return Changed/Blocked/ConfirmRequired/Busy |
 | `report()` | Monotonic operation sequence, active operation, requested/recipient/succeeded/failed/skipped masks, per-slot command state/register/value |
 | `scan`, `requestPoll`, `requestDescription` | Read-only bus diagnostics |
@@ -127,7 +130,7 @@ A plan is not a hardware transaction or lock: it expires after 15 seconds and
 must be revalidated by `queue` when the operator confirms it.
 
 For partial current, preview `Operation::GroupCurrent` with `partial=true`, show
-missing members and unchanged original shares, and ask for explicit confirmation.
+missing members and unchanged per-PSU limits, and ask for explicit confirmation.
 Pass `confirmed=true` only for that confirmed plan. The backend rejects stale
 configuration/topology/recipients and all non-missing blockers. No UI should
 rewrite membership or group totals to implement the override.
@@ -341,10 +344,10 @@ phase at the latest software drop. Phase labels include adjacent receive drains
 and do not prove which earlier work caused the backlog. The profiler retains its
 independent per-frame `queue_age_ms` measurement.
 
-Text composition fills contiguous character/style ranges, preserving neighbouring packed colours and truncation. The group-current maximum is calculated exactly from
-each member's ceiling and allocation rank (`ceiling * member_count + rank`),
-avoiding a binary search on every configuration-screen composition. It retains
-the same allocation rounding and limits used by `checkCurrent`.
+Text composition fills contiguous character/style ranges, preserving neighbouring
+packed colours and truncation. Current editing limits take the minimum existing
+per-PSU ceiling across the selection; no division, allocation rank or binary
+search is needed. Mixed values summarize per-PSU targets in every scope.
 
 Nonperiodic invalidations (input, navigation, alerts/results) retain separate
 completed-change timing so a later telemetry-only comparison cannot overwrite

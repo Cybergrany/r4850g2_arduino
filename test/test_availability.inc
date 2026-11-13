@@ -72,7 +72,7 @@ void acceptedAbsences() {
   r.c.setAutoResume(false); r.finish(); r.step(6000);
   p=r.c.previewAvailability(AvailabilityAction::Include,3,false,r.now);
   CHECK(p.blocker==Issue::None && p.selected==3 && p.participants==3);
-  CHECK(r.c.setCurrent(0,4000)==Result::Ok);
+  CHECK(r.c.setCurrent(0,2000)==Result::Ok);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Changed);
   p=r.c.previewAvailability(AvailabilityAction::Include,2,false,r.now);
   CHECK(p.blocker==Issue::None && r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
@@ -91,7 +91,7 @@ void acceptedAbsences() {
   CHECK(absent.blocker==Issue::None);
   CHECK(another.c.confirmAvailability(absent,memory,another.now)==Result::Ok && another.c.participants()==0);
   CHECK(another.c.controlStatus(another.now).blocker==Issue::NoParticipants);
-  CHECK(another.c.setCurrent(0,3000)==Result::Ok); another.apply(Operation::GroupCurrent,0);
+  CHECK(another.c.setCurrent(0,1500)==Result::Ok); another.apply(Operation::GroupCurrent,0);
   CHECK(another.c.configuration().operating.current[0]==1500 && another.c.configuration().operating.current[1]==1500);
   CHECK(another.c.report().recipients==0 && another.c.report().succeeded==0);
   CHECK(another.c.removeGroup(0)==Result::Ok && another.c.configuration().acceptedAbsent==0 && another.c.acceptedAbsences()==0);
@@ -111,7 +111,7 @@ void availabilityDecisionsAndStorage() {
   Configuration loaded=defaultConfiguration(); CHECK(memory.load(loaded)==StorageResult::Ok && loaded.disabled==2 && loaded.acceptedAbsent==0);
   CHECK(loaded.operating.current[1]==1000 && loaded.autoResume);
   // Remember includes current drafts but never authorizes them implicitly.
-  CHECK(r.c.setCurrent(0,5000)==Result::Ok);
+  CHECK(r.c.setCurrent(0,2500)==Result::Ok);
   p=r.c.previewAvailability(AvailabilityAction::Require,2,true,r.now); CHECK(p.blocker==Issue::None);
   CHECK(r.c.confirmAvailability(p,memory,r.now)==Result::Ok);
   while(memory.saving()) { memory.stepSave(); r.step(1); }
@@ -159,7 +159,7 @@ void availabilityDecisionsAndStorage() {
 void availabilityRefreshAndSoak() {
   FakeEeprom bytes; MemoryManager memory(bytes);
   Rig r; r.apply(); const auto sequence=r.c.report().sequence;
-  CHECK(r.c.setCurrent(0,1000)==Result::Ok && r.c.setVoltage(5600)==Result::Ok);
+  CHECK(r.c.setCurrent(0,500)==Result::Ok && r.c.setVoltage(5600)==Result::Ok);
   const auto before=r.can.writes().size(); r.step(22000);
   bool sawV=false,sawI=false;
   for(size_t n=before;n<r.can.writes().size();++n) {

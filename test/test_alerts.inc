@@ -22,7 +22,7 @@ void alertEpisodes() {
   a.expire(AlertManager::Receive,30000); CHECK(!a.at(AlertManager::Receive).active);
 }
 void thermalLimitsAndSensors() {
-  Rig r; CHECK(r.c.setCurrent(0,4000)==Result::Ok); r.apply();
+  Rig r; CHECK(r.c.setCurrent(0,2000)==Result::Ok); r.apply();
   const auto revision=r.c.configurationRevision();
   r.temperature=64; r.step(2000); CHECK(r.c.thermalStatus().percent==100);
   r.inputTemperature=65; r.step(4000); CHECK(r.c.thermalStatus().percent==85);
@@ -35,7 +35,7 @@ void thermalLimitsAndSensors() {
   r.inputTemperature=59; r.step(1000); CHECK(r.c.thermalStatus().percent==30); // output exactly 60 is not cool
   r.temperature=59; r.step(4000); CHECK(r.c.thermalStatus().percent==100 && r.c.effectiveCurrent(0)==2000);
   // Apply/new authorizations and refreshes always recompute from the base share.
-  r.temperature=65; r.step(4000); r.c.setCurrent(0,6000); r.apply(Operation::GroupCurrent,0); r.step(12000);
+  r.temperature=65; r.step(4000); r.c.setCurrent(0,3000); r.apply(Operation::GroupCurrent,0); r.step(12000);
   CHECK(r.c.effectiveCurrent(0)==2550 && r.c.effectiveCurrent(1)==2550);
   CHECK(r.c.configuration().operating.current[0]==3000);
   r.temperature=30; r.step(5000);
@@ -53,8 +53,8 @@ void thermalLimitsAndSensors() {
   CHECK(fan.c.setFanOverride(3,FanOverride::Auto,fan.now)==Result::Ok); fan.step(2000);
   CHECK(fan.c.unitControl(0).fanRequested==FanMode::Max && fan.c.unitControl(0).fanAcknowledged==FanMode::Max);
   // A broad sensor retry must not retry a failed setting on a healthy sensor.
-  Rig rejected; rejected.c.setCurrent(0,2000); rejected.apply();
-  rejected.c.setCurrent(0,4000); rejected.rejectRegister=protocol::OnlineCurrent;
+  Rig rejected; rejected.c.setCurrent(0,1000); rejected.apply();
+  rejected.c.setCurrent(0,2000); rejected.rejectRegister=protocol::OnlineCurrent;
   CHECK(rejected.c.queue(rejected.c.preview(Operation::All,-1,rejected.now),false,rejected.now)==Result::Ok);
   rejected.finish(); CHECK(rejected.c.report().failed==3);
   rejected.rejectRegister=0xff; CHECK(rejected.c.retryTemperature(3,rejected.now)==Result::Ok);
@@ -63,7 +63,7 @@ void thermalLimitsAndSensors() {
 }
 void thermalTimingAndAbsence() {
   Rig r(installation(),false,true,UINT32_MAX-10000);
-  r.c.setCurrent(0,2000); r.apply(); r.temperature=70; r.step(3000);
+  r.c.setCurrent(0,1000); r.apply(); r.temperature=70; r.step(3000);
   const auto initial=r.c.thermalStatus().hotMs; CHECK(initial>=2500);
   r.noTemperature=3; r.step(r.c.staleMs()+500); const auto paused=r.c.thermalStatus().hotMs;
   r.step(5000); CHECK(r.c.thermalStatus().hotMs==paused && paused>=initial);
@@ -72,7 +72,7 @@ void thermalTimingAndAbsence() {
   r.temperature=70; r.step(2000); r.noTemperature=2; r.step(5000);
   CHECK(r.c.thermalStatus().hotMs>=6500); // known hot peer keeps timer running
   r.temperature=30; r.noTemperature=0; r.step(3000);
-  Rig hot; hot.c.setCurrent(0,2000); hot.apply(); hot.unitTemperature[1]=70; hot.step(3000);
+  Rig hot; hot.c.setCurrent(0,1000); hot.apply(); hot.unitTemperature[1]=70; hot.step(3000);
   hot.live=1; hot.step(10000); CHECK(hot.c.thermalStatus().percent==30 && (hot.c.thermalStatus().contributors&2));
   FakeEeprom bytes; MemoryManager memory(bytes);
   auto accept=hot.c.previewAvailability(AvailabilityAction::Accept,2,false,hot.now);
@@ -96,7 +96,7 @@ void serviceThermal(Rig& r, MemoryManager& memory, unsigned loops=2*(MemoryManag
   for(unsigned i=0;i<loops;++i) { r.step(20); r.c.serviceProtection(memory,r.now); memory.stepSave(); r.c.serviceProtection(memory,r.now); }
 }
 void thermalPersistence() {
-  Rig r; r.c.setCurrent(0,2000); r.apply(); FakeEeprom bytes; MemoryManager memory(bytes);
+  Rig r; r.c.setCurrent(0,1000); r.apply(); FakeEeprom bytes; MemoryManager memory(bytes);
   CHECK(memory.save(r.c.configuration())==StorageResult::Ok);
   r.c.setVoltage(5700); // unsaved operator draft must not be persisted by stop
   r.temperature=76; r.step(); CHECK(!r.c.enableControl().enabled()); serviceThermal(r,memory);
@@ -136,14 +136,14 @@ void thermalPersistence() {
   CHECK(failed.c.thermalStatus().saveFailed && failed.c.alerts().at(AlertManager::Storage).code==AlertCode::Storage);
 }
 void thermalQueuedChanges() {
-  Rig r; r.c.setCurrent(0,4000); r.apply();
+  Rig r; r.c.setCurrent(0,2000); r.apply();
   r.temperature=70; r.step(250,false); // protection identity check / current target can be pending
   r.c.setAutoResume(false); r.step(10000); CHECK(!r.current[0] && !r.current[1]);
   r.temperature=30; r.step(3000); r.c.setAutoResume(true); r.step(10000); CHECK(r.current[0]>1900);
   r.temperature=70; r.rejectRegister=protocol::OnlineCurrent; r.step(10000);
   CHECK(r.c.unitControl(0).fault!=CommandState::Idle && r.c.alerts().error());
   // A reduction inside output qualification never restarts its deadline.
-  Rig starting; starting.reportAc=true; starting.outputReadyDelay=7000; starting.c.setCurrent(0,4000);
+  Rig starting; starting.reportAc=true; starting.outputReadyDelay=7000; starting.c.setCurrent(0,2000);
   CHECK(starting.c.queue(starting.c.preview(Operation::All,-1,starting.now),false,starting.now)==Result::Ok);
   for(unsigned i=0;i<80 && starting.c.unitControl(0).outputDemand!=OutputDemand::Starting;++i) starting.step();
   CHECK(starting.c.unitControl(0).outputDemand==OutputDemand::Starting);
@@ -196,8 +196,8 @@ void alertUiAndSerial() {
 }
 
 void thermalAckRacesAndMigration() {
-  Rig r; r.c.setCurrent(0,2000); r.apply();
-  r.c.setCurrent(0,4000); CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent,0,r.now),false,r.now)==Result::Ok);
+  Rig r; r.c.setCurrent(0,1000); r.apply();
+  r.c.setCurrent(0,2000); CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent,0,r.now),false,r.now)==Result::Ok);
   CanFrame old={}; bool waiting=false;
   for(unsigned n=0;n<100 && !waiting;++n) {
     r.step(100,false);
@@ -210,7 +210,7 @@ void thermalAckRacesAndMigration() {
   uint16_t raw; CHECK(r.c.acknowledgedCurrent(0,raw) && raw==protocol::encodeCurrent(2000,5000));
   r.step(8000); CHECK(r.c.acknowledgedCurrent(0,raw) && raw==protocol::encodeCurrent(600,5000));
   // Overtake an unsent 85% target while its INFO guard is outstanding.
-  Rig identityWait; identityWait.c.setCurrent(0,4000); identityWait.apply();
+  Rig identityWait; identityWait.c.setCurrent(0,2000); identityWait.apply();
   identityWait.temperature=65; identityWait.step(100,false);
   const auto before=identityWait.can.writes().size(); identityWait.temperature=70; identityWait.step(6000);
   const auto writes=identityWait.can.writes();
@@ -246,7 +246,7 @@ void thermalAckRacesAndMigration() {
   CHECK(model.editing() && model.editValue()==edit);
 }
 void alertSerialCommands() {
-  Rig r; r.c.setCurrent(0,2000); r.apply(); Terminal terminal(r);
+  Rig r; r.c.setCurrent(0,1000); r.apply(); Terminal terminal(r);
   r.temperature=65; r.step(5000);
   auto output=terminal.input("alerts\n"); CHECK(output.find("Temperature warning")!=std::string::npos);
   CHECK(output.find("All active limits reduced")!=std::string::npos);
@@ -263,7 +263,7 @@ void alertSerialCommands() {
 }
 
 void activeIdentityAlert() {
-  Rig r; r.c.setCurrent(0,2000); r.apply();
+  Rig r; r.c.setCurrent(0,1000); r.apply();
   r.can.incoming.push_back(info(1,identity(9))); r.c.tick(++r.now);
   CHECK(r.c.alerts().at(0).code==AlertCode::Identity && r.c.alerts().error());
   r.c.alerts().acknowledgeAll(); CHECK(r.c.alerts().error());

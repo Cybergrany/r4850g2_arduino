@@ -114,7 +114,7 @@ Minus/plus adjust 0.1 V or 0.5 A per step. Hold repeats after 500 ms, every 120 
 The backend supplies exact bounds; wheel and touch share the same edit state.
 Changes remain in the editor until Apply. Cancel discards the uncommitted edit.
 Apply waits for PSU acknowledgements and then saves through the normal journal.
-Missing-member confirmation, partial shares and failure semantics are unchanged.
+Missing-member confirmation, partial per-PSU targets and failure semantics are unchanged.
 Serial edits invalidate a stale local edit before it can commit.
 
 A press is captured to its initial button; dragging away cancels it. Apply

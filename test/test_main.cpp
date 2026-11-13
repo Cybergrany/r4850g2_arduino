@@ -404,7 +404,7 @@ void controlLifecycle() {
     if(f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)) CHECK(woken==3);
   }
   CHECK(voltage==3 && fans==3 && zero==3 && woken==3);
-  boot.c.setCurrent(0,6000); CHECK(boot.c.queue(boot.c.preview(Operation::All,-1,boot.now),false,boot.now)==Result::Ok);
+  boot.c.setCurrent(0,3000); CHECK(boot.c.queue(boot.c.preview(Operation::All,-1,boot.now),false,boot.now)==Result::Ok);
   boot.step(); const auto before=boot.can.writes().size(); boot.c.setAutoResume(false);
   CHECK(!boot.c.busy()); boot.finish();
   for(size_t i=before;i<boot.can.writes().size();++i) {
@@ -463,7 +463,7 @@ void externalFanControl() {
     const auto duty=externalFanCurve(20+t/100.0f);
     CHECK(duty>=previous); previous=duty;
   }
-  Rig r; r.c.setCurrent(0,5000); r.apply(); r.temperature=20; r.step(35000);
+  Rig r; r.c.setCurrent(0,2500); r.apply(); r.temperature=20; r.step(35000);
   auto s=r.c.externalFanStatus(r.now); CHECK(s.telemetryComplete && s.duty==0);
   r.temperature=30; r.step(); CHECK(r.c.externalFanStatus(r.now).duty==128);
   // One hot unit sets the common fan's demand; averaging would hide it.
@@ -476,7 +476,7 @@ void externalFanControl() {
   r.noTemperature=2; r.step(6500); s=r.c.externalFanStatus(r.now);
   CHECK(s.duty==255 && !s.telemetryComplete && s.slot==1);
   r.noTemperature=0; r.step(2000); CHECK(r.c.retryTemperature(2,r.now)==Result::Ok); r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
-  r.c.setCurrent(0,6000); r.apply(); r.current[0]=r.current[1]=0; r.step();
+  r.c.setCurrent(0,3000); r.apply(); r.current[0]=r.current[1]=0; r.step();
   s=r.c.externalFanStatus(r.now); CHECK(s.duty==255 && s.reason==FanReason::RequestedCurrent);
   r.c.setAutoResume(false); r.finish(); r.step(35000); CHECK(r.c.externalFanStatus(r.now).duty==0);
   r.noCurrent=2; r.step(6500); s=r.c.externalFanStatus(r.now);
@@ -555,7 +555,7 @@ void fanControl() {
   CHECK(fault.c.unitControl(0).fault==CommandState::Rejected);
   fault.temperature=30; fault.step(35000);
   CHECK(fault.c.unitControl(0).phase==ControlPhase::Fault && fault.c.unitControl(0).fanAcknowledged==FanMode::Auto);
-  Rig r; r.c.setCurrent(0,2000); r.apply(); r.temperature=30;
+  Rig r; r.c.setCurrent(0,1000); r.apply(); r.temperature=30;
   r.step(29000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.step(4000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   auto before=r.can.writes().size(); r.step(10000);
@@ -563,7 +563,7 @@ void fanControl() {
   for (size_t n = before; n < refreshWrites.size(); ++n)
     CHECK(refreshWrites[n].data[1] == protocol::OnlineVoltage || refreshWrites[n].data[1] == protocol::OnlineCurrent);
   before = refreshWrites.size(); // Persistent fan mode must not be periodically rewritten.
-  r.c.setCurrent(0,6000); r.apply(Operation::GroupCurrent,0);
+  r.c.setCurrent(0,3000); r.apply(Operation::GroupCurrent,0);
   uint8_t max=0;
   const auto writes=r.can.writes();
   for(size_t n=before;n<writes.size();++n) {
@@ -572,7 +572,7 @@ void fanControl() {
     if(f.data[1]==protocol::OnlineCurrent && protocol::readBigEndian(f.data+4)>0) CHECK(max&bit);
   }
   CHECK(max==3 && r.c.unitControl(0).fanReason==FanReason::RequestedCurrent);
-  r.c.setCurrent(0,2000); r.apply(Operation::GroupCurrent,0); r.step(35000);
+  r.c.setCurrent(0,1000); r.apply(Operation::GroupCurrent,0); r.step(35000);
   CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   r.temperature=40; r.step(1500); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
   r.temperature=36; r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Max);
@@ -584,7 +584,7 @@ void fanControl() {
   r.noTemperature=0; r.temperature=1000; r.step(); CHECK(r.c.thermalStatus().sensorFaults & 1);
   r.temperature=30; r.step(2000); CHECK(r.c.retryTemperature(3,r.now)==Result::Ok); r.step(35000); CHECK(r.c.unitControl(0).fanAcknowledged==FanMode::Auto);
   r.rejectRegister=protocol::FanMode; before=r.can.writes().size();
-  r.c.setCurrent(0,6000); CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent,0,r.now),false,r.now)==Result::Ok);
+  r.c.setCurrent(0,3000); CHECK(r.c.queue(r.c.preview(Operation::GroupCurrent,0,r.now),false,r.now)==Result::Ok);
   r.finish(); CHECK(r.c.unitControl(0).fault==CommandState::Rejected && r.c.report().failed);
   const auto rejected=r.can.writes();
   for(size_t n=before;n<rejected.size();++n) CHECK(rejected[n].data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(rejected[n].data+4)==0);
@@ -714,10 +714,10 @@ void protocolAndConfiguration() {
   CHECK(r.c.groupIndex("group1") == 0);
   CHECK(r.c.setGroup("GROUP2", 2) == Result::Invalid); // Membership must be disjoint.
   CHECK(r.c.setCount(1) == Result::Invalid);
-  CHECK(r.c.setCurrent(0, 12001) == Result::Invalid);
+  CHECK(r.c.setCurrent(0, 6001) == Result::Invalid);
   CHECK(groupCurrent(r.c.configuration(), 0) == 5500); // Atomic, never clamp.
-  const auto check = r.c.checkCurrent(0, 12001);
-  CHECK(check.issue == Issue::Capacity && check.slot == 0 && check.share == 6001 && check.maximum == 6000);
+  const auto check = r.c.checkCurrent(0, 6001);
+  CHECK(check.issue == Issue::Capacity && check.slot == 0 && check.requested == 6001 && check.maximum == 6000);
   CHECK(r.c.setVoltage(6000) == Result::Invalid && r.c.setVoltage(4700, true) == Result::Invalid);
   CHECK(r.c.setVoltage(5600) == Result::Ok);
   CHECK(r.can.writes().empty()); // All configuration edits remain staged.
@@ -781,7 +781,7 @@ void orderedApplyAndDraftIsolation() {
   CHECK(protocol::readBigEndian(w[2].data + 4) == protocol::encodeCurrent(2750, 5000));
   CHECK(r.c.configuration().operating.current[0] == 2750 && r.c.configuration().operating.currentMask == 3);
   CHECK(r.c.voltageSynchronized(0) && r.c.voltageSynchronized(1));
-  CHECK(r.c.setVoltage(5650) == Result::Ok && r.c.setCurrent(0, 6000) == Result::Ok);
+  CHECK(r.c.setVoltage(5650) == Result::Ok && r.c.setCurrent(0, 3000) == Result::Ok);
   const auto p = r.c.preview(Operation::GroupCurrent, 0, r.now);
   CHECK(p.voltage[0] == 5400 && p.current[0] == 3000); // Unapplied voltage remains a draft.
   r.apply(Operation::GroupCurrent, 0);
@@ -805,7 +805,7 @@ void missingMembersAndConfirmations() {
   CHECK(p.current[0] == 2750 && p.current[1] == 2750);
   CHECK(r.c.queue(p, false, r.now) == Result::ConfirmRequired);
   CHECK(r.c.queue(p, true, r.now + limits::confirmationMs + 1) == Result::Changed);
-  CHECK(r.c.setCurrent(0, 6000) == Result::Ok);
+  CHECK(r.c.setCurrent(0, 3000) == Result::Ok);
   CHECK(r.c.queue(p, true, r.now) == Result::Changed); // Stale confirmation cannot apply new drafts.
   p = r.c.preview(Operation::GroupCurrent, 0, r.now, true);
   CHECK(r.c.queue(p, true, r.now) == Result::Ok); r.finish();
@@ -888,7 +888,7 @@ void acknowledgementsAndFailures() {
 }
 void restorationAndDeployment() {
   Rig r; r.apply();
-  CHECK(r.c.setCurrent(0, 2000) == Result::Ok && r.c.setVoltage(5800) == Result::Ok);
+  CHECK(r.c.setCurrent(0, 1000) == Result::Ok && r.c.setVoltage(5800) == Result::Ok);
   auto written = r.can.writes().size();
   r.live = 1; r.step(16000); CHECK(r.c.issue(1, r.now) == Issue::Missing);
   for(size_t n=written;n<r.can.writes().size();++n) {
@@ -1351,17 +1351,17 @@ void serialWorkflow() {
   CHECK(t.input("diag group GROUP1\n").find("members=1,2 responding=1,2 ready=1,2 missing=-") != std::string::npos);
   CHECK(t.input("set voltage GROUP1 56\n").find("STAGED") != std::string::npos);
   CHECK(t.input("set current GROUP1 55\n").find("STAGED 55.00") != std::string::npos);
-  CHECK(t.input("preview all\n").find("share A=27.50") != std::string::npos && r.can.writes().empty());
+  CHECK(t.input("preview all\n").find("target A=55.00") != std::string::npos && r.can.writes().empty());
   CHECK(t.input("apply all\n").find("QUEUED;") != std::string::npos); r.finish(); t.console.tick(r.now);
   CHECK(r.c.report().succeeded == 3);
   CHECK(t.input("set current GROUP1 20\nsave\n").find("EEPROM OK") != std::string::npos);
   Configuration stored; CHECK(t.memory.load(stored) == StorageResult::Ok);
-  CHECK(groupCurrent(stored, 0) == 2000 && stored.operating.current[0] == 2750);
+  CHECK(groupCurrent(stored, 0) == 4000 && stored.operating.current[0] == 5500);
   CHECK(t.input("telemetry GROUP1\n").find("filtered-current A=N/A") != std::string::npos);
   CHECK(t.input("set current GROUP1 121\n").find("ERR") != std::string::npos);
   for (const auto& command : {"set current GROUP1 nan\n", "set current GROUP1 inf\n", "set current GROUP1 -2\n", "set current GROUP1 2junk\n", "group set BAD 1-99\n", "count 0\n"})
     CHECK(t.input(command).find("ERR") != std::string::npos);
-  CHECK(groupCurrent(r.c.configuration(), 0) == 2000);
+  CHECK(groupCurrent(r.c.configuration(), 0) == 4000);
   r.live = 1; r.step(6000);
   CHECK(t.input("apply GROUP1\n").find("missing; output state unknown") != std::string::npos);
   CHECK(t.input("apply GROUP1 partial\n").find("ARE YOU SURE?") != std::string::npos);
@@ -1385,10 +1385,10 @@ void serialLifecycleAndParity() {
   CHECK(t.input("set current GROUP1 4", false) == "set current GROUP1 4");
   CHECK(groupCurrent(r.c.configuration(), 0) == 5500);
   CHECK(t.input("\b3", false) == "\b \b3");
-  CHECK(t.input("\r").find("OK") != std::string::npos && groupCurrent(r.c.configuration(), 0) == 300);
+  CHECK(t.input("\r").find("OK") != std::string::npos && groupCurrent(r.c.configuration(), 0) == 600);
   CHECK(t.input("\n").empty()); CHECK(t.input("\n") == "\r\n> ");
   t.input("echo off\r\n"); CHECK(t.input("set\tcurrent GROUP1 4", false).empty());
-  t.input("\x7f" "2\n"); CHECK(groupCurrent(r.c.configuration(), 0) == 200); t.input("echo on\n");
+  t.input("\x7f" "2\n"); CHECK(groupCurrent(r.c.configuration(), 0) == 400); t.input("echo on\n");
   t.input(std::string(100, 'x')); CHECK(t.input("\n").find("discarded") != std::string::npos);
   CHECK(t.input("hello\n").find("console ready") != std::string::npos);
   t.io.observing = false; t.input("apply all", false);
@@ -1473,7 +1473,7 @@ void cooperativeSerialAndStorage() {
   CHECK(t.memory.saving() && t.bytes.bytes == snapshot);
   CHECK(t.input("load\n").find("save in progress") != std::string::npos);
   CHECK(t.input("apply all\n").find("save in progress") != std::string::npos);
-  CHECK(r.c.setCurrent(0, 1234) == Result::Ok);
+  CHECK(r.c.setCurrent(0, 617) == Result::Ok);
   t.bytes.readyNow = true; t.io.output.clear();
   for (unsigned i = 0; i < 500; ++i) {
     const auto previous = t.bytes.bytes; r.step(1); t.drain(1);
@@ -1528,7 +1528,7 @@ void cooperativeSerialAndStorage() {
     if (cancel) io.feed("\x18");
     io.throttled = false;
     for (unsigned i = 0; i < 100; ++i) serial.tick(blocked.now);
-    CHECK(groupCurrent(blocked.c.configuration(), 0) == (cancel ? 5500 : 1200));
+    CHECK(groupCurrent(blocked.c.configuration(), 0) == (cancel ? 5500 : 2400));
     if (!cancel) {
       CHECK(io.output.find("input backlog") != std::string::npos);
       io.feed("set voltage 56\n"); // Suffix of a previously discarded prefix.
@@ -1662,14 +1662,14 @@ void uiWorkflows() {
   u.click(); u.turn(1); u.click(); u.turn(1); u.click();
   CHECK(u.ui.notice() == UiNotice::Applying); u.finish();
   CHECK(u.ui.notice() == UiNotice::Saved && u.memory.load(saved) == StorageResult::Ok);
-  CHECK(groupCurrent(saved, 0) == old + ui::currentStep);
-  CHECK(saved.operating.current[0] + saved.operating.current[1] == old + ui::currentStep);
+  CHECK(groupCurrent(saved, 0) == old + 2 * ui::currentStep);
+  CHECK(saved.operating.current[0] + saved.operating.current[1] == old + 2 * ui::currentStep);
   CHECK(r.c.currentSynchronized(0) && !pendingSettings(r.c, 3));
   Rig reboot(saved,false,false); reboot.finish(); CHECK(!reboot.c.currentSynchronized(0) && pendingSettings(reboot.c, 3));
   reboot.c.setAutoResume(true); reboot.finish(); CHECK(!pendingSettings(reboot.c, 3));
   // Serial/config changes invalidate a local draft before a confirming click.
   u.click(); u.click(); u.turn(3); const auto writes = r.can.writes().size();
-  CHECK(r.c.setCurrent(0, 1000) == Result::Ok); u.ui.tick(r.now);
+  CHECK(r.c.setCurrent(0, 500) == Result::Ok); u.ui.tick(r.now);
   CHECK(!u.ui.editing() && u.ui.notice() == UiNotice::Changed);
   u.click(); CHECK(r.can.writes().size() == writes && groupCurrent(r.c.configuration(), 0) == 1000);
   // No groups is a valid commissioning screen; gestures cannot index -1.
@@ -1743,7 +1743,7 @@ void uiPartialAndFailures() {
   changed.config(); changed.click(); changed.click();
   for (unsigned i = 0; changed.ui.notice() == UiNotice::Applying && i < 1000; ++i) changed.tick(10);
   CHECK(changed.ui.notice() == UiNotice::Saving);
-  CHECK(concurrent.c.setCurrent(0, 1000) == Result::Ok); changed.finish();
+  CHECK(concurrent.c.setCurrent(0, 500) == Result::Ok); changed.finish();
   CHECK(changed.ui.notice() == UiNotice::SavedOlder);
   CHECK(changed.memory.load(saved) == StorageResult::Ok && groupCurrent(saved, 0) == 5500);
   // A new save may start before the UI observes its own completed snapshot.
@@ -1762,7 +1762,7 @@ void presentationAndSessions() {
   const auto maximum = r.c.groupCurrentMaximum(0);
   CHECK(r.c.checkCurrent(0, maximum).issue == Issue::None);
   CHECK(r.c.checkCurrent(0, maximum + 1).issue == Issue::Capacity);
-  CHECK(maximum == 3604); // Equal shares and centiamp remainder, not sum of ratings.
+  CHECK(maximum == 1201); // Lowest per-PSU limit; group size cannot increase it.
   r.noCurrent=r.noTemperature=7; r.step(6000); // Expire fixture readings before partial-field tests.
   r.can.incoming.push_back(data(1, 0x81, 10 * 1024));
   r.can.incoming.push_back(data(2, 0x81, 20 * 1024));
@@ -1779,7 +1779,7 @@ void presentationAndSessions() {
   r.addresses[0] = 17; r.live |= 1; r.step(250); r.step(250);
   CHECK(r.c.sessionAmpHours(0) > accumulated && r.c.deviceForSlot(0, r.now)->address == 17);
   auto total = sessionTotal(r.c, 7); CHECK(total.observed == 3 && total.value >= accumulated);
-  CHECK(r.c.setCurrent(0, 100) == Result::Ok); CHECK(r.c.sessionAmpHours(0) >= accumulated);
+  CHECK(r.c.setCurrent(0, 50) == Result::Ok); CHECK(r.c.sessionAmpHours(0) >= accumulated);
   auto replacement = r.c.configuration(); replacement.units[0].identity = identity(99);
   CHECK(r.c.configure(replacement) == Result::Ok); close(r.c.sessionAmpHours(0), 0); CHECK(!r.c.sessionObserved(0));
   r.c.resetAmpHours(); close(sessionTotal(r.c, 7).value, 0);
@@ -1878,7 +1878,7 @@ int main() {
 #endif
     run("participationPersistence", participationPersistence); run("participationAtomicity", participationAtomicity); run("participationProfiles", participationProfiles); run("participationUiViewport", participationUiViewport); run("participationChangedGroup", participationChangedGroup);
     run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
-    run("scopedSettings", scopedSettings); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);
+    run("scopedSettings", scopedSettings); run("perPsuCurrentScopes", perPsuCurrentScopes); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);
     run("routeCacheLifecycle", routeCacheLifecycle); run("drawingReceiveService", drawingReceiveService); run("exactGroupRange", exactGroupRange); run("idleSerialStatusCadence", idleSerialStatusCadence);
     run("nineUnitMigration", nineUnitMigration); run("ninthProtectionAndControl", ninthProtectionAndControl); run("ninthAvailabilityAndRouting", ninthAvailabilityAndRouting); run("ninthSerialAndUi", ninthSerialAndUi);
     run("decimalFormatting", decimalFormatting); run("uiRecoveryAvailability", uiRecoveryAvailability); run("uiRecoveryGuards", uiRecoveryGuards); run("uiRecoverySave", uiRecoverySave); run("uiRecoveryResultsAndThermal", uiRecoveryResultsAndThermal);

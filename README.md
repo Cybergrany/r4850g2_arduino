@@ -2,9 +2,10 @@
 
 Arduino Mega 2560 firmware for up to **nine identity-bound PSUs**, with global,
 group and individual voltage/current targets and **eight named configuration
-profiles**. Global current means the same total in each group; group current is
-split across its configured members. Individual targets can then override those
-shares. Settings are staged, previewed and explicitly applied.
+profiles**. Global/group current is **amps per PSU**: setting 50 A gives every
+selected PSU a 50 A limit. Individual targets can then override those limits.
+Settings are staged, previewed and explicitly applied. Existing saved per-unit
+values stay unchanged; review scripts that previously supplied group totals.
 
 See [scoped settings, profiles and optional participation](docs/PROFILES.md) for
 commands, the five-option configuration UI, migration and a bench sequence.
@@ -143,14 +144,14 @@ the compiled template in RAM; commission the new installation before `save`.
 
 ```text
 set voltage 54
-set current GROUP1 55
+set current GROUP1 5
 preview all
 apply all
 ```
 
-With two already commissioned members, GROUP1 receives 27.50 A per PSU. `apply all`
+With two already commissioned members, GROUP1 receives 5 A per PSU (10 A total). `apply all`
 sends the common voltage to participating slots, waits for acknowledgements,
-then sends the current shares. **Wait for the final result**, not just `QUEUED`.
+then sends the per-PSU current limits. **Wait for the final result**, not just `QUEUED`.
 Subsequent `apply GROUP1` applies both that group's voltage and current targets.
 Use `apply GROUP1 current` to apply only current. While OFF, apply prepares the
 next explicit ON instead of sending positive current.
@@ -166,7 +167,7 @@ A new, unaccepted missing member blocks its group's apply. Use
 startup and future operations; returned units still require inclusion.
 The older one-operation `apply GROUP1 partial` explains the
 consequences and requires `confirm yes`; available members retain their original
-shares. Global voltage changes cannot use this override. Communication loss
+limits. Global voltage changes cannot use this override. Communication loss
 does not prove a PSU is electrically off, and the controller does not switch
 outputs off when groups are deleted or members disappear.
 

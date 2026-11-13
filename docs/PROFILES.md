@@ -11,14 +11,14 @@ Different voltage targets are intended for separate outputs.
 
 | Scope | Voltage | Current |
 | --- | --- | --- |
-| `all` | Same voltage on every configured PSU | **Same total in each group**, split across that group's configured members |
-| `GROUP1` | Same voltage on that group's members | Replace individual allocations with deterministic equal shares |
+| `all` | Same voltage on every configured PSU | **Same limit per PSU**, regardless of group sizes |
+| `GROUP1` | Same voltage on that group's members | Same limit on every group member; replaces individual overrides |
 | `psu:3` | Controller slot 3 only | Slot 3's individual current limit |
 
 For example, with two units in GROUP1 and three in GROUP2, `set current all 30`
-stages 15 A per GROUP1 member and 10 A per GROUP2 member: 60 A across the installation.
-It does not request 30 A across the entire installation. Global current is bounded
-by the least-capable group's equal split. Serial rejects invalid changes atomically;
+stages **30 A on each of the five PSUs**: 150 A across the installation.
+Global/group current is bounded by the lowest existing per-PSU limit in the
+selection, including absent/excluded members. Serial rejects invalid changes atomically;
 UI adjustments stop at the same centrally defined limits. No silent serial clamping.
 
 ```text
@@ -31,10 +31,11 @@ apply all
 save
 ```
 
-A group with custom individual currents shows their sum and **CUSTOM SHARES**.
+Different current or voltage targets within a selection show **MIXED** and
+the per-PSU minimum/maximum. Group overview readings remain aggregate totals.
 Changing membership preserves each unit's configured current; it neither
 redistributes current nor sends setting writes. Changing a group's current later
-replaces custom shares. Voltage/current fields are independent:
+sets the same requested limit on every member. Voltage/current fields are independent:
 
 ```text
 preview GROUP1 voltage
@@ -47,7 +48,7 @@ An unqualified `apply GROUP1` now applies **both** that group's voltage and curr
 Use `apply GROUP1 current` for the old current-only operation. `set voltage 54`
 and `apply voltage` remain global-voltage aliases. `apply GROUP1 partial` remains
 the explicit, confirmed current-only exception for missing members; it never
-redistributes their shares or accepts an absence for future operations.
+redistributes their current limits or accepts an absence for future operations.
 
 While OFF, apply reports **Prepared for next ON**. It authorizes the selected
 targets while maintaining zero-current hold. It does not enable, clear faults,
@@ -61,6 +62,24 @@ acknowledged current, identity/address and control state. `preview` reports each
 selected target and precise blocking conditions. Serial staging/apply require an
 explicit `save`; ordinary UI edits save after a successful apply/preparation.
 
+## Upgrading from group-total current controls
+
+The normal `set current` commands now mean **amps per PSU**. The syntax is the
+same, so update automation that previously supplied a total. For nine units,
+`set current all 50` stages 50 A on every unit (450 A configured aggregate).
+The physical output still depends on enable, participation, thermal limits and load.
+
+No EEPROM schema or named-profile format changes. Existing configured and
+authorized per-unit limits are preserved exactly. An old 30 A total spread over
+three units remains 10 A on each after boot or profile load. Unequal old remainder
+values may now show MIXED; they change only after an explicit edit. Existing
+schema-2–5 migration continues interpreting those old group totals using their
+original allocation rule.
+
+The advanced `set offline-current GROUP A` command is still an explicitly separate
+**group total** for PSU fallback defaults. It is not part of normal current editing
+or named profiles. Its persistence and allocation are unchanged.
+
 ## Local controls
 
 Long-press a group to open:
@@ -72,8 +91,10 @@ Long-press a group to open:
 5. Save Config
 
 Selectors are paginated. Individual rows show controller slot, current CAN
-address or OFF, identity suffix and group. Global current is labelled **TOTAL
-PER GROUP**. Mixed voltages/global group totals show **MIXED** and the range.
+address or OFF, identity suffix and group. Global/group current is labelled
+**CURRENT PER PSU**. The live current beside it is labelled **Total** for
+multi-unit selections; it is the measured sum. The global review shows the
+per-PSU setting, selected PSU count and resulting configured total.
 Entering an editor starts at the lowest value but changes nothing until confirmed.
 Global changes show the override warning and a field-specific review with Cancel
 selected initially. The same editor handles each scope.
@@ -150,7 +171,7 @@ leaves both runtime choices and saved participation policy untouched.
 Excluded units stay excluded when they return, with cooling and monitoring at zero
 current. Profiles do not authorize a new hot-unit thermal exclusion: only an explicit
 current absence review can release that contribution. Unconfirmed UI checkbox drafts
-are never captured. Healthy units retain their configured shares.
+are never captured. Healthy units retain their configured per-PSU limits.
 
 ## EEPROM and migration
 
@@ -184,9 +205,12 @@ establish PSU delivery, GPIO behavior or physical EEPROM interruption behavior.
 
 1. With charging OFF, confirm stable bindings and grouping using `config`,
    `diag bus`, `diag control`, and `diag group GROUP1`.
-2. Stage low test currents with the scoped commands above. Verify each `preview`
-   allocation, mixed values and individual override. Try an invalid current and
-   confirm that all staged values remain unchanged.
+2. Stage `set current all 1`: every configured PSU must preview 1 A, even with
+   unequal group sizes. Set `set current GROUP1 2`: every GROUP1 member must now
+   preview 2 A. Set `set current psu:1 0.5`: only PSU 1 changes. Confirm MIXED in
+   the group/global editor, and that cancelling an edit preserves those values.
+   Try a request above a selected member's limit; all staged values must stay
+   unchanged. Normal voltage edits must leave current unchanged and vice versa.
 3. `apply all` while OFF; verify “Prepared for next ON” and continued zero hold.
    Save a named profile with participation No. Change a draft, load the profile,
    confirm, and wait for verified save. Check `config` and `diag psu 1`.

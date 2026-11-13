@@ -120,7 +120,7 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     const uint8_t bg = Text;
     f.outline(2, col, 8, PSU_ENABLE_TOUCH ? 10 : 12, g == m.group());
     f.text(2, col, 8, group.name, bg | Accent);
-    f.text(3, col, 8, UI_TEXT("LIVE/REQ"), bg | Muted);
+    f.text(3, col, 8, UI_TEXT("TOTAL A"), bg | Muted);
     reading(f, 4, col, 8, summarize(c, group.members, protocol::OutputCurrent, Aggregate::Sum, now), "A", bg);
     const auto state = c.groupStatus(g, now);
     if ((c.configuration().operating.currentMask & group.members) == group.members) {
@@ -237,21 +237,19 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   f.text(1,9,17,UI_TEXT("CONFIG"),Accent);
   line(f,2,scope.kind==ScopeKind::Global ? UI_TEXT("Overrides ALL PSUs") : UI_TEXT("Selected members only"),Warning);
   line(f,3,scope.kind==ScopeKind::Group ? UI_TEXT("GROUP VOLTAGE") : scope.kind==ScopeKind::Unit ? UI_TEXT("PSU VOLTAGE") : UI_TEXT("GLOBAL VOLTAGE"),Accent);
-  line(f,7,scope.kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : scope.kind==ScopeKind::Group ? UI_TEXT("GROUP TOTAL CURRENT") : UI_TEXT("CURRENT TOTAL PER GROUP"),Accent);
+  line(f,7,scope.kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : UI_TEXT("CURRENT PER PSU"),Accent);
   for (uint8_t i=0;i<2;++i) {
     const bool voltage=i==0,chosen=m.field()==(voltage ? UiField::Voltage : UiField::Current);
     const uint8_t row=voltage ? 4 : 8; const auto summary=m.configured(voltage ? SettingFields::Voltage : SettingFields::Current);
     f.outline(row-1,0,26,3,chosen); f.text(row,0,4,UI_TEXT("Set"));
     if (summary.minimum!=summary.maximum && !(chosen && m.editing())) f.text(row,4,8,UI_TEXT("MIXED"),Warning);
     else if (!chosen || !m.editing() || (now/ui::blinkMs)%2==0) number(f,row,4,8,(chosen && m.editing() ? m.editValue() : summary.minimum)/100.0f,voltage ? "V" : "A",Text,2);
-    if (!voltage && summary.custom) f.text(row+1,0,26,UI_TEXT("CUSTOM SHARES; edit splits"),Warning);
-    else {
-      f.text(row+1,0,6,UI_TEXT("Range"),Muted);
-      number(f,row+1,6,8,(summary.minimum!=summary.maximum ? summary.minimum : voltage ? limits::minVoltage : 0)/100.0f,"",Muted,2);
-      f.text(row+1,14,1,UI_TEXT("-"),Muted);
-      number(f,row+1,15,11,(summary.minimum!=summary.maximum ? summary.maximum : c.settingMaximum(scope,voltage ? SettingFields::Voltage : SettingFields::Current))/100.0f,voltage ? "V" : "A",Muted,2);
-    }
-    f.text(row,13,4,UI_TEXT("Live"),Muted);
+    f.text(row+1,0,6,UI_TEXT("Range"),Muted);
+    number(f,row+1,6,8,(summary.minimum!=summary.maximum ? summary.minimum : voltage ? limits::minVoltage : 0)/100.0f,"",Muted,2);
+    f.text(row+1,14,1,UI_TEXT("-"),Muted);
+    number(f,row+1,15,11,(summary.minimum!=summary.maximum ? summary.maximum : c.settingMaximum(scope,voltage ? SettingFields::Voltage : SettingFields::Current))/100.0f,voltage ? "V" : "A",Muted,2);
+    if (!voltage && population(mask)>1) f.text(row,12,5,UI_TEXT("Total"),Muted);
+    else f.text(row,13,4,UI_TEXT("Live"),Muted);
     if (voltage && population(mask)>1) f.text(row,17,9,UI_TEXT("Per PSU"),Muted);
     else reading(f,row,17,9,summarize(c,mask,voltage ? protocol::OutputVoltage : protocol::OutputCurrent,Aggregate::Sum,now),voltage ? "V" : "A");
   }
@@ -261,7 +259,7 @@ void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
 }
 void confirmation(UiFrame& f, const UiModel& m) {
   line(f, 2, UI_TEXT("MISSING MEMBER - BLOCKED"), Error);
-  f.wrap(4, 8, UI_TEXT("Missing outputs may still be ON. Apply original shares to responding units only? No redistribution."), Warning);
+  f.wrap(4, 8, UI_TEXT("Missing outputs may still be ON. Apply configured limits to responding units only?"), Warning);
   char b[27]; uint8_t n = PSU_SNPRINTF(b, sizeof(b), "Missing PSU:");
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) if (m.plan().missing & (1U << i))
     n += PSU_SNPRINTF(b + n, sizeof(b) - n, " %u", unsigned(i + 1));
@@ -281,7 +279,7 @@ void result(UiFrame& f, const UiModel& m) {
     case UiNotice::Applying: title = UI_TEXT("APPLYING - WAIT FOR ACKS"); body = UI_TEXT("You may return to groups. The operation continues in the background."); break;
     case UiNotice::Saving: title = m.profileOperation() && m.savingProfile() ? UI_TEXT("SAVING NAMED PROFILE") : UI_TEXT("SAVING EEPROM"); body = UI_TEXT("CAN and serial remain active. Wait for verified completion."); break;
     case UiNotice::Saved: title = UI_TEXT("APPLIED AND SAVED"); body = UI_TEXT("PSUs acknowledged settings. Output measurements show actual delivery."); color = Good; break;
-    case UiNotice::PartialSaved: title = UI_TEXT("PARTIAL APPLY SAVED"); body = UI_TEXT("Only responding units accepted their original shares. Missing outputs remain unknown."); break;
+    case UiNotice::PartialSaved: title = UI_TEXT("PARTIAL APPLY SAVED"); body = UI_TEXT("Only responding units accepted their configured limits. Missing outputs remain unknown."); break;
     case UiNotice::ApplyFailed: title = UI_TEXT("APPLY FAILED - NOT SAVED"); body = UI_TEXT("Some units may have accepted settings. Inspect PSU details; there is no automatic rollback."); color = Error; break;
     case UiNotice::SaveFailed: title = m.profileOperation() && m.savingProfile() ? UI_TEXT("PROFILE SAVE FAILED") : UI_TEXT("APPLIED / EEPROM FAILED"); body = m.profileOperation() && m.savingProfile() ? UI_TEXT("No settings applied. Inspect the profile slot before retrying its save.") : UI_TEXT("Live settings were accepted, but not saved. Review EEPROM before retrying save."); color = Error; break;
     case UiNotice::SavedOlder: title = UI_TEXT("EARLIER SNAPSHOT SAVED"); body = UI_TEXT("Configuration changed while saving. Current RAM edits remain unsaved; review serial config."); break;
