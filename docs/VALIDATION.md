@@ -49,17 +49,28 @@ Validation passed:
 
 Ordinary production builds add **14 static bytes**; profile/observer builds add
 **five**, reusing their existing receive clock fields. Debug builds add three
-bytes. No additional scene, queue or configuration copy is introduced. The
-wheel/profile direct main-chain estimate remains 765 bytes; registered RX
-interrupt overlap remains about 60 bytes, leaving 30 bytes before outgoing
-argument/indirect-call uncertainty. The fullest touch+wheel source-reviewed
-runtime path remains 668 bytes; the previous 12-byte argument/virtual-call
-allowance and 60-byte IRQ leave an estimated **28 bytes**. The new receive path's
-228-byte direct chain does not become the peak. Existing source constraints
-about caller-owned EEPROM scratch still apply; raw unpruned paths must not be
-mistaken for reachable duplicate candidates.
+bytes. No additional scene, queue or configuration copy is introduced.
 
-These margins are narrow estimates, not measured worst-case guarantees. Keep
+**Stack-audit correction:** the previous 765/668-byte peak estimates and positive
+RAM margins below are superseded. `analyze_avr_stack.py` accepted partial
+hexadecimal operands: the touch UI's `0x6A` allocation was read as `0x6`, hiding
+100 bytes; other frames were affected too. The parser now accepts either case
+and rejects malformed operands instead of accepting a prefix. Regressions in
+`python3 test/test_avr_stack.py` exercise the production parser.
+
+A separate rebuild of `d65554a`, compared with `10b4d72`, finds the same existing
+serial participation-save direct chain in both: 978 bytes for wheel/profile and
+993 for touch/wheel, before interrupt/argument allowances. These exceed the
+available RAM in the largest builds and need reduced overlapping frames. The
+new complete `main -> Application::tick -> LocalUi::tick -> serviceReceive`
+paths are 315 bytes (wheel/profile), 431 (touch/wheel) and 318 (wheel/alerts),
+including saved registers and three-byte calls; those paths fit with the
+60-byte registered RX-interrupt allowance. The receive change did not create
+the existing serial/save concentration. Caller-owned EEPROM scratch still
+excludes the raw graph's duplicate candidate during production loading, but
+ordinary saves legitimately validate a separate candidate.
+
+These are source/disassembly estimates, not measured worst-case guarantees. Keep
 `diag memory` in the bench capture, including profile loads/saves, recovery,
 calibration and normal CAN traffic; investigate a near-zero watermark. The
 advisory 1 KiB policy remains, and software/simavr results are not PSU hardware

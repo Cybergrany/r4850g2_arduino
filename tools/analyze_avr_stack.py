@@ -8,18 +8,27 @@ import argparse
 from pathlib import Path
 import re
 import subprocess
+
+def immediate(token):
+    # objdump prints uppercase A-F in operands even though addresses are lower
+    # case. Parse the whole operand: accepting just the "0x6" in "0x6A" hid
+    # 100 bytes of LocalUi's frame, making a RAM-safety estimate misleading.
+    if not re.fullmatch(r'0[xX][0-9a-fA-F]+', token):
+        raise ValueError(f'Unsupported AVR frame immediate: {token!r}')
+    return int(token, 16)
+
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('elf',type=Path)
 p.add_argument('--core-dir',type=Path,default=Path(__file__).resolve().parents[2]/'.platformio')
 a=p.parse_args()
 text=subprocess.check_output([str(a.core_dir/'packages/toolchain-atmelavr/bin/avr-objdump'),'-d','-C',str(a.elf)],text=True)
-parts=re.split(r'(?m)^([0-9a-f]+) <([^\n]+)>:\n',text)
+parts=re.split(r'(?m)^([0-9a-fA-F]+) <([^\n]+)>:\n',text)
 functions={}
 for i in range(1,len(parts),3):
     address,name,body=int(parts[i],16),parts[i+1],parts[i+2]
     instructions=[]
     for line in body.splitlines():
-        m=re.match(r'\s*([0-9a-f]+):\s+(?:(?:[0-9a-f]{2})\s+)+\s*([a-z][a-z0-9]*)\s*(.*)',line)
+        m=re.match(r'\s*([0-9a-fA-F]+):\s+(?:(?:[0-9a-fA-F]{2})\s+)+\s*([a-z][a-z0-9]*)\s*(.*)',line)
         if m: instructions.append((int(m[1],16),m[2],m[3]))
     if not instructions or '::__c' in name: continue
     # AVR GCC saves registers, reads SP into Y, then subtracts its fixed frame.
@@ -31,11 +40,14 @@ for i in range(1,len(parts),3):
     if pro:
         saved=len(re.findall(r'(?m)^push ',pro))
         local=0
-        m=re.search(r'sbiw r28, 0x([0-9a-f]+)',pro)
-        if m: local=int(m[1],16)
+        m=re.search(r'sbiw r28, (\S+)',pro)
+        if m: local=immediate(m[1])
         else:
-            m=re.search(r'subi r28, 0x([0-9a-f]+)[^\n]*\n(sbci|sbc) r29, (r1|0x[0-9a-f]+)',pro)
-            if m: local=int(m[1],16)+(int(m[3],16)*256 if m[2]=='sbci' else 0)
+            m=re.search(r'subi r28, (\S+)[^\n]*\n(sbci|sbc) r29, (\S+)',pro)
+            if m:
+                if m[2]=='sbc' and m[3]!='r1':
+                    raise ValueError(f'Unsupported AVR frame borrow register: {m[3]!r}')
+                local=immediate(m[1])+(immediate(m[3])*256 if m[2]=='sbci' else 0)
         # Small fixed frames can also use rcall .+0 (three bytes on ATmega2560).
         local+=3*len(re.findall(r'rcall \.\+0\b',pro))
     else:
@@ -49,7 +61,7 @@ for i in range(1,len(parts),3):
     for _,op,arg in instructions:
         if op in ('icall','eicall','ijmp','eijmp'): indirect=True
         if op not in ('call','rcall','jmp','rjmp'): continue
-        m=re.search(r'(?:0x)?([0-9a-f]+) <([^>]+)>',arg)
+        m=re.search(r'(?:0[xX])?([0-9a-fA-F]+) <([^>]+)>',arg)
         if not m: continue
         target=int(m[1],16)
         if target!=address and '+' not in m[2] and '::__c' not in m[2]: calls.append((target,0 if op in ('jmp','rjmp') else 3))
