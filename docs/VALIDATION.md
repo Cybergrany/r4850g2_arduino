@@ -4,6 +4,70 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Per-PSU current and combined bench build (2026-11-13)
+
+Normal global/group current now sets the same limit on every selected PSU.
+The editor, fullscreen touch editor, serial help and global review say per PSU;
+group monitoring remains a total. Mixed targets show their per-unit range, and
+the selected maximum is the lowest existing per-unit limit. Invalid serial
+requests leave every draft unchanged. No EEPROM/profile format or stored value
+is converted; the explicit advanced offline-current command still uses a group
+total. Existing scripts must adopt the new normal-current meaning. See
+[upgrade semantics and commissioning](PROFILES.md#upgrading-from-group-total-current-controls).
+
+The combined build includes the reviewed CAN scheduling changes and stack fixes
+described below. Validation on the final sources passed:
+
+- Ordinary host **3,372,895 checks**, profiled host **3,500,959**. New cases cover
+  nine PSUs in unequal 3/2/4-member groups, global/group/individual precedence,
+  independent voltage/current fields, no rounding division, mixed edits and
+  cancellation, atomic capacity rejection, OFF preparation, excluded members
+  retaining their targets, and unchanged offline allocation. Existing profile,
+  migration, interruption, protection, identity and acknowledgement tests pass.
+- Touch/simulator **1,393 checks**, real wheel **19,652**, production renderer at
+  five clocks and **84 captured UI scenes**, route/transport, output GPIO,
+  bus-log/stack-parser, format and isolated-storage checks.
+- All **22 Mega profiles**, physical memory checks, all three UI-debug isolation
+  checks and observer isolation. simavr executes the actual wheel/profile ELF
+  with INT held LOW: one receive interrupt, advancing clock/UART/TFT. The AVR
+  complete-redraw benchmark also passes; nominal SPI simulation is not loaded
+  bus or hardware latency proof.
+
+| Combined build | Flash bytes | Static RAM bytes | Static free bytes |
+|---|---:|---:|---:|
+| mega2560 | 203420 | 7191 | 1001 |
+| mega2560_wheel_alerts | 204044 | 7194 | 998 |
+| mega2560_wheel_profile | 211222 | 7337 | 855 |
+| mega2560_touch_wheel | 215002 | 7424 | 768 |
+| mega2560_serial_profile | 130038 | 5467 | 2725 |
+| mega2560_can_observer | 17282 | 1902 | 6290 |
+
+Per-PSU settings add no static RAM. The corrected final runtime direct peaks
+remain **641 / 643 / 657 bytes** for wheel/alerts, wheel/profile and touch/wheel.
+Including the documented 60-byte interrupt and 12-byte argument/EEPROM allowance
+leaves estimated margins **285 / 140 / 39 bytes**. The touch estimate is narrow:
+exercise profile/participation saves, recovery and calibration under CAN traffic
+and capture `diag memory`. See the source constraints and uncertainty below;
+these estimates do not establish the cause of a previous bench failure.
+
+Bench comparison:
+
+1. Keep enable OFF. Capture `config`, `preview all`, `diag bus`, `diag ui` and
+   `diag memory`. Existing stored per-unit targets should match the previous
+   firmware; do not erase EEPROM for this update.
+2. Stage `set current all 1`, then `preview all current`: every selected PSU
+   should show `target A=1.00`. A three-member group has 3 A configured total.
+   Set one group's current, then one member's current; verify only those selected
+   targets change and that its UI shows MIXED. Cancel a mixed edit and check that
+   it changes nothing. Try an invalid serial setting and verify atomic rejection.
+3. After reviewing voltage and every target, use the existing OFF preparation,
+   explicit ON, stop and profile/reboot tests in [PROFILES.md](PROFILES.md#bench-sequence).
+   Physical acceptance and delivery still require PSU telemetry/measurement.
+4. Follow the [nine-unit receive-pressure soak](BUS_PROFILING.md#software-queue-pressure-comparison).
+   Include idle and navigation periods, normal diagnostics, profile operations
+   and the smallest memory watermark. Capture growing receive-loss counters and
+   their new phase/gap fields; the patch does not suppress real loss alerts.
+
 ## Bounded software-queue pressure handling (2026-11-13)
 
 Intermediate receive passes expand from four to at most twelve frames only when
@@ -38,6 +102,9 @@ Validation passed:
 - All **22 Mega builds**, physical memory limits, three UI-debug isolation checks
   and observer isolation. The actual wheel/profile ELF also passes the simavr
   held-LOW interrupt regression; its clock, UART and TFT continue progressing.
+
+The following figures describe the CAN/stack changes before the per-PSU current
+change; use the combined build table above for the delivered firmware.
 
 | Build | Flash bytes | Static RAM bytes | Static free bytes |
 |---|---:|---:|---:|

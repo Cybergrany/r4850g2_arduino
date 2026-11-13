@@ -9,7 +9,7 @@ controller, and storage code are ordinary C++11 without Arduino dependencies.
 | `src/config/` | Deployment template, board wiring, limits, configuration types and validation |
 | `src/can/` | Injectable `CanTransport` plus MCP2515 adapter and bounded transmission |
 | `src/protocol/` | Huawei frame classification, registers, numeric encoding |
-| `src/psu/` | Discovered physical devices, stable slot bindings, group allocation, apply/recovery state machines |
+| `src/psu/` | Discovered physical devices, stable slot bindings, scoped targets, apply/recovery state machines |
 | `src/storage/` | Versioned journal over `ByteStorage`; Arduino adapter uses standard EEPROM |
 | `src/ui/` | Serial commands, diagnostic rendering, ILI9341 layout/renderer, wheel/touch navigation and calibration |
 | `src/debug/` | Optional simulated PSU transport and volatile byte storage |

@@ -247,6 +247,8 @@ void layoutAndLocalUi() {
   CHECK(model.page()==UiPage::Editor && model.editing()); const auto old=groupCurrent(r.controller.configuration(), 0);
   model.action({ActionKind::Adjust,32000},clockNow); CHECK(model.editValue()==model.maximum());
   UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-editor",frame);
+  CHECK(hasText(frame,"CURRENT PER PSU") && hasText(frame,"Total"));
+  CHECK(model.maximum()==6000); // Per-unit cap, independent of group size.
   CHECK(groupCurrent(r.controller.configuration(), 0)==old);
   model.action({ActionKind::Cancel},clockNow); CHECK(!model.editing() && groupCurrent(r.controller.configuration(), 0)==old);
   model.action({ActionKind::Tools},clockNow); UiView::compose(frame,model,r.controller,clockNow); snapshot("touch-tools",frame);

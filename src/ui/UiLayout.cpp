@@ -195,13 +195,14 @@ void UiLayout::extras(UiFrame& f,const UiModel& m,const PsuController& c,uint32_
   if (m.settingsPage()) { settingsExtras(f,m,c,now); return; }
   if (m.page()==UiPage::Editor) {
     const bool volts=m.field()==UiField::Voltage;
-    f.text(2,0,26,volts ? UI_TEXT("SELECTED PSU VOLTAGE") : m.scope().kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : UI_TEXT("TOTAL CURRENT PER GROUP"),Accent);
+    f.text(2,0,26,volts ? UI_TEXT("SELECTED PSU VOLTAGE") : m.scope().kind==ScopeKind::Unit ? UI_TEXT("PSU CURRENT") : UI_TEXT("CURRENT PER PSU"),Accent);
     if (m.scope().kind==ScopeKind::Group) f.text(3,0,26,c.configuration().groups[m.group()].name,Accent);
     char value[12]; formatValue(value,sizeof(value),m.editValue()/100.0f,"",1);
     f.largeNumber(6,value); f.text(8,12,2,volts ? UI_TEXT("V") : UI_TEXT("A"),Muted);
     const auto live=summarize(c,m.settingsMembers(),
         volts ? protocol::OutputVoltage : protocol::OutputCurrent,volts ? Aggregate::Mean : Aggregate::Sum,now);
-    f.text(9,0,5,UI_TEXT("Live:"),Muted); formatValue(value,sizeof(value)-live.partial(),live.value,volts ? "V" : "A");
+    f.text(9,0,5,!volts && population(m.settingsMembers())>1 ? UI_TEXT("Total") : UI_TEXT("Live:"),Muted);
+    formatValue(value,sizeof(value)-live.partial(),live.value,volts ? "V" : "A");
     if (live.partial()) strcat(value,"*");
     if (volts && population(m.settingsMembers()) > 1) f.text(9,6,18,UI_TEXT("See each PSU"),Muted);
     else f.text(9,6,12,live.valid() ? value : "--",live.partial() ? Warning : Text);
