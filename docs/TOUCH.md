@@ -10,11 +10,15 @@ pins alone do not provide touch input.
 | Environment | Input | CAN / settings storage |
 | --- | --- | --- |
 | `mega2560_touch` | Touch | Physical MCP2515 / EEPROM |
-| `mega2560_touch_wheel` | Touch and wheel | Physical MCP2515 / EEPROM |
 | `mega2560_ui_debug` | Wheel | Simulated PSUs / volatile RAM |
 | `mega2560_touch_debug` | Touch | Simulated PSUs / volatile RAM |
 | `mega2560_touch_local` | Touch, no serial | Physical MCP2515 / EEPROM |
 | `mega2560_touch_debug_local` | Touch, no serial | Simulated PSUs / volatile RAM |
+
+The combined `mega2560_touch_wheel` environment is deprecated and no longer
+shipped. Its stack margin was too narrow for routine feature growth. Current
+bench use is `mega2560_wheel_alerts`; the touch-only environments above remain
+supported. Historical validation figures for the retired environment are retained.
 
 `PSU_ENABLE_TOUCH` and `PSU_UI_DEBUG` default to zero in `BuildOptions.h`.
 The current `mega2560_wheel_alerts` wiring profile explicitly keeps touch off and

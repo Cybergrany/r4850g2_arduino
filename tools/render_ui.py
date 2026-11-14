@@ -24,7 +24,7 @@ body = source.split("font[] PROGMEM = {", 1)[1].split("}", 1)[0]
 font = [int(n, 16) for n in re.findall(r"0x[0-9a-fA-F]+", body)]
 assert len(font) == 1280
 frames = {}
-for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")) + sorted(p.stem for p in args.frames.glob("settings-*.txt")) + sorted(p.stem for p in args.frames.glob("profile-*.txt")):
+for name in ["groups", "groups-page2", "chargers", "units-nine-page5", "details", "config", "confirmation"] + sorted(p.stem for p in args.frames.glob("header-*.txt")) + sorted(p.stem for p in args.frames.glob("touch-*.txt")) + sorted(p.stem for p in args.frames.glob("control-*.txt")) + sorted(p.stem for p in args.frames.glob("availability-*.txt")) + sorted(p.stem for p in args.frames.glob("recovery-*.txt")) + sorted(p.stem for p in args.frames.glob("settings-*.txt")) + sorted(p.stem for p in args.frames.glob("profile-*.txt")):
     lines = (args.frames / (name + ".txt")).read_bytes().decode("latin1").rstrip("\n").split("\n")
     assert len(lines) == 17 and all(len(line) == 26 for line in lines[:15]) and len(lines[15]) == 390
     frames[name] = {"rows": lines[:15], "styles": lines[15], "outlines": json.loads(lines[16])}
@@ -45,7 +45,7 @@ __FONT_LICENSE__
 <p>These frames come from the implemented layout exercised by host tests. The display is 320×240 pixels; the preview is enlarged. Example readings are simulated, not measurements from hardware.</p>
 <nav aria-label="Preview screen"></nav>
 <figure><canvas width="320" height="240" role="img" aria-label="Firmware display preview"></canvas>
-<figcaption>Three group columns, two chargers per detail page, shared V/A/W header. Selection uses a bright cyan outline; other controls have dim outlines. Errors retain their text and colours. Group current is labelled TOTAL A; settings use CURRENT PER PSU. Requested current is the authorized profile; PENDING includes missing acknowledgements.</figcaption></figure>
+<figcaption>Three group columns, two chargers per detail page. Header: authorized target/actual V, total A/W and page count. Target MIX means different authorized targets; actual MIX means a reading is outside +/-0.25 V of the fresh-reading mean. An asterisk marks partial coverage. Selection uses a bright cyan outline; other controls have dim outlines. Group current is labelled TOTAL A; settings use CURRENT PER PSU. PENDING includes missing acknowledgements.</figcaption></figure>
 <p><strong>Controls:</strong> turn to select, click to open/edit/apply, hold to configure a group or return. A flashing value indicates editing; hold cancels the uncommitted edit. Touch builds use visible buttons and a fullscreen value editor. SIM captures come from the CAN-free debug build. This preview switches between captured frames and does not simulate commands.</p>
 <p><a href="LOCAL_UI.md">Wiring, controls, commissioning and failure behavior</a></p>
 <details><summary>Accessible text of the selected frame</summary><pre id="text"></pre></details>

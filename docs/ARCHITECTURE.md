@@ -262,8 +262,13 @@ heap-allocated canvas, or String-based menu. A future display can replace the
 renderer; a different resolution can also replace the layout without changing
 navigation/backend policy. SSD1306 support and its dependency are removed.
 
-The header shows a common voltage or explicit V:MIX and sums fresh current
-and output power. Per-metric timestamps and an expiring freshness mask prevent
+The header shows authorized target/actual voltage. Targets require exact
+agreement; actual is the fresh-reading mean only when every reading is within
+`ui::voltageTolerance` (+/-0.25 V) of that mean. Either side can show MIX or --;
+partial coverage retains an asterisk. Header calculation and formatting use
+non-inlined helpers so their temporaries finish before profile-detail rendering.
+No persistent voltage-summary state or extra scene buffer is used. Current and
+output power remain fresh sums. Per-metric timestamps and an expiring freshness mask prevent
 other replies from keeping an old measurement fresh, including across millis
 rollover. `metric()` retains its last-value API; `freshMetric()` is the stricter
 presentation hook. Partial sums carry `*`; no available readings show `--`.

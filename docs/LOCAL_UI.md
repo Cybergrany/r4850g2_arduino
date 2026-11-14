@@ -123,10 +123,22 @@ also expires after 15 seconds or a topology/configuration change.
 
 ## Reading the screens
 
-The top bar is **measured V, measured total A, measured total output W** across
-all configured slots, not just the visible group/page. Voltage shows the common
-fresh reading, or `V:MIX` when readings differ; individual details show each
-unit's voltage. It is not a separate bus sensor or the setpoint.
+The top bar shows **target/actual voltage, measured total A, measured total W**
+across all configured slots, including excluded units, rather than just the
+visible group/page. For example, `54.0/54.1V` means an authorized 54 V target
+and a 54.1 V measured average. Each voltage side can independently show `MIX`:
+
+- Target uses the authorized per-PSU profile, with exact equality. Unapplied
+  edits do not replace it; authorizing a target does not prove its ACK or delivery.
+- Actual averages fresh output-voltage readings only. Every reading must be
+  within **+/-0.25 V of that average**, inclusive, or actual shows `MIX`.
+  The tolerance is defined in `UiConfig.h` and only affects presentation.
+- A side with no known values shows `--`. An appended `*` means one or both
+  sides have only partial coverage; values are never invented for missing units.
+
+The A/W fields use bounded compact formatting (less precision or kW where
+needed); page count remains at the top right. Individual details retain each
+unit's voltage and the existing detailed current/power precision.
 Current and output power are sums of their respective telemetry registers;
 power is not reconstructed from V x A. Unconfigured/unbound responders are not
 silently added to these totals; use `diag bus` when commissioning.

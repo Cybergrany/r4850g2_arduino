@@ -1852,6 +1852,7 @@ void uiLayouts() {
   CHECK(rowText(frame, 3).find("GROUP VOLTAGE") != std::string::npos);
   CHECK(rowText(frame, 4).find("54.00V") != std::string::npos && rowText(frame, 5).find("58.50V") != std::string::npos);
 }
+#include "test_voltage_header.inc"
 #include "test_availability.inc"
 #include "test_zero_hold.inc"
 #include "test_output_readiness.inc"
@@ -1893,7 +1894,7 @@ int main() {
     run("controlLifecycle", controlLifecycle); run("zeroHoldEdges", zeroHoldEdges); run("fanControl", fanControl); run("manualFanControl", manualFanControl); run("externalFanControl", externalFanControl); run("controlPresentation", controlPresentation); run("boundedCanTransmit", boundedCanTransmit); run("cooperativeCan", cooperativeCan); run("protocolAndConfiguration", protocolAndConfiguration); run("discoveryAndTelemetry", discoveryAndTelemetry); run("orderedApplyAndDraftIsolation", orderedApplyAndDraftIsolation);
     run("missingMembersAndConfirmations", missingMembersAndConfirmations); run("acknowledgementsAndFailures", acknowledgementsAndFailures); run("restorationAndDeployment", restorationAndDeployment); run("schedulerAndBounds", schedulerAndBounds); run("receiveScheduling", receiveScheduling);
     run("eepromAndMigration", eepromAndMigration); run("serialFanControl", serialFanControl); run("serialWorkflow", serialWorkflow); run("serialLifecycleAndParity", serialLifecycleAndParity); run("cooperativeSerialAndStorage", cooperativeSerialAndStorage); run("boundedFrameChanges", boundedFrameChanges);
-    run("uiWorkflows", uiWorkflows); run("uiPartialAndFailures", uiPartialAndFailures); run("presentationAndSessions", presentationAndSessions); run("uiLayouts", uiLayouts);
+    run("uiWorkflows", uiWorkflows); run("uiPartialAndFailures", uiPartialAndFailures); run("presentationAndSessions", presentationAndSessions); run("uiLayouts", uiLayouts); run("voltageHeader", voltageHeader);
     if (failures) { std::cerr << failures << " suites failed\n"; return 1; }
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

@@ -87,18 +87,41 @@ void status(UiFrame& f, uint8_t row, const PsuController& c, uint8_t slot, uint3
   else if (c.readinessStatus(slot, now).pending) line(f, row, UI_TEXT("VERIFYING OUTPUT READY"), background | Warning);
   else line(f, row, UI_TEXT("OK"), background | Good);
 }
-void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
-  const UnitMask mask = membersMask(c.count());
-  float lo=0,hi=0,value=0; bool any=false;
-  for (uint8_t i=0;i<c.count();++i) if ((mask & (1U<<i)) && c.freshMetric(i,protocol::OutputVoltage,value,now)) {
-    if (!any || value<lo) lo=value;
-    if (!any || value>hi) hi=value;
-    any=true;
+// Keep header temporaries out of the deeper profile-detail rendering stack,
+// including under AVR LTO. No state or extra scene buffer survives this call.
+__attribute__((noinline)) void headerVoltage(UiFrame& f, const PsuController& c, uint32_t now) {
+  const auto& profile = c.configuration().operating;
+  uint16_t target = 0; uint8_t targets = 0, observed = 0; bool mixedTarget = false;
+  float lo = 0, hi = 0, sum = 0, value;
+  for (uint8_t i = 0; i < c.count(); ++i) {
+    if (profile.voltageMask & (1U << i)) {
+      if (targets && target != profile.voltage[i]) mixedTarget = true;
+      target = profile.voltage[i]; ++targets;
+    }
+    if (!c.freshMetric(i, protocol::OutputVoltage, value, now)) continue;
+    if (!observed || value < lo) lo = value;
+    if (!observed || value > hi) hi = value;
+    sum += value; ++observed;
   }
-  if (any && hi-lo>0.1f) f.text(0,0,6,UI_TEXT("V:MIX"),Warning);
-  else reading(f,0,0,6,summarize(c,mask,protocol::OutputVoltage,Aggregate::Mean,now),"V");
-  reading(f, 0, 7, 7, summarize(c, mask, protocol::OutputCurrent, Aggregate::Sum, now), "A");
-  reading(f, 0, 15, 7, summarize(c, mask, protocol::OutputPower, Aggregate::Sum, now), "W", Text, 0);
+  const float mean = observed ? sum / observed : 0;
+  const bool mixedActual = observed && (mean - lo > ui::voltageTolerance || hi - mean > ui::voltageTolerance);
+  const bool partial = (targets && targets < c.count()) || (observed && observed < c.count());
+  char text[12]; // Four chars per value, slash, V, optional *, terminator.
+  if (!targets) { text[0] = text[1] = '-'; text[2] = 0; }
+  else if (mixedTarget) { text[0] = 'M'; text[1] = 'I'; text[2] = 'X'; text[3] = 0; }
+  else formatValue(text, 5, target / 100.0f, "", 1);
+  uint8_t n = strlen(text); text[n++] = '/';
+  if (!observed) { text[n++] = '-'; text[n++] = '-'; text[n] = 0; }
+  else if (mixedActual) { text[n++] = 'M'; text[n++] = 'I'; text[n++] = 'X'; text[n] = 0; }
+  else formatValue(text + n, 5, mean, "", 1);
+  n = strlen(text); text[n++] = 'V'; if (partial) text[n++] = '*'; text[n] = 0;
+  f.text(0, 0, 11, text, partial || mixedTarget || mixedActual || !targets || !observed ? Warning : Text);
+}
+__attribute__((noinline)) void header(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+  const UnitMask mask = membersMask(c.count());
+  headerVoltage(f, c, now);
+  reading(f, 0, 11, 5, summarize(c, mask, protocol::OutputCurrent, Aggregate::Sum, now), "A");
+  reading(f, 0, 17, 5, summarize(c, mask, protocol::OutputPower, Aggregate::Sum, now), "W", Text, 0);
   uint8_t page = m.groupRank() / ui::groupsPerPage + 1;
   uint8_t pages = (m.groupCount() + ui::groupsPerPage - 1) / ui::groupsPerPage;
   if (m.page() == UiPage::Units || m.page() == UiPage::Detail) {

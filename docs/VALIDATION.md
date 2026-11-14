@@ -4,6 +4,61 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Target/actual voltage header; wheel bench profile (2026-11-13)
+
+The header now shows authorized target/actual voltage, e.g. `54.0/54.1V`.
+Targets use exact agreement; actual readings are averaged only if every fresh
+sample lies within +/-0.25 V of that mean, inclusive. Either side can show MIX
+or --; partial coverage retains `*`. Draft edits do not change the authorized
+target. The smaller A/W fields preserve units and partial markers using the
+existing bounded precision/engineering formatting; page count remains visible.
+
+`mega2560_touch_wheel` is deprecated and removed from `platformio.ini`. The
+current hardware profile is **mega2560_wheel_alerts**. Touch-only profiles remain
+available. There are now **21 shipped environments**. Older sections below are
+validation history; their touch/wheel figures and old build lists describe the
+firmware at that time, not the current supported matrix.
+
+Validation passed on these sources:
+
+- Ordinary host **3,373,665 checks** and profiled host **3,501,722**, including
+  the supplied nine-unit 54.04–54.16 V readings, exact mixed targets, staged
+  versus authorized values, +/-0.25 V boundaries, skewed averages, partial and
+  missing data, timer rollover and maximum nine-unit A/W totals without clipping.
+- Touch **1,393 checks**, real wheel **19,652**, production renderer at five
+  clocks with **91 captured scenes**, route-search budget, AVR formats and stack
+  parser. Regenerated previews include the normal, mixed and partial headers.
+- All **21 Mega builds**, memory limits, three UI-debug isolation checks and
+  observer isolation. The AVR complete-redraw simulation also passes; its group
+  highlight completes in about 89 ms with nominal SPI, not a hardware guarantee.
+
+| Build | Flash bytes | Static RAM | Static free | Direct runtime peak | Estimated remaining margin |
+|---|---:|---:|---:|---:|---:|
+| mega2560_wheel_alerts | 204348 | 7194 | 998 | 606 | **320** |
+| mega2560_wheel_profile | 211524 | 7337 | 855 | 608 | **175** |
+
+Static RAM is unchanged. The header uses non-inlined helpers and a bounded
+12-byte text buffer; its temporaries finish before profile-detail composition.
+This also lowers the compiler's peak direct runtime path by 35 bytes in both
+wheel builds. Margins retain the corrected audit's 60-byte interrupt and 12-byte
+argument/EEPROM allowance, production-load scratch constraints and uncertainty.
+The wheel/alerts complete header path is 498 bytes, below its 606-byte peak.
+These remain source/disassembly estimates; retain `diag memory` in bench runs.
+
+Build the current bench target with:
+
+```sh
+PLATFORMIO_CORE_DIR=/home/dave/psu-can-workspace/.platformio pio run -e mega2560_wheel_alerts
+python3 tools/analyze_avr_stack.py .pio/build/mega2560_wheel_alerts/firmware.elf
+```
+
+No EEPROM reset is required. On hardware, check the target against authorized
+values in `diag control`, and actual against fresh per-unit readings in
+`telemetry all`. Capture `diag ui`, `diag bus` and `diag memory` while navigating
+and viewing profiles. An individual voltage difference can produce target MIX;
+missing telemetry produces a partial marker or --. Neither indication changes
+charging policy or substitutes for PSU acknowledgements.
+
 ## Per-PSU current and combined bench build (2026-11-13)
 
 Normal global/group current now sets the same limit on every selected PSU.

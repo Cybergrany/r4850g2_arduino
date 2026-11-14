@@ -58,11 +58,14 @@ See [serial connection behaviour](docs/SERIAL.md).
 | `mega2560_local` | ILI9341 dashboard/config | Navigate/edit | No |
 | `mega2560_minimal` | No | No | No |
 | `mega2560_touch` | Touch dashboard/editor | No | Yes |
-| `mega2560_touch_wheel` | Touch dashboard/editor | Navigate/edit | Yes |
 | `mega2560_ui_debug` | SIM dashboard/editor; no CAN | Navigate/edit | Yes |
 | `mega2560_touch_debug` | SIM touch/editor; no CAN | No | Yes |
 | `mega2560_touch_local` | Touch dashboard/editor | No | No |
 | `mega2560_touch_debug_local` | SIM touch/editor; no CAN | No | No |
+
+`mega2560_touch_wheel` is deprecated and removed from the shipped profile list
+because its combined inputs left little stack margin. Use **`mega2560_wheel_alerts`**
+for the current bench wiring. Touch-only profiles remain available.
 
 Optional four-wire external fan: use `mega2560_serial_fan` for serial-only
 control with 25 kHz PWM on D6. Normal OFF holds zero current while keeping PSUs
