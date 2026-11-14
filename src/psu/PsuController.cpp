@@ -11,7 +11,7 @@ bool PsuController::begin() {
 #endif
   return ready_;
 }
-Result PsuController::configure(const Configuration& c, bool resume) {
+Result PsuController::configure(const Configuration& c, bool resume, bool useSwitchAtBoot) {
   if (busy() || availabilitySaving()) return Result::Busy;
   if (!validConfig(c)) return Result::Invalid;
   const auto retainedStop = config_.thermalStop;
@@ -36,13 +36,13 @@ Result PsuController::configure(const Configuration& c, bool resume) {
       u.phase = ControlPhase::Fault; restoreBlocked_ |= 1U << i;
     }
   }
-  enable_.boot(resume && config_.autoResume && config_.thermalStop == ThermalStop::None);
+  enable_.boot(resume && config_.autoResume && config_.thermalStop == ThermalStop::None, useSwitchAtBoot);
   if (config_.thermalStop != ThermalStop::None) enable_.request(false, EnableSource::Protection);
   config_.autoResume = enable_.enabled();
   currentSynced_ = acknowledgedMask_ = validTemperatures_ = 0;
   verifying_ = identityChecked_ = false;
   report_ = {};
-  running_ = resume && c.autoResume && c.operating.voltageMask && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
+  running_ = enable_.enabled() && c.deploymentId == deployment::id ? c.operating.voltageMask : 0;
   restorePending_ = running_;
   memset(observedEpoch_, 0, sizeof(observedEpoch_));
   return Result::Ok;

@@ -167,6 +167,14 @@ switch state, reconciliation, per-unit zero/awake/fan outcomes and external PWM
 demand/temperature/reason. It also reports `PSU_ACTIVE pin=... physical=... logical=HIGH|LOW`:
 HIGH means enable is ON and at least one PSU is permitted a positive current
 limit; it does not prove measured output. See [the optional status output](CONTROL.md#optional-psu_active-output).
+
+With physical ENABLE_IN configured, boot waits OFF for its first debounced
+position; that position overrides the saved enable preference. An already-ON
+switch needs no edge, but cannot clear a thermal latch. Subsequent serial/UI
+commands and switch edges retain latest-event-wins priority, including a command
+received before initial debounce completes. Without the input, saved autoresume
+still controls boot. Switch edges do not automatically save EEPROM.
+
 `reconcile`
 explicitly retries after faults are reviewed. See [CONTROL.md](CONTROL.md).
 

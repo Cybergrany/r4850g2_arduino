@@ -2,10 +2,12 @@
 #include "../config/ControlConfig.h"
 namespace psu {
 enum class EnableSource : uint8_t { Boot, Serial, Switch, Protection };
-// Debounced edges, not a continuous OR: a held switch cannot undo serial input.
+// Initial debounced level, then edges: a held switch cannot undo serial input.
 class EnableControl {
  public:
-  void boot(bool on) { enabled_ = on; source_ = EnableSource::Boot; }
+  void boot(bool on, bool useSwitchAtBoot = false) {
+    enabled_ = on && !useSwitchAtBoot; source_ = EnableSource::Boot;
+  }
   void request(bool on, EnableSource source) { enabled_ = on; source_ = source; }
   bool sample(bool active, uint32_t now) {
     present_ = true;
@@ -13,8 +15,9 @@ class EnableControl {
     if (uint32_t(now - changed_) < control::enableDebounceMs) return false;
     if (!settled_) {
       settled_ = true; stable_ = raw_;
-      if (source_ != EnableSource::Boot || !stable_) return false;
-      request(true, EnableSource::Switch); return true; // Boot: saved OR switch.
+      // An explicit command or protection latch wins over the initial level.
+      if (source_ != EnableSource::Boot) return false;
+      request(stable_, EnableSource::Switch); return true;
     }
     if (raw_ == stable_) return false;
     stable_ = raw_; request(stable_, EnableSource::Switch); return true;

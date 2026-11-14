@@ -234,9 +234,9 @@ struct Rig {
   uint8_t rejectRegister = 0xff, dropRegister = 0xff;
   bool leaking = false, leakOnWake = false;
   size_t acknowledged = 0;
-  explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true, uint32_t start = 100) : c(can), now(start), live(membersMask(config.count)) {
+  explicit Rig(Configuration config = installation(), bool bootResume = false, bool commission = true, uint32_t start = 100, bool useSwitchAtBoot = false) : c(can), now(start), live(membersMask(config.count)) {
     for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) { addresses[i] = i + 1; reportedCurrent[i] = UINT16_MAX; unitTemperature[i] = INT16_MIN; }
-    CHECK(c.configure(config, bootResume) == Result::Ok); CHECK(c.begin());
+    CHECK(c.configure(config, bootResume, useSwitchAtBoot) == Result::Ok); CHECK(c.begin());
     heartbeat(); c.tick(now);
     now += 200; heartbeat(); c.tick(now);
     if (commission && !bootResume) {
@@ -352,7 +352,8 @@ void controlLifecycle() {
   auto wrong=ack(on); wrong.data[3]=0; CHECK(!protocol::settingReply(wrong,protocol::Standby,1));
   wrong=ack(on); wrong.data[2]=1; CHECK(!protocol::settingReply(wrong,protocol::Standby,1));
   CHECK(!protocol::settingReply(ack(protocol::setting(3,protocol::Standby,1)),protocol::Standby,1));
-  EnableControl e; e.boot(true); CHECK(!e.sample(false,0)); CHECK(!e.sample(false,50) && e.enabled());
+  EnableControl e; e.boot(true,true); CHECK(!e.enabled());
+  CHECK(!e.sample(false,0)); CHECK(e.sample(false,50) && !e.enabled());
   e.request(false,EnableSource::Serial); e.sample(false,100); CHECK(!e.enabled());
   e.sample(true,110); e.sample(false,130); e.sample(true,140); CHECK(!e.sample(true,189));
   CHECK(e.sample(true,190) && e.enabled() && e.source()==EnableSource::Switch);
@@ -1867,6 +1868,7 @@ void uiLayouts() {
 #include "test_scoped_profiles.inc"
 #include "test_participation.inc"
 #include "test_bus_profile.inc"
+#include "test_enable_boot.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1877,6 +1879,7 @@ int main() {
 #if PSU_BUS_PROFILE
     run("busProfiling", busProfiling);
 #endif
+    run("enableBootPolicy", enableBootPolicy); run("enableBootReboot", enableBootReboot); run("enableBootProtection", enableBootProtection);
     run("participationPersistence", participationPersistence); run("participationAtomicity", participationAtomicity); run("participationProfiles", participationProfiles); run("participationUiViewport", participationUiViewport); run("participationChangedGroup", participationChangedGroup);
     run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
     run("scopedSettings", scopedSettings); run("perPsuCurrentScopes", perPsuCurrentScopes); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);

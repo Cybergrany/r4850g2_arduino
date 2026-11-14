@@ -35,7 +35,10 @@ StorageResult Application::configureFromStorage() {
   if (loaded != StorageResult::Ok && loaded != StorageResult::Migrated && loaded != StorageResult::WrongDeployment)
     defaultConfiguration(config);
 #endif
-  controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok);
+  // A fitted switch owns the boot decision, including OFF. Keep zero hold
+  // until its initial sample is debounced; debug builds do not read GPIOs.
+  controller_.configure(config, PSU_UI_DEBUG || loaded == StorageResult::Ok,
+      PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG);
   controller_.storageStatus(loaded);
   controller_.configureStartup(PSU_CHG_ALLOW_PIN >= 0 || PSU_UI_DEBUG, PSU_UI_DEBUG || loaded == StorageResult::Ok, millis());
   return loaded;

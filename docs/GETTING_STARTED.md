@@ -336,13 +336,16 @@ well as the preference saved for next boot. `autoresume off` requests zero curre
 immediately, even during an apply; wait for `ZERO CURRENT HOLD / AWAKE` and
 `zero-confirmed=1 awake=1`, or inspect the reported failure. Cooling continues.
 Hardware standby is reserved for a latched fault fallback if holding fails.
-`save` persists the effective preference. A saved ON preference
+`save` persists the effective preference. Without ENABLE_IN, a saved ON preference
 allows the authorized profile to start only after successful reconciliation.
 
 Optional `ENABLE_IN` uses a debounced latching switch with latest-event-wins
-semantics relative to serial commands. At boot only, saved ON or switch ON
-permits startup. `load`/`defaults` initiate held reconciliation without replaying
-a profile; enable explicitly afterwards. See [control behavior, wiring, fan
+semantics relative to serial commands. At boot, charging waits OFF for the first
+debounced position: OFF prevents resume even with saved ON; already ON requests
+guarded startup without needing an edge. A thermal latch still blocks automatic
+resume. `load`/`defaults` initiate held reconciliation without replaying a profile
+or treating a held switch as a new ON; enable explicitly afterwards.
+See [control behavior, wiring, fan
 thresholds and persistence](CONTROL.md).
 
 The authorized profile records explicitly accepted **apply intent**; a failed

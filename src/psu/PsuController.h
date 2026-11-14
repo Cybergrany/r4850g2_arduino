@@ -68,7 +68,9 @@ class PsuController {
   bool receivePending() const { return transport_.receivePending() != 0; }
   void receiveWork(ReceiveWork work) { transport_.receiveWork(work); }
   const Configuration& configuration() const { return config_; }
-  Result configure(const Configuration& config, bool resumeSaved = false);
+  // Physical boot with ENABLE_IN starts OFF until its initial level settles.
+  // Runtime load/defaults leave useSwitchAtBoot false and do not resample it.
+  Result configure(const Configuration& config, bool resumeSaved = false, bool useSwitchAtBoot = false);
   // Topology edits validate a configuration snapshot. Keep that frame out of
   // the general serial dispatcher and its unrelated save/profile paths.
   __attribute__((noinline)) Result setCount(uint8_t count);

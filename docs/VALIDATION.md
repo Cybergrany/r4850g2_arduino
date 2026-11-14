@@ -4,6 +4,53 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## ENABLE_IN boot precedence (2026-11-14)
+
+A physical ENABLE_IN now starts the controller OFF and uses the first debounced
+switch position instead of the saved enable preference. An already-ON switch
+needs no transition. Runtime command/edge priority, zero-current reconciliation,
+cooling and thermal-stop persistence retain their existing guards. There is no
+new EEPROM field, automatic switch-edge save or static state.
+
+Validation on these sources:
+
+- Ordinary host **3,383,684 checks** and profiled host **3,511,797**, including
+  nine PSUs, saved ON/OFF against initial ON/OFF, with/without AC cutoff,
+  no positive-current writes before the switch decision, bounce, timer rollover,
+  serial commands during debounce, and no-switch saved-preference behavior.
+- The reported switch ON -> OFF -> AC loss -> reboot sequence retains saved ON
+  in EEPROM but now stays OFF. Both simultaneous and delayed AC are covered.
+  Runtime load/retry cannot turn a settled held-ON input into a new ON action.
+  A held-ON thermal-latched boot stays OFF; cooling plus a new edge must complete
+  verified persistence, and a newer OFF still cancels that pending resume.
+- Touch/simulator **1,353 checks**, real wheel **19,652**, AVR-format check.
+- All **21 Mega profiles** built; physical memory limits, all three UI-debug
+  isolation checks and the CAN-observer isolation check passed.
+- `mega2560_wheel_alerts`: **204350 bytes flash**, **7194 bytes static RAM**,
+  **998 bytes static free**, unchanged RAM. The reachable direct runtime audit
+  remains **606 bytes** including the caller return, with the same **320-byte**
+  estimated margin after the existing interrupt/argument allowances. Production
+  loads supply scratch, excluding the generic audit's additional validation
+  copy. Indirect/library calls and physical stack high-water remain bench checks.
+
+Bench reproduction with a commissioned authorized profile:
+
+1. Switch ON, let reconciliation finish, then `save` and wait for verified
+   completion. This deliberately leaves an ON preference in EEPROM.
+2. Switch OFF; verify `enable=OFF source=ENABLE_IN` using `diag control`.
+   Remove PSU AC, then reset the Mega and restore AC with the switch still OFF.
+   Do not save OFF: this tests the older saved-ON case directly.
+3. `diag control` must stay OFF with `raw=0 debounced=0 settled=1`; after all
+   members reconcile, expect zero-current hold and `PSU_ACTIVE=LOW`. No positive
+   current limit should be restored. Repeat with AC delayed until after boot.
+4. Repeat a boot with the switch already ON: expect `source=ENABLE_IN` and normal
+   guarded restoration after reconciliation, without cycling the switch.
+5. With the switch still ON, send `autoresume off`; it must remain OFF until a
+   new explicit ON request or switch OFF/ON. Check `diag bus` and `diag memory`.
+
+These host/build checks do not establish physical PSU or GPIO behavior. Older
+firmware still uses the previous OR rule with the same EEPROM record.
+
 ## Target/actual voltage header; wheel bench profile (2026-11-13)
 
 The header now shows authorized target/actual voltage, e.g. `54.0/54.1V`.
@@ -1419,7 +1466,8 @@ Auto/Max fan response. With `autoresume off`, wait for `held-at-zero-awake` and
 `zero-confirmed=1 awake=1`. Test live OFF during apply and loss of CAN during stop:
 no unconfirmed stop may appear as a successful zero hold. Check confirmed fault
 standby is reported separately. Exercise the wired D26 switch, serial overrides and power cycling with
-the switch held ON (boot OR deliberately permits restarting). Confirm absence
+the switch held ON (its initial debounced position requests guarded startup),
+and held OFF with an older saved ON preference (must remain at zero). Confirm absence
 and replacement cases with all intended PSUs, and measure stack/interrupt margin
 in the chosen Mega profile. Software simulation does not establish these results.
 

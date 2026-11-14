@@ -202,8 +202,12 @@ currents are restored. Units authorized only for voltage receive no invented
 current setting (reconciliation still explicitly prepares zero current). The failed attempt is latched until an explicit apply or a real
 loss/recovery transition. No offline defaults are written by recovery.
 
-`configure(config,true)` is for boot: it arms saved operating settings only if
-`autoResume` is enabled and deployment matches. Console load uses
+`configure(config,true,useSwitchAtBoot)` is for boot. With a physical ENABLE_IN,
+Application passes `useSwitchAtBoot=true`: configured/authorized targets load,
+but enable and pending restoration start OFF until the first debounced input
+decision (or a newer explicit command). Without the switch, saved operating
+settings are armed only if `autoResume` is enabled and deployment matches.
+Thermal latches take precedence in both cases. Console load uses
 `configure(config,false)`, which holds the managed units through zero-current reconciliation
 without replaying operating current. There is no automatic
 EEPROM write when applying or reconnecting; persistence is explicit.
@@ -501,8 +505,12 @@ priority; telemetry and identity requests continue while commands or fresh
 post-ACK observations are awaited. Control failures are distinct from user job
 results and remain visible through `unitControl(slot)`.
 
-`EnableControl` resolves the boot OR and later debounced switch edges/serial
-commands. `setAutoResume` is deliberately allowed during an apply so OFF can
+`EnableControl` resolves the initial debounced switch level and later switch
+edges/serial commands. An already-ON input needs no edge; initial OFF overrides
+an older saved ON. An explicit command or protection latch is not overwritten
+by the first sample. The boot-input choice adds no persistent or runtime state;
+load/reconcile preserve the settled input and cannot manufacture a new edge.
+`setAutoResume` is deliberately allowed during an apply so OFF can
 preempt it. `sampleEnableInput` accepts logical active state; Application alone
 reads the configured GPIO, and never in debug builds. Enable events increment
 the configuration revision, invalidating pending UI edits/confirmations.

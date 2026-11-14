@@ -817,7 +817,11 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F("ENABLE_IN configured=")); io_.print(bool(PSU_ENABLE_ENABLE_IN)); io_.print(F(" sampled=")); io_.print(e.present());
       io_.print(F(" raw=")); io_.print(e.raw()); io_.print(F(" debounced=")); io_.print(e.stable()); io_.print(F(" settled=")); io_.println(e.settled());
       io_.print(F("pin=")); io_.print(control::enablePin); io_.print(F(" active-low=")); io_.print(control::enableActiveLow); io_.print(F(" pullup=")); io_.println(control::enablePullup);
-      io_.println(F("At boot: saved preference OR initial switch ON. Thereafter only switch edges override serial."));
+#if PSU_ENABLE_ENABLE_IN && !PSU_UI_DEBUG
+      io_.println(F("Boot: wait for switch, then use its position. Later: latest edge/command wins. Thermal latch blocks boot ON."));
+#else
+      io_.println(F("Boot: saved enable (no physical ENABLE_IN). Thermal latch blocks automatic ON."));
+#endif
     } else if (row_ == 2) {
       io_.print(F("Fan MAX: output C >= ")); io_.print(control::fanOutputTempThreshold); io_.print(F(" or per-PSU requested/measured A >= ")); io_.println(control::fanOutputCurrentThreshold / 100.0f);
       io_.print(F("AUTO: C <= ")); io_.print(control::fanOutputTempRelease); io_.print(F(" and A <= ")); io_.print(control::fanOutputCurrentRelease / 100.0f); io_.print(F(" for ms=")); io_.println(control::fanReleaseMs);

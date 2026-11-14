@@ -239,8 +239,15 @@ retain that environment's existing touch flags. `mega2560_touch_enable` is a
 provided example. This input is a software operator control, not a hard safety
 interlock.
 
-At boot, **saved autoresume OR the initial debounced switch ON** enables startup.
-Thereafter the **latest event wins**, not a continuously evaluated OR:
+With `PSU_ENABLE_ENABLE_IN=1`, **the initial debounced switch position owns the
+boot decision**. Charging starts OFF while the input settles for 50 ms. An
+already-ON switch then requests the normal guarded restoration; an OFF switch
+keeps zero-current hold even if EEPROM contains `autoresume=1`. No OFF-to-ON
+edge is needed for that initial decision. Discovery, zero-current reconciliation
+and cooling continue while OFF. Without a physical ENABLE_IN (including UI debug
+builds), boot uses the saved preference.
+
+Thereafter the **latest event wins**, not a continuously evaluated level:
 
 | Event | Effective request |
 | --- | --- |
@@ -256,9 +263,16 @@ the effective request.
 
 `save` records the current effective preference using the existing EEPROM
 `autoResume` byte. Switch edges and fan decisions never write controller EEPROM
-automatically. Power cycling with the switch still ON can enable startup again,
-even if a previous serial OFF was saved. `load`/`defaults` request a new held
-reconciliation and do not replay a loaded profile; enable explicitly afterwards.
+automatically. A fitted switch overrides that saved preference at the next boot:
+held OFF prevents resume, and held ON can request resume even if a previous
+serial OFF was saved. A thermal-stop latch still requires cooling, a new explicit
+ON action and verified persistence; the initial ON position cannot clear it.
+`load`/`defaults` request a new held reconciliation and do not replay a loaded
+profile or re-sample the initial switch decision; enable explicitly afterwards.
+
+This replaces the earlier saved-ON **OR** switch-ON boot rule. Existing EEPROM
+records need no migration. Reverting to older firmware restores the old rule,
+including its ability to resume from saved ON with the physical switch OFF.
 
 ## Fan policy
 
