@@ -77,6 +77,8 @@ class UiModel {
   bool nameEditing() const { return nameEditing_; }
   StorageResult profileInfo(uint8_t slot, ProfileInfo& info) const { return memory_.profileInfo(slot, info); }
   const ProfileReview& profileReview() const { return profileReview_; }
+  bool syncing() const { return c_.syncStatus(uiNow_).members != 0; }
+  bool syncBlocked() const { return c_.syncStatus(uiNow_).phase == SyncPhase::Blocked; }
   bool working() const { return notice_ == UiNotice::Applying || notice_ == UiNotice::Saving; }
   uint8_t groupCount() const;
   uint8_t groupRank() const;
@@ -104,6 +106,8 @@ class UiModel {
   __attribute__((noinline)) bool recoveryAction(UiAction action, uint32_t now);
   __attribute__((noinline)) void returnFromRecovery();
   void reviewRecovery(RecoveryCommand command, uint32_t now);
+  uint16_t syncReviewGeneration_ = 0;
+  UnitMask syncReviewMembers_ = 0;
   bool recoveryFresh(uint32_t now) const;
   void recoveryTick(uint32_t now);
   struct Recovery {

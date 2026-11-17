@@ -19,7 +19,7 @@ class LocalUi {
   __attribute__((noinline)) void tick(uint32_t now);
   void paint();
   bool priorityDrawing() const { return available_ && !pageReady_ && display_.pending(); }
-  void storageTick();
+  __attribute__((noinline)) void storageTick();
   bool command(uint8_t count, char** args, Print& output, uint32_t now);
   UiAction takeRequest() { const auto r=request_; request_={}; return r; }
   void resetNavigation() { model_.resetNavigation(); dirty_=true; pageReady_=false; }
@@ -28,7 +28,7 @@ class LocalUi {
  private:
   void request(uint32_t now);
 #if PSU_ENABLE_TOUCH
-  __attribute__((noinline)) void touchTick(uint32_t now);
+  __attribute__((noinline)) UiAction touchTick(uint32_t now);
   __attribute__((noinline)) void drawTouch();
   Xpt2046Input touchInput_;
   TouchCalibration calibration_;

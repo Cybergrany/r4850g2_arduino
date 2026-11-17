@@ -214,7 +214,7 @@ void profileUiAndSerial() {
   CHECK(t.input("confirm no\n").find("Cancelled")!=std::string::npos);
   UiRig u(r); u.hold(); CHECK(u.ui.page()==UiPage::ConfigMenu);
   UiFrame frame; UiView::compose(frame,u.ui,r.c,r.now); snapshot("settings-menu",frame);
-  u.turn(4); u.click(); CHECK(u.ui.page()==UiPage::ProfileList && u.ui.savingProfile());
+  u.ui.action({ActionKind::Next},++r.now); u.click(); CHECK(u.ui.page()==UiPage::ProfileList && u.ui.savingProfile());
   UiView::compose(frame,u.ui,r.c,r.now); snapshot("profile-list",frame);
   u.click(); CHECK(u.ui.page()==UiPage::ProfileOptions && !u.ui.profileInclusion());
   UiView::compose(frame,u.ui,r.c,r.now); snapshot("profile-options",frame);

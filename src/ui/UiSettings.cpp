@@ -14,7 +14,7 @@ bool UiModel::settingsPage() const {
     default: return false;
   }
 }
-uint8_t UiModel::listCount() const { return page_ == UiPage::GroupSelect ? groupCount() : page_ == UiPage::UnitSelect ? c_.count() : profiles::count; }
+uint8_t UiModel::listCount() const { return page_ == UiPage::ConfigMenu ? 6 : page_ == UiPage::GroupSelect ? groupCount() : page_ == UiPage::UnitSelect ? c_.count() : profiles::count; }
 uint8_t UiModel::listRows() const {
   const uint8_t start = listPage_ * 4, count = listCount(); return start >= count ? 0 : count - start > 4 ? 4 : count - start;
 }
@@ -108,6 +108,7 @@ void UiModel::settingsInput(UiInput event, uint32_t now) {
 }
 bool UiModel::settingsAction(UiAction a, uint32_t now) {
   if (a.kind == ActionKind::SettingsChoice) {
+    if (a.value == 5) { openRecovery(now,{RecoveryKind::Sync,PSU_MAX_UNITS}); return true; }
     if (working()) return true;
     profileFlow_ = false; settingsSelection_ = listPage_ = 0;
     if (a.value == 0) openSettings({});
@@ -158,9 +159,10 @@ bool UiModel::settingsAction(UiAction a, uint32_t now) {
     page_ = page_ == UiPage::ConfigMenu ? UiPage::Groups : page_ == UiPage::ScopeConfirm ? UiPage::Config :
         page_ == UiPage::ProfileName || page_ == UiPage::ProfileReview ? UiPage::ProfileOptions :
         page_ == UiPage::ProfileOptions ? UiPage::ProfileList : UiPage::ConfigMenu;
+    if (page_ == UiPage::ConfigMenu) listPage_ = 0;
     settingsSelection_ = 0; nameEditing_ = false; return true;
   }
-  if (a.kind == ActionKind::Back && page_ == UiPage::Config && !recovering()) { page_ = UiPage::ConfigMenu; settingsSelection_ = 0; return true; }
+  if (a.kind == ActionKind::Back && page_ == UiPage::Config && !recovering()) { page_ = UiPage::ConfigMenu; settingsSelection_ = listPage_ = 0; return true; }
   if (profileFlow_ && page_ == UiPage::Result && !working() && (a.kind == ActionKind::Back || a.kind == ActionKind::Recover)) {
     page_ = UiPage::ProfileList; settingsSelection_ = 0; profileFlow_ = false; return true;
   }

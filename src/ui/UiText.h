@@ -82,11 +82,23 @@ inline const __FlashStringHelper* permitName(PermitState s) {
 inline const __FlashStringHelper* enableSourceName(EnableSource s) {
   return s == EnableSource::Protection ? F("thermal protection") : s == EnableSource::Serial ? F("autoresume/serial") : s == EnableSource::Switch ? F("ENABLE_IN") : F("boot preference");
 }
+inline const __FlashStringHelper* syncPhaseName(SyncPhase s) {
+  switch (s) {
+    case SyncPhase::Idle: return F("idle");
+    case SyncPhase::Preparing: return F("preparing");
+    case SyncPhase::Priming: return F("priming");
+    case SyncPhase::Waiting: return F("waiting");
+    case SyncPhase::Releasing: return F("releasing");
+    case SyncPhase::Blocked: return F("blocked; resolve fault/retry");
+  }
+  return F("unknown");
+}
 inline const __FlashStringHelper* activityName(Activity s) {
   switch (s) {
     case Activity::Reconciling: return F("RECONCILING");
     case Activity::Stopping: return F("STOPPING");
     case Activity::Holding: return F("ZERO CURRENT HOLD / AWAKE");
+    case Activity::Synchronizing: return F("CURRENT SYNC / PRIMING");
     case Activity::Starting: return F("STARTING / VERIFYING PSU");
     case Activity::Running: return F("ENABLED / RECONCILED");
     case Activity::StartBlocked: return F("START BLOCKED");

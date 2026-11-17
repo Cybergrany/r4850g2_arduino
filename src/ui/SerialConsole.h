@@ -15,13 +15,13 @@ class SerialConsole {
   void begin(StorageResult loaded);
   void finishStartup();
   void displayStatus(bool available);
-  void tick(uint32_t now);
+  __attribute__((noinline)) void tick(uint32_t now);
   using Extension = bool (*)(void*, uint8_t, char**, Print&, uint32_t);
   void extension(Extension callback, void* context) { extension_ = callback; extensionContext_ = context; }
   void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; alertNotice_ = previousAlertSources_ = 0; faultNoticeRow_ = 0; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile, Fault };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile, Fault, Sync };
   __attribute__((noinline)) void faultRow(uint8_t row);
   uint8_t faultNoticeRow_ = 0;
   __attribute__((noinline)) void storageCommand(const char* command);
@@ -33,6 +33,13 @@ class SerialConsole {
   __attribute__((noinline)) bool profileCommand(char* line);
   __attribute__((noinline)) void profileConfirm(bool yes);
   void profileRow();
+  __attribute__((noinline)) void syncCommand(uint8_t argc, char** args);
+  __attribute__((noinline)) void syncRow(uint8_t row, uint32_t now);
+  __attribute__((noinline)) bool syncNotification(uint32_t now);
+  SyncReview syncReview_ = {};
+  uint16_t syncNotice_ = 0;
+  uint32_t syncNoticeAt_ = 0;
+  bool syncConfirmation_ = false;
 #if PSU_BUS_PROFILE
   __attribute__((noinline)) void busProfileRow(uint32_t now, bool summary);
   __attribute__((noinline)) void busProfileUnit(uint32_t now);
@@ -57,6 +64,9 @@ class SerialConsole {
   uint16_t controlNotice_ = 0xffff;
   uint32_t lastStatus_ = 0;
   __attribute__((noinline)) void execute();
+  __attribute__((noinline)) void executeTokens();
+  __attribute__((noinline)) bool storageLine();
+  __attribute__((noinline)) bool confirmationLine();
   void resetSession();
   void beginOutput();
   void prompt();

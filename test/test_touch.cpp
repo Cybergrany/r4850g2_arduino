@@ -366,7 +366,7 @@ void scopedProfileTouchWorkflow() {
   auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
   tick(20); tap(40,80); tap(112,216); // Chargers -> config menu.
   CHECK(hasText(display.shown,"Configure individual"));
-  tap(100,176); tap(40,48); // Save Config -> slot 1.
+  tap(264,216); tap(100,48); tap(40,48); // Menu page 2 -> Save Config -> slot 1.
   CHECK(hasText(display.shown,"No (targets only)"));
   tap(150,96); CHECK(hasText(display.shown,"[X] Yes"));
   tap(150,144); tap(240,160); // Edit name, increment first character.
@@ -393,6 +393,24 @@ void scopedProfileTouchWorkflow() {
   CHECK(!r.controller.enableControl().enabled());
   CHECK(r.controller.configuration().voltage[0]==5400);
   Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok && saved.voltage[0]==5400);
+}
+void syncTouchWorkflow() {
+  Rig r; r.ready(); CHECK(r.controller.setAutoResume(false)==Result::Ok);
+  for(unsigned n=0;n<1200;++n) r.step();
+  r.controller.alerts().acknowledgeAll();
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; wheel={}; ui.begin();
+  auto tick=[&](unsigned n) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
+  auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
+  tick(20); tap(40,80); tap(112,216); tap(264,216); tap(100,80);
+  CHECK(hasText(display.shown,"[ ] Bypass current sync"));
+  snapshot("touch-current-sync",display.shown);
+  tap(230,216); CHECK(hasText(display.shown,"Bypass current sync?"));
+  tap(70,216); CHECK(!r.controller.syncBypassed());
+  tap(230,216); tap(230,216); CHECK(r.controller.syncBypassed() && !r.controller.enableControl().enabled());
+  tick(10); CHECK(hasText(display.shown,"[X] Bypass current sync"));
+  tap(230,216); CHECK(!r.controller.syncBypassed()); // Turning it off needs no dangerous-action confirmation.
+  CHECK(!r.memory.saving());
 }
 void thermalTouchWorkflow() {
   Rig r; r.ready(); CHECK(r.memory.save(r.controller.configuration())==StorageResult::Ok);
@@ -670,6 +688,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); receiveBacklogUi(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); receiveBacklogUi(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); syncTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

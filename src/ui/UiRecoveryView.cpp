@@ -21,7 +21,10 @@ void drawRecovery(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t
   const auto kind = m.recoveryKind();
   if (m.page() == UiPage::RecoveryConfirm) {
     line(f, 1, UI_TEXT("REVIEW RECOVERY"), Accent);
-    if (m.recoveryCommand() == RecoveryCommand::Retry) {
+    if (m.recoveryCommand() == RecoveryCommand::Sync) {
+      line(f,3,UI_TEXT("Bypass current sync?"),Warning);
+      f.wrap(5,8,UI_TEXT("May release authorized currents now. Session only. Enable, fault and protection guards still apply."));
+    } else if (m.recoveryCommand() == RecoveryCommand::Retry) {
       line(f, 3, UI_TEXT("Reconcile ALL PSUs?"), Warning);
       f.wrap(5, 8, UI_TEXT("All managed units restart checks at zero current. Authorized limits may resume if enable is ON."));
     } else if (m.recoveryCommand() == RecoveryCommand::Save) {
@@ -36,6 +39,15 @@ void drawRecovery(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t
     }
     line(f, 9, c.enableControl().enabled() ? UI_TEXT("Current enable: ON") : UI_TEXT("Current enable: OFF"), Warning);
     line(f, 10, UI_TEXT("Confirm within 15 seconds"), Muted);
+  } else if (kind == RecoveryKind::Sync) {
+    const auto s = c.syncStatus(now);
+    line(f,1,UI_TEXT("CURRENT SYNCHRONIZATION"),Accent);
+    line(f,3,c.syncBypassed() ? UI_TEXT("[X] Bypass current sync") : UI_TEXT("[ ] Bypass current sync"),Warning);
+    line(f,4,UI_TEXT("Session only; reboot = OFF"),Muted);
+    PSU_SNPRINTF(text,sizeof(text),"Sync %u/%u %lus",unsigned(population(s.qualified)),unsigned(population(s.members)),static_cast<unsigned long>(s.elapsedMs/1000));
+    f.text(6,0,26,text,Accent);
+    line(f,7,flash(syncPhaseName(s.phase)),Warning);
+    f.wrap(8,9,s.phase == SyncPhase::Blocked ? UI_TEXT("Fault blocks release. Fix, then retry ALL at zero.") : UI_TEXT("Wait for current or review bypass. OFF always stops."));
   } else if (kind == RecoveryKind::Bus) {
     line(f, 1, UI_TEXT("BUS / CONTROL DIAGNOSTICS"), Accent);
     const auto b = c.busStatus(now);

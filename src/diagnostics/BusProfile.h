@@ -5,7 +5,7 @@
 namespace psu {
 enum class BusEvent : uint8_t {
   Boot, Negotiation, Quiet, Identity, Status, Ready, TxSetting, Ack,
-  TxFailure, Route, Phase, Fan, Reconcile, Permit, Enable, Fault, Marker, AcReview
+  TxFailure, Route, Phase, Fan, Reconcile, Permit, Enable, Fault, Marker, Sync, AcReview
 };
 struct BusEventRecord {
   uint32_t ms, value;

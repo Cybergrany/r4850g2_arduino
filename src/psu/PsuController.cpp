@@ -23,6 +23,7 @@ Result PsuController::configure(const Configuration& c, bool resume, bool useSwi
   }
   if (config_.thermalStop != ThermalStop::None) for (uint8_t i=0; i<c.count; ++i)
     if (identified(c.units[i].identity)) hotContributors_ |= 1U << i;
+  cancelSync();
   ++revision_; voltageSynced_ = restoreBlocked_ = 0;
   excluded_ = c.acceptedAbsent | c.disabled; sessionAccepted_ = sessionRequired_ = 0;
   ++availabilityRevision_;
@@ -288,13 +289,19 @@ ApplyPlan PsuController::preview(SettingScope scope, SettingFields fields, uint3
 }
 ApplyPlan PsuController::buildPlan(Operation op, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
     const uint16_t* voltage, const uint16_t* current) const {
-  ApplyPlan p = {}; p.operation = op; p.scope = scope; p.fields = fields;
+  ApplyPlan p;
+  fillPlan(p, op, scope, fields, now, partial, voltage, current);
+  return p;
+}
+void PsuController::fillPlan(ApplyPlan& p, Operation op, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
+    const uint16_t* voltage, const uint16_t* current) const {
+  p = {}; p.operation = op; p.scope = scope; p.fields = fields;
   p.group = scope.kind == ScopeKind::Group ? int8_t(scope.index) : -1; p.created = now;
   p.configurationRevision = revision_; p.topologyRevision = discovery_.revision(); p.partial = partial;
   p.prepared = !enable_.enabled() && op != Operation::Offline;
   p.members = scopeMembers(config_, scope);
   if (!p.members || (!p.prepared && !ready_) || (partial && fields != SettingFields::Current)) p.blocker = Issue::Invalid;
-  if (busy() || availabilitySaving()) p.blocker = Issue::Busy;
+  if (busy() || availabilitySaving()) { p.blocker = Issue::Busy; return; }
   if (!p.prepared && !powerAvailable() && op != Operation::Offline) p.blocker = Issue::Cutoff;
   if (config_.deploymentId != deployment::id) p.blocker = Issue::DeploymentMismatch;
   for (uint8_t i = 0; i < count(); ++i) if (p.members & (1U << i)) {
@@ -329,7 +336,7 @@ ApplyPlan PsuController::buildPlan(Operation op, SettingScope scope, SettingFiel
     if (control_[i].fault != CommandState::Idle) { p.blocker = Issue::ControlFault; break; }
     if (control_[i].phase != ControlPhase::Held && control_[i].phase != ControlPhase::Online) p.blocker = Issue::Reconciling;
   }
-  return p;
+  return;
 }
 Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   if (busy() || availabilitySaving()) return Result::Busy;
@@ -337,11 +344,13 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       uint32_t(now - p.created) > limits::confirmationMs) return Result::Changed;
   // Revalidation uses the same scope and field selection as the review.
-  const ApplyPlan fresh = buildPlan(p.operation, p.scope, p.fields, now, p.partial);
+  // No job is active: build into its existing storage, avoiding another plan
+  // on the AVR stack. A rejected review never publishes a job or changes targets.
+  fillPlan(job_, p.operation, p.scope, p.fields, now, p.partial, nullptr, nullptr);
+  const ApplyPlan& fresh = job_;
   if (fresh.blocker != Issue::None) return Result::Blocked;
   if (fresh.recipients != p.recipients || fresh.missing != p.missing || fresh.excluded != p.excluded || fresh.prepared != p.prepared) return Result::Changed;
   if (p.partial && p.missing && !confirmed) return Result::ConfirmRequired;
-  job_ = fresh;
   if (p.operation != Operation::Offline) {
     const UnitMask authorized = p.partial ? fresh.recipients : fresh.members;
     for (uint8_t i = 0; i < count(); ++i) if (authorized & (1U << i)) {
@@ -361,7 +370,12 @@ Result PsuController::queue(const ApplyPlan& p, bool confirmed, uint32_t now) {
   beginReport(p.operation, fresh.members, fresh.recipients, fresh.missing | fresh.excluded);
   report_.prepared = fresh.prepared;
   if (!fresh.recipients || fresh.prepared) report_.active = false;
-  jobStarted_ = false; pending_ = fresh.recipients; waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
+  jobStarted_ = false; pending_ = fresh.recipients; waiting_ = verifying_ = identityChecked_ = false;
+  jobPhase_ = p.operation == Operation::GroupCurrent ? JobPhase::Current : JobPhase::Voltage;
+  if (!fresh.prepared && fresh.recipients) {
+    beginSync();
+    if (sync_.members && jobPhase_ == JobPhase::Current) { jobPhase(JobPhase::Prime); pending_ = sync_.members; }
+  }
   return Result::Ok;
 }
 void PsuController::beginReport(Operation op, UnitMask requested, UnitMask recipients, UnitMask skipped) {
@@ -414,10 +428,12 @@ void PsuController::advance(bool success) {
   const UnitMask bit = UnitMask(1U << jobSlot_);
   if (!success) {
     report_.failed |= bit; restoreBlocked_ |= bit;
-    if (thermalLevel_ != ThermalLevel::Normal && report_.units[jobSlot_].reg == protocol::OnlineCurrent)
-      latchControlFault(jobSlot_, report_.units[jobSlot_].state, protocol::OnlineCurrent, now_, FaultCause::ProtectiveApply);
+    const uint8_t reg = report_.units[jobSlot_].reg;
+    const bool protective = thermalLevel_ != ThermalLevel::Normal && reg == protocol::OnlineCurrent;
+    if (sync_.members || protective)
+      latchControlFault(jobSlot_, report_.units[jobSlot_].state, reg, now_, protective ? FaultCause::ProtectiveApply : FaultCause::Command);
   }
-  else if (secondPhase_ || job_.operation == Operation::GroupCurrent || job_.operation == Operation::Voltage ||
+  else if (jobPhase_ == JobPhase::Current || job_.operation == Operation::Voltage ||
       (job_.operation == Operation::Restore && !(config_.operating.currentMask & bit))) report_.succeeded |= bit;
   pending_ &= UnitMask(~bit); waiting_ = verifying_ = identityChecked_ = false;
 }
@@ -441,6 +457,11 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
         activeLost_ |= 1U << i; identityLost_ |= 1U << i;
       }
     }
+  bool syncGap = false;
+  if (sync_.members && protocol::isReply(f) && protocol::command(f.id) == protocol::dataCommand && f.data[1] == 0x81) {
+    const auto* old = discovery_.address(protocol::address(f.id));
+    syncGap = !old || uint32_t(now - old->telemetry.updated[protocol::OutputCurrent]) > staleMs();
+  }
   discovery_.receive(f, now);
   int8_t slot = -1;
   for (uint8_t i = 0; i < count(); ++i) {
@@ -476,12 +497,20 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
       if (ok && f.data[1] == protocol::OnlineCurrent) {
         currentAccepted(jobSlot_, expected_);
       }
-      advance(ok);
+      if (ok && f.data[1] == protocol::OnlineCurrent && expected_ != effectiveRaw(jobSlot_)) {
+        // Record what the PSU accepted, but keep this recipient pending until
+        // the current protection target has its own ACK. Keep readiness timing.
+        report_.units[jobSlot_].state = CommandState::Queued;
+        waiting_ = verifying_ = identityChecked_ = false;
+      } else advance(ok);
     }
   }
+  if (slot >= 0) syncReceive(uint8_t(slot), f, now, syncGap);
   if (observer_) observer_(context_, slot, f, refreshAccepted);
 }
 void PsuController::runJob(uint32_t now) {
+  checkSync(now);
+  if (sync_.members && sync_.blocked) { waiting_ = verifying_ = identityChecked_ = false; jobPhase(JobPhase::SyncWait); return; }
   if (discovery_.negotiating()) { cancelJob(); return; }
   if (!powerAvailable() && job_.operation != Operation::Offline) { cancelJob(); return; }
   if (job_.operation != Operation::Offline && !enable_.enabled()) { cancelJob(); return; }
@@ -515,22 +544,39 @@ void PsuController::runJob(uint32_t now) {
     }
   }
   if (waiting_) return;
+  if (!pending_ && job_.operation != Operation::Offline &&
+      (jobPhase_ == JobPhase::Prime || jobPhase_ == JobPhase::Current)) {
+    // Temperature evidence can follow the last ACK in the same receive batch.
+    // Revalidate after thermalTick, before declaring priming/final completion.
+    const UnitMask recipients = (jobPhase_ == JobPhase::Prime ? sync_.members : job_.recipients) &
+        config_.operating.currentMask & UnitMask(~report_.failed);
+    for (uint8_t i=0; i<count(); ++i) if ((recipients & (1U<<i)) &&
+        (!currentSynchronized(i) || !(acknowledgedMask_ & (1U<<i)) || acknowledgedCurrent_[i] != effectiveRaw(i))) {
+      pending_ |= 1U<<i; report_.succeeded &= UnitMask(~(1U<<i)); report_.units[i].state = CommandState::Queued;
+    }
+  }
   if (!pending_) {
-    if (!secondPhase_ && !report_.failed && job_.operation != Operation::Voltage && job_.operation != Operation::GroupCurrent &&
+    if (jobPhase_ == JobPhase::Prime) jobPhase(JobPhase::SyncWait);
+    if (jobPhase_ == JobPhase::SyncWait) {
+      if (controlActive_ || txPending_ || !releaseAllowed(now)) return;
+      for (uint8_t i=0; i<count(); ++i) if (sync_.members & (1U<<i))
+        if (!currentSynchronized(i) || control_[i].outputDemand != OutputDemand::Active) return;
+      if (!sync_.bypass && sync_.qualified != sync_.members) return;
+      jobPhase(JobPhase::Current); pending_ = job_.recipients;
+      if (job_.operation == Operation::Restore) pending_ &= config_.operating.currentMask;
+      currentSynced_ &= UnitMask(~pending_); refreshCurrent_ = false;
+    } else if (jobPhase_ == JobPhase::Voltage && !report_.failed && job_.operation != Operation::Voltage &&
         !(job_.operation == Operation::Restore && !(config_.operating.currentMask & job_.recipients))) {
-      // Revalidate the entire voltage phase before starting any current writes.
-      // An earlier voltage ACK is insufficient if that unit disappeared while
-      // the remaining voltage recipients were still being processed.
-      for (uint8_t i = 0; i < count(); ++i) if (job_.recipients & (1U << i)) {
-        const auto* d = deviceForSlot(i, now);
-        if (!d || d->epoch != jobEpochs_[i] || issue(i, now) != Issue::None) {
+      for (uint8_t i=0; i<count(); ++i) if (job_.recipients & (1U<<i)) {
+        const auto* d = deviceForSlot(i,now);
+        if (!d || d->epoch != jobEpochs_[i] || issue(i,now) != Issue::None) {
           report_.units[i].state = CommandState::Changed;
-          report_.failed |= 1U << i; report_.succeeded &= UnitMask(~(1U << i));
-          restoreBlocked_ |= 1U << i;
+          report_.failed |= 1U<<i; report_.succeeded &= UnitMask(~(1U<<i)); restoreBlocked_ |= 1U<<i;
         }
       }
       if (!report_.failed) {
-        secondPhase_ = true; pending_ = job_.recipients;
+        jobPhase(sync_.members ? JobPhase::Prime : JobPhase::Current);
+        pending_ = sync_.members ? sync_.members : job_.recipients;
         if (job_.operation == Operation::Restore) pending_ &= config_.operating.currentMask;
       }
     }
@@ -538,23 +584,25 @@ void PsuController::runJob(uint32_t now) {
       report_.active = false;
       const UnitMask incomplete = job_.recipients & UnitMask(~(report_.failed | report_.succeeded));
       report_.skipped |= incomplete;
-      for (uint8_t i = 0; i < count(); ++i) if (incomplete & (1U << i)) report_.units[i].state = CommandState::Incomplete;
-      return;
+      for (uint8_t i=0; i<count(); ++i) if (incomplete & (1U<<i)) report_.units[i].state = CommandState::Incomplete;
+      cancelSync(); return;
     }
   }
-  if (controlActive_ || sentThisTick_ || txPending_ || uint32_t(now - lastSend_) < limits::commandGapMs) return;
+  const bool current = jobPhase_ == JobPhase::Prime || jobPhase_ == JobPhase::Current;
+  const uint16_t gap = current && job_.operation != Operation::Offline ? currentSync::commandGapMs : limits::commandGapMs;
+  if (controlActive_ || sentThisTick_ || txPending_ || uint32_t(now - lastSend_) < gap) return;
+  if (transport_.receivePending()) return;
   for (jobSlot_ = 0; !(pending_ & (1U << jobSlot_)); ++jobSlot_) {}
   const auto* d = deviceForSlot(jobSlot_, now);
   if (!d || d->epoch != jobEpochs_[jobSlot_] || d->address != jobAddresses_[jobSlot_] || issue(jobSlot_, now) != Issue::None) {
     report_.units[jobSlot_].state = CommandState::Changed; advance(false); return;
   }
-  const bool current = secondPhase_ || job_.operation == Operation::GroupCurrent;
   const bool offline = job_.operation == Operation::Offline;
   if (current && !offline && job_.current[jobSlot_] >= control::fanOutputCurrentThreshold &&
       control_[jobSlot_].fanAcknowledged != FanMode::Max) return;
   const uint8_t reg = current ? (offline ? protocol::OfflineCurrent : protocol::OnlineCurrent) :
       (offline ? protocol::OfflineVoltage : protocol::OnlineVoltage);
-  expected_ = current ? protocol::encodeCurrent(offline ? job_.current[jobSlot_] : limitedCurrent(jobSlot_, job_.current[jobSlot_]), config_.units[jobSlot_].ratedCurrent) : protocol::encodeVoltage(job_.voltage[jobSlot_]);
+  expected_ = current ? (offline ? protocol::encodeCurrent(job_.current[jobSlot_],config_.units[jobSlot_].ratedCurrent) : effectiveRaw(jobSlot_)) : protocol::encodeVoltage(job_.voltage[jobSlot_]);
   if (!verifying_) {
     jobStarted_ = true;
     report_.units[jobSlot_] = {CommandState::VerifyingIdentity, reg, expected_};
@@ -573,7 +621,10 @@ void PsuController::runJob(uint32_t now) {
   report_.units[jobSlot_] = {CommandState::Waiting, reg, expected_};
   lastSend_ = now; waiting_ = send(protocol::setting(d->address, reg, expected_), TxPurpose::Job);
   if (!waiting_) { report_.units[jobSlot_].state = CommandState::TransportError; advance(false); }
-  else if (reg == protocol::OnlineCurrent) currentSent(jobSlot_, expected_, now);
+  else if (reg == protocol::OnlineCurrent) {
+    if (jobPhase_ == JobPhase::Prime && !sync_.started) { sync_.started = true; sync_.since = now; }
+    currentSent(jobSlot_, expected_, now);
+  }
 }
 void PsuController::restore(uint32_t now) {
   if (!enable_.enabled() || !powerAvailable() || busy() || availabilitySaving() || !restorePending_ ||
@@ -596,10 +647,11 @@ void PsuController::restore(uint32_t now) {
     jobAddresses_[i] = d->address; jobEpochs_[i] = d->epoch;
     job_.current[i] = config_.operating.current[i]; job_.voltage[i] = config_.operating.voltage[i];
   }
-  pending_ = recipients; restorePending_ &= UnitMask(~recipients);
+  pending_ = recipients & UnitMask(~voltageSynced_); restorePending_ &= UnitMask(~recipients);
   beginReport(Operation::Restore, recipients, recipients);
   jobStarted_ = false;
-  waiting_ = secondPhase_ = verifying_ = identityChecked_ = false;
+  waiting_ = verifying_ = identityChecked_ = false;
+  jobPhase_ = JobPhase::Voltage; beginSync();
 }
 void PsuController::tick(uint32_t now) {
   receiveWork(ReceiveWork::Control);
@@ -621,7 +673,7 @@ void PsuController::tick(uint32_t now) {
   finishAvailability(now);
   restore(now);
   if (busy()) runJob(now);
-  if (!busy() && !availabilitySaving()) refreshSettings(now);
+  if ((!busy() || syncWaiting()) && !availabilitySaving()) refreshSettings(now);
   alertTick(now);
   serviceReceive(now);
   // Identity and telemetry refresh continue even during a long multi-unit job.

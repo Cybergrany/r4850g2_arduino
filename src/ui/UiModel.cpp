@@ -34,6 +34,12 @@ uint16_t UiModel::draft() const {
   return configured(field_ == UiField::Voltage ? SettingFields::Voltage : SettingFields::Current).minimum;
 }
 void UiModel::result(UiNotice n, Issue issue) {
+  if (recovery_.active && recovery_.kind == RecoveryKind::Sync) {
+    // The interrupted apply/profile/save keeps its owner and completes behind
+    // the session setting. Returning restores its latest result, not Applying.
+    notice_ = recovery_.notice = n; blocker_ = recovery_.blocker = issue;
+    recovery_.page = UiPage::Result; recovery_.editing = false; return;
+  }
   recovery_.selection = 0;
   notice_ = n; blocker_ = issue; editing_ = false; page_ = UiPage::Result;
 }
@@ -175,7 +181,7 @@ void UiModel::input(UiInput event, uint32_t now) {
   refresh(now); // Revalidate input without advancing EEPROM a second time this loop.
   if (recovering() && event.held) { action({ActionKind::Back}, now); return; }
   if (page_ == UiPage::Recovery || page_ == UiPage::RecoveryConfirm ||
-      (recovering() && page_ == UiPage::Detail) || (page_ == UiPage::Result && !working() && recoveryLink().kind != RecoveryKind::None)) {
+      (recovering() && page_ == UiPage::Detail) || (page_ == UiPage::Result && recoveryLink().kind != RecoveryKind::None)) {
     if (event.held) { action({ActionKind::Back}, now); return; }
     const auto selected = buttonInput(event, recovery_.selection);
     if (selected.kind != ActionKind::None) action(selected, now);
@@ -229,7 +235,8 @@ void UiModel::input(UiInput event, uint32_t now) {
   }
   if (event.held) {
     editing_ = false;
-    if (page_ == UiPage::Groups && !working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = 0; notice_ = UiNotice::None; }
+    if (page_ == UiPage::Groups && !working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = listPage_ = 0; notice_ = UiNotice::None; }
+    else if (working() && c_.syncStatus(now).members) openRecovery(now,{RecoveryKind::Sync,PSU_MAX_UNITS});
     else { page_ = UiPage::Groups; }
     return;
   }
@@ -398,7 +405,9 @@ void UiModel::navigationAction(UiAction a, uint32_t now) {
       break;
     }
     case ActionKind::Configure:
-      if (!working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = 0; editing_ = false; } break;
+      if (working() && syncing()) openRecovery(now,{RecoveryKind::Sync,PSU_MAX_UNITS});
+      else if (!working()) { page_ = UiPage::ConfigMenu; settingsSelection_ = listPage_ = 0; editing_ = false; }
+      break;
     case ActionKind::EditVoltage: case ActionKind::EditCurrent:
       if (!settingsMembers() || working()) return;
       editing_ = false; page_ = UiPage::Config;

@@ -1,5 +1,12 @@
 # ILI9341 display and wheel
 
+## Low-current startup synchronization
+
+See [CURRENT_SYNC.md](CURRENT_SYNC.md) for priming/qualification, the session-only
+bypass review, diagnostics and the nine-unit bench sequence. Multi-unit starts
+now wait for measured current; ordinary positive-current adjustments remain direct.
+
+
 The local interface targets a **320x240 ILI9341 SPI module (2.8 or 3.2 inches)**, landscape.
 It shows three groups per overview page and two PSUs per detail page. The
 [screen preview](ui-preview.html) is generated from the implemented layout's

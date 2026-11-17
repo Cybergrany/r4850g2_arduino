@@ -204,8 +204,8 @@ void PsuController::applyAvailability(const AvailabilityPlan& p) {
     reconcile(false); ++revision_; ++availabilityRevision_;
   }
 }
-Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManager& memory, uint32_t now) {
-  if (availabilitySaving() || busy()) return Result::Busy;
+// Release the review snapshot before the journal validates its stored candidate.
+Result PsuController::validateAvailability(const AvailabilityPlan& p, uint32_t now) const {
   if (p.configurationRevision != revision_ || p.topologyRevision != discovery_.revision() ||
       p.availabilityRevision != availabilityRevision_ || uint32_t(now - p.created) > limits::confirmationMs) return Result::Changed;
   const auto fresh = p.action == AvailabilityAction::Selection ?
@@ -213,6 +213,12 @@ Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManag
       previewAvailability(p.action, p.requested, p.remember, now);
   if (fresh.blocker != Issue::None) return Result::Blocked;
   if (p.selected != fresh.selected || p.participants != fresh.participants) return Result::Changed;
+  return Result::Ok;
+}
+Result PsuController::confirmAvailability(const AvailabilityPlan& p, MemoryManager& memory, uint32_t now) {
+  if (availabilitySaving() || busy()) return Result::Busy;
+  const auto valid = validateAvailability(p, now);
+  if (valid != Result::Ok) return valid;
   ++availabilityReport_.sequence; availabilityReport_.remembered = false;
   availabilityReport_.storage = StorageResult::Ok; availabilityReport_.result = Result::Ok;
   if (!p.remember) { applyAvailability(p); return Result::Ok; }

@@ -3,6 +3,7 @@
 namespace psu {
 FlashText recoveryLabel(RecoveryKind k) {
   switch (k) {
+    case RecoveryKind::Sync: return UI_TEXT("Config");
     case RecoveryKind::Availability: return UI_TEXT("Config");
     case RecoveryKind::Unit: return UI_TEXT("Details");
     case RecoveryKind::Bus: return UI_TEXT("Diagnostics");
@@ -17,6 +18,7 @@ FlashText recoveryLabel(RecoveryKind k) {
 RecoveryLink UiModel::recoveryLink() const {
   RecoveryLink link = {RecoveryKind::None, PSU_MAX_UNITS};
   AlertCode code = AlertCode::None;
+  if (!alertOverlay_ && page_ == UiPage::Result && syncing()) return {RecoveryKind::Sync,PSU_MAX_UNITS};
   if (alertOverlay_ == 2) {
     const auto live = c_.alerts().at(displayedAlert_.source);
     if (live.id != displayedAlert_.id) return link;
@@ -48,6 +50,7 @@ RecoveryLink UiModel::recoveryLink() const {
     }
   }
   switch (code) {
+    case AlertCode::SyncTimeout: link.kind = RecoveryKind::Sync; break;
     case AlertCode::Missing: case AlertCode::Excluded: case AlertCode::Returned: case AlertCode::Unstable:
       link.kind = RecoveryKind::Availability; break;
     case AlertCode::ActiveLost:
@@ -74,6 +77,7 @@ RecoveryLink UiModel::recoveryLink() const {
     case AlertCode::Deployment: case AlertCode::Display: link.kind = RecoveryKind::Help; break;
     default: break;
   }
+  if (syncBlocked() && (link.kind == RecoveryKind::Unit || link.kind == RecoveryKind::Bus)) link.kind = RecoveryKind::Sync;
   if (link.kind == RecoveryKind::Availability && link.slot == PSU_MAX_UNITS) {
     const auto attention = c_.availabilityAttention(uiNow_);
     for (uint8_t i = 0; i < c_.count(); ++i) if (attention & (1U << i)) { link.slot = i; break; }
@@ -89,8 +93,8 @@ RecoveryLink UiModel::recoveryLink() const {
 void UiModel::openRecovery(uint32_t now, RecoveryLink link) {
   // One bookmark, no modal navigation stack. An in-flight UI operation retains
   // its completion owner; show Busy rather than replacing that owner's page.
-  if (working() || availabilityWorking_ || recoverySaving()) { alertResult_ = Result::Busy; return; }
   if (link.kind == RecoveryKind::None) link = recoveryLink();
+  if ((working() && link.kind != RecoveryKind::Sync) || availabilityWorking_ || recoverySaving()) { alertResult_ = Result::Busy; return; }
   if (link.kind == RecoveryKind::None) return;
   if (!recovery_.active) {
     recovery_ = {};
@@ -111,7 +115,7 @@ void UiModel::openRecovery(uint32_t now, RecoveryLink link) {
   r.result = Result::Ok; r.selection = 0; r.command = RecoveryCommand::None;
   r.revision = c_.configurationRevision();
   c_.alerts().deferPendingNotifications(); alertOverlay_ = 0;
-  editing_ = false; notice_ = UiNotice::None; page_ = UiPage::Recovery;
+  editing_ = false; if (r.kind != RecoveryKind::Sync || !working()) notice_ = UiNotice::None; page_ = UiPage::Recovery;
   if (r.slot < c_.count() && groupFor(c_.configuration(), r.slot) >= 0) {
     group_ = groupFor(c_.configuration(), r.slot); unit_ = r.slot;
   } else if (group_ < 0) { group_ = groupAt(0); unit_ = unitAt(0); }
@@ -155,6 +159,7 @@ void UiModel::returnFromRecovery() {
 }
 RecoveryCommand UiModel::availableRecoveryCommand() const {
   if (!recovering()) return RecoveryCommand::None;
+  if (recovery_.kind == RecoveryKind::Sync) return RecoveryCommand::Sync;
   if (recovery_.kind == RecoveryKind::Storage) return RecoveryCommand::Save;
   if (recovery_.kind == RecoveryKind::Enable) return RecoveryCommand::Enable;
   if (recovery_.kind == RecoveryKind::Temperatures) {
@@ -166,7 +171,9 @@ RecoveryCommand UiModel::availableRecoveryCommand() const {
 }
 void UiModel::reviewRecovery(RecoveryCommand command, uint32_t now) {
   auto& r = recovery_;
-  if (working() || c_.busy() || memory_.saving()) { r.result = Result::Busy; return; }
+  const bool retrySync = r.kind == RecoveryKind::Sync && command == RecoveryCommand::Retry && syncBlocked();
+  if (command != RecoveryCommand::Sync && (((working() || c_.busy()) && !retrySync) || memory_.saving())) { r.result = Result::Busy; return; }
+  if (command == RecoveryCommand::Sync && c_.syncBypassed()) { c_.requireSync(); r.result = Result::Ok; return; }
   if (r.overlay == 2 && c_.alerts().at(r.incident.source).id != r.incident.id) { r.result = Result::Changed; return; }
   if (command == RecoveryCommand::Save && r.revision != c_.configurationRevision()) {
     r.revision = c_.configurationRevision(); r.result = Result::Changed; return;
@@ -174,6 +181,7 @@ void UiModel::reviewRecovery(RecoveryCommand command, uint32_t now) {
   r.command = command; r.reviewPage = page_; r.selection = 0; r.since = now;
   r.revision = c_.configurationRevision(); r.topology = c_.discovery().revision();
   r.availability = c_.availabilityRevision(); r.report = c_.report().sequence;
+  if (r.kind == RecoveryKind::Sync) { const auto s = c_.reviewSync(now); syncReviewGeneration_ = s.generation; syncReviewMembers_ = s.members; }
   r.result = Result::Ok; r.saved = false; page_ = UiPage::RecoveryConfirm;
 }
 bool UiModel::recoveryFresh(uint32_t now) const {
@@ -181,7 +189,8 @@ bool UiModel::recoveryFresh(uint32_t now) const {
   return uint32_t(now - r.since) <= limits::confirmationMs &&
       r.revision == c_.configurationRevision() && r.topology == c_.discovery().revision() &&
       r.availability == c_.availabilityRevision() && r.report == c_.report().sequence &&
-      (r.overlay != 2 || c_.alerts().at(r.incident.source).id == r.incident.id);
+      (r.overlay != 2 || c_.alerts().at(r.incident.source).id == r.incident.id) &&
+      (r.kind != RecoveryKind::Sync || c_.reviewSync(now).generation == syncReviewGeneration_);
 }
 void UiModel::recoveryTick(uint32_t now) {
   auto& r = recovery_;
@@ -220,7 +229,7 @@ bool UiModel::recoveryAction(UiAction a, uint32_t now) {
   auto& r = recovery_;
   if (a.kind == ActionKind::Tools) { action({ActionKind::Back}, now); return true; }
   if (a.kind == ActionKind::Back) {
-    if (working() || recoverySaving() || availabilityWorking_) { r.result = Result::Busy; return true; }
+    if ((working() && r.kind != RecoveryKind::Sync) || recoverySaving() || availabilityWorking_) { r.result = Result::Busy; return true; }
     if (page_ == UiPage::RecoveryConfirm) { page_ = r.reviewPage; r.command = RecoveryCommand::None; r.selection = 0; return true; }
     if (page_ == UiPage::Recovery || page_ == UiPage::AvailabilityOverview || page_ == UiPage::Detail ||
         page_ == UiPage::Config || page_ == UiPage::Editor || page_ == UiPage::Calibration || page_ == UiPage::Result ||
@@ -231,15 +240,19 @@ bool UiModel::recoveryAction(UiAction a, uint32_t now) {
     r.slot %= c_.count(); return true;
   }
   if (a.kind == ActionKind::RecoveryReview) {
-    const auto command = availableRecoveryCommand();
+    const auto command = a.value == 1 && r.kind == RecoveryKind::Sync && syncBlocked() ? RecoveryCommand::Retry : availableRecoveryCommand();
     if (command != RecoveryCommand::None) reviewRecovery(command, now);
     return true;
   }
   if (a.kind != ActionKind::RecoveryConfirm || page_ != UiPage::RecoveryConfirm) return false;
   if (now == r.since) return true;
   if (!recoveryFresh(now)) { r.result = Result::Changed; page_ = r.reviewPage; r.selection = 0; return true; }
-  if (working() || c_.busy() || memory_.saving()) { r.result = Result::Busy; return true; }
-  if (r.command == RecoveryCommand::Retry) { c_.reconcile(); r.result = Result::Ok; }
+  const bool retrySync = r.kind == RecoveryKind::Sync && r.command == RecoveryCommand::Retry && syncBlocked();
+  if (r.command != RecoveryCommand::Sync && (((working() || c_.busy()) && !retrySync) || memory_.saving())) { r.result = Result::Busy; return true; }
+  if (r.command == RecoveryCommand::Sync) {
+    const SyncReview review = {r.revision,r.topology,r.availability,r.report,r.since,syncReviewMembers_,syncReviewGeneration_};
+    r.result = c_.bypassSync(review,now);
+  } else if (r.command == RecoveryCommand::Retry) { c_.reconcile(); r.result = Result::Ok; }
   else if (r.command == RecoveryCommand::Enable) r.result = c_.setAutoResume(true);
   else if (r.command == RecoveryCommand::Sensors) r.result = c_.retryTemperature(UnitMask(1U << r.slot), now);
   else if (r.command == RecoveryCommand::Save) {

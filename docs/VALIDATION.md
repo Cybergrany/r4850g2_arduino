@@ -4,6 +4,80 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Low-current startup synchronization (2026-11-17)
+
+Multi-unit zero-to-positive starts use a temporary 1 A cap, fresh measured-current
+qualification and a paced final-current batch. Single starts and positive-to-positive
+updates remain direct. The five-minute deadline warns and keeps waiting; it never
+releases current automatically. UI/serial bypass is reviewed, session-only, and
+cannot bypass ordinary safety guards. See [CURRENT_SYNC.md](CURRENT_SYNC.md) for
+the policy, build definitions, commands and bench sequence. No EEPROM schema,
+pin assignment, stored target or display clock changes are required.
+
+Validation passed on these sources:
+
+- Host **3,417,988 checks** and profiled host **3,550,429**, with ASan/UBSan.
+  Coverage includes encoded tolerance boundaries, sub-amp targets, stale samples,
+  timing rollover, mixed active/new recipients, excluded members, boot/switch/
+  serial starts, timeout deduplication, stale reviews, OFF priority, identity
+  replacement, failed writes and the unchanged output-readiness deadline.
+- Priming caps cover periodic refreshes and protective corrections. Existing
+  active recipients retain their exact raw accepted cap while peers prime;
+  repeated refreshes cannot drift or apply a pending increase. A fault in any
+  recipient blocks the final release. Protection can supersede an ACK both
+  before receipt and later in the same receive batch; completion waits for the
+  new target's ACK. Healthy peers do not inherit a failed unit's allocation.
+- UI-owned applies and profile loads remain pending through sync. Bypass leaves
+  their save owner/revision intact; only final ACKs permit the verified save.
+  A newer OFF cancels the operation without claiming a successful profile save.
+  Console reconnect/save/load preserve session bypass; reboot clears it.
+- Touch/simulator **1,420 checks**, real wheel **19,652**, renderer at 500 kHz,
+  1/2/4/8 MHz, AVR formats, route budgets, GPIO/fan/pin isolation, compact debug
+  storage, profile-log and AVR stack-parser tests. Previews include the sync
+  overview, pending apply, session control and Cancel-first review.
+- All **21 Mega profiles** build and fit physical RAM/flash. All three UI-debug
+  isolation checks and observer isolation pass. The actual wheel/profile ELF
+  also retains UART/TFT/clock progress with CAN INT held LOW in simavr. The AVR
+  redraw benchmark passes (about 89 ms group highlight with nominal SPI).
+  These timings are simulations, not a loaded hardware measurement.
+
+| Build | Flash bytes | Static RAM | Static free | Reviewed direct runtime peak | Estimated remaining margin |
+|---|---:|---:|---:|---:|---:|
+| mega2560_wheel_alerts | 217290 | 7344 | 848 | 543 | **233** |
+| mega2560_wheel_profile | 224682 | 7487 | 705 | 545 | **88** |
+| mega2560_touch_alerts | 227962 | 7551 | 641 | 533 | **36** |
+
+Additional static state is **86 bytes** in the wheel/serial/UI builds. No pixel
+framebuffer or profile/configuration snapshot array was added. Straightforward
+stack reductions separate UI composition, input sampling, serial storage and
+confirmation parsing, and availability validation. Queue revalidation uses its
+inactive job storage. Legacy migration/diagnostics validate or read rows from
+the existing record buffer instead of retaining a full legacy configuration.
+Existing interruption/migration tests cover these changes and writer guards.
+
+The direct peaks include the main caller's three-byte Mega return address. The
+largest reviewed production path is UI participation confirmation through
+ordinary journal validation. The remaining-margin estimate also reserves the
+existing **60 bytes for interrupt overlap and 12 for outgoing arguments/EEPROM
+virtual calls**. Production loads use caller-owned scratch; the unreachable
+null-scratch copy is excluded there, but retained for ordinary saves. Nested
+`openRecovery` dispatches only Startup/Calibrate, not a second save/confirmation;
+boot's calibration dispatch cannot confirm participation either. The generic
+call graph does not know these action/argument constraints. Calibration,
+rendering, serial callbacks and protection paths were reviewed separately.
+Indirect/library calls and actual stack high-water remain uncertain. The touch
+and profiling margins are tight: exercise `diag memory` after repeated UI,
+profile, availability and diagnostic operations before expanding those builds.
+
+The nine-unit host fixture dispatches the final current batch in **under one
+second** with 25 ms spacing, identity checks and ACKs. On the battery bench,
+record zero -> priming -> qualification -> final ACK -> measured target using
+`mega2560_wheel_profile`, `diag sync` and the new BUS `current-sync` events.
+Compare `diag bus`, `diag ui` and `diag memory`; retain OFF/retry and the
+no-current-draw timeout/bypass tests in [the bench guide](CURRENT_SYNC.md#bench-comparison).
+Physical PSU ramp alignment, CAN losses and measured stack margin are not proven
+by these software checks.
+
 ## Non-modal receive-loss warnings (2026-11-17)
 
 Receive loss remains visible in the alert badge/list, serial and WARNING output,

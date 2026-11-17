@@ -33,9 +33,14 @@ uint8_t UiLayout::buttons(const UiModel& m, UiButton* b) {
       add(12,0,12,3,ActionKind::Back,UI_TEXT("Cancel"));
       add(12,14,12,3,ActionKind::RecoveryConfirm,UI_TEXT("Confirm")); break;
     case UiPage::Recovery:
+      if (m.recoveryKind() == RecoveryKind::Sync) {
+        add(10,0,12,2,ActionKind::Stop,UI_TEXT("Stop / zero"));
+        if (m.syncBlocked()) add(10,14,12,2,ActionKind::RecoveryReview,UI_TEXT("Retry ALL..."),1);
+      }
       add(12,0,8,3,ActionKind::Back,UI_TEXT("Back"));
       if (m.availableRecoveryCommand() != RecoveryCommand::None)
         add(12,9,17,3,ActionKind::RecoveryReview,m.availableRecoveryCommand() == RecoveryCommand::Retry ? UI_TEXT("Retry ALL...") :
+            m.availableRecoveryCommand() == RecoveryCommand::Sync ? UI_TEXT("Toggle bypass...") :
             m.availableRecoveryCommand() == RecoveryCommand::Save ? UI_TEXT("Save settings...") :
             m.availableRecoveryCommand() == RecoveryCommand::Sensors ? UI_TEXT("Retry sensors...") :
             m.recoveryKind() == RecoveryKind::Temperatures ? UI_TEXT("Resume...") : UI_TEXT("Enable..."));

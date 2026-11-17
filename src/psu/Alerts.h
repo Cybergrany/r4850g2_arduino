@@ -3,7 +3,7 @@
 #include "../config/BuildOptions.h"
 namespace psu {
 enum class AlertCode : uint8_t {
-  None, Missing, Excluded, Returned, Unstable, Commissioning, Display, Touch, OlderSave,
+  None, SyncTimeout, Missing, Excluded, Returned, Unstable, Commissioning, Display, Touch, OlderSave,
   ReceiveLoss, DiscoveryFull, ActiveLost, Identity, Command, Control, StopUnconfirmed,
   Cutoff, CanInit, Deployment, Storage, TemperatureWarning, TemperatureError, ThermalStop, TemperatureSensor
 };

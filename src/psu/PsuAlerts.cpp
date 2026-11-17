@@ -21,7 +21,7 @@ void PsuController::alertTick(uint32_t now) {
   const auto status = controlStatus(now);
   alerts_.set(AlertManager::Startup, config_.deploymentId != deployment::id ? AlertCode::Deployment :
       startup_.permit == PermitState::Fault ? AlertCode::Cutoff :
-      (enable_.enabled() && status.blocker == Issue::NoProfile) || (!startup_.configurationReady && startup_.permit == PermitState::Inhibited) ? AlertCode::Commissioning : AlertCode::None, now);
+      (enable_.enabled() && status.blocker == Issue::NoProfile) || (!startup_.configurationReady && startup_.permit == PermitState::Inhibited) ? AlertCode::Commissioning : syncStatus(now).timedOut ? AlertCode::SyncTimeout : AlertCode::None, now);
   const UnitMask attention = availabilityAttention(now);
   for (uint8_t i = 0; i < count(); ++i) {
     const UnitMask bit = UnitMask(1U << i); const auto& u = control_[i]; const auto route = routingIssue(i, now);

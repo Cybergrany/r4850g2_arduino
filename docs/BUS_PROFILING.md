@@ -1,5 +1,12 @@
 # CAN startup and fan captures
 
+## Current-start synchronization comparison
+
+See [CURRENT_SYNC.md](CURRENT_SYNC.md) for priming/qualification, the session-only
+bypass review, diagnostics and the nine-unit bench sequence. Multi-unit starts
+now wait for measured current; ordinary positive-current adjustments remain direct.
+
+
 These builds investigate startup, address negotiation, receive loss and fan mode
 changes. Profiling itself does not change the controller's charging policy. Use the
 same source revision for all captures and keep the original terminal logs.

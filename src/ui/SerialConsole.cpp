@@ -83,7 +83,7 @@ const __FlashStringHelper* metricName(uint8_t metric) {
 void SerialConsole::resetSession() {
   cancelAlertBroadcast();
   length_ = 0; discard_ = afterCr_ = false; echo_ = true;
-  view_ = View::None; watch_ = raw_ = confirmation_ = false; descriptionAddress_ = 0;
+  view_ = View::None; watch_ = raw_ = confirmation_ = syncConfirmation_ = false; descriptionAddress_ = 0;
   availabilityConfirmation_ = false; profilePending_ = 0;
   traceHead_ = traceTail_ = traceCount_ = 0;
   submitted_ = redraw_ = trailingDiscard_ = false;
@@ -149,7 +149,10 @@ void SerialConsole::startView(View view, UnitMask mask) {
   cancelAlertBroadcast(); view_ = view; row_ = field_ = 0; viewMask_ = mask;
 }
 void SerialConsole::execute() {
-  if (profileCommand(line_)) return;
+  if (profileCommand(line_) || storageLine() || confirmationLine()) return;
+  executeTokens();
+}
+void SerialConsole::executeTokens() {
   char* args[6] = {}; char* context = nullptr; uint8_t argc = 0;
   for (char* word = strtok_r(line_, " \t", &context); word; word = strtok_r(nullptr, " \t", &context)) {
     if (argc == 6) { reply(Result::Invalid); return; } args[argc++] = word;
@@ -158,6 +161,7 @@ void SerialConsole::execute() {
   cancelAlertBroadcast();
   view_ = View::None;
   if (extension_ && extension_(extensionContext_,argc,args,io_,now_)) return;
+  if (!PSU_STRCMP(args[0], "sync")) { syncCommand(argc,args); return; }
   uint16_t n = 0, value = 0; UnitMask mask = 0;
 #if PSU_BUS_PROFILE
   if (!PSU_STRCMP(args[0], "busprofile")) {
@@ -225,6 +229,7 @@ void SerialConsole::execute() {
 #endif
       return;
     }
+    if (!PSU_STRCMP(args[1], "sync") && argc == 2) { startView(View::Sync); return; }
     if (!PSU_STRCMP(args[1], "thermal") && argc == 2) { startView(View::Thermal); return; }
     if (!PSU_STRCMP(args[1], "startup") && argc == 2) { startView(View::Startup); return; }
     if (!PSU_STRCMP(args[1], "control") && argc == 2) { startView(View::Control); return; }
@@ -357,22 +362,6 @@ void SerialConsole::execute() {
   if ((!PSU_STRCMP(args[0], "apply") || !PSU_STRCMP(args[0], "preview") || !PSU_STRCMP(args[0], "offline")) && argc >= 2 && argc <= 3) {
     applyCommand(argc, args); return;
   }
-  if (!PSU_STRCMP(args[0], "confirm") && argc == 2) {
-    if (profilePending_ && (!PSU_STRCMP(args[1], "yes") || !PSU_STRCMP(args[1], "no"))) { profileConfirm(!PSU_STRCMP(args[1], "yes")); return; }
-    if (!PSU_STRCMP(args[1], "no")) { confirmation_ = availabilityConfirmation_ = false; io_.println(F("Cancelled; no settings sent")); return; }
-    if (!PSU_STRCMP(args[1], "yes") && availabilityConfirmation_) {
-      availabilityConfirmation_ = false;
-      reply(controller_.confirmAvailability(availabilityPlan_, memory_, now_));
-      if (controller_.availabilitySaving()) io_.println(F("Saving reviewed configuration + decision; continuation waits for verification."));
-      return;
-    }
-    if (!PSU_STRCMP(args[1], "yes") && confirmation_) {
-      confirmation_ = false; const auto r = controller_.queue(plan_, true, now_); reply(r);
-      if (r == Result::Ok) wasBusy_ = true;
-      return;
-    }
-    io_.println(F("ERR no valid confirmation pending; preview startup action or apply GROUP partial")); return;
-  }
   if (!PSU_STRCMP(args[0], "poll") && argc == 2) {
     const int8_t g = controller_.groupIndex(args[1]);
     mask = !PSU_STRCMP(args[1], "all") ? membersMask(controller_.count()) : g >= 0 ? controller_.configuration().groups[g].members : 0;
@@ -391,10 +380,6 @@ void SerialConsole::execute() {
     const bool on = !PSU_STRCMP(args[1], "on");
     if (!PSU_STRCMP(args[0], "watch")) watch_ = on; else if (!PSU_STRCMP(args[0], "raw")) raw_ = on; else echo_ = on;
     reply(Result::Ok); return;
-  }
-  if ((!PSU_STRCMP(args[0], "save") || !PSU_STRCMP(args[0], "load") || !PSU_STRCMP(args[0], "defaults")) && argc == 1) {
-    storageCommand(args[0]);
-    return;
   }
   io_.println(F("ERR syntax; help. set current GROUP1 55 / set voltage psu:1 54"));
 }
@@ -443,7 +428,23 @@ void SerialConsole::applyCommand(uint8_t argc, char** args) {
   }
   startView(View::Plan); return;
 }
+// Storage has no argument vector to retain through configuration decoding.
+// Keep exactly the tokenizer's whitespace/single-word semantics.
+bool SerialConsole::storageLine() {
+  char* word=line_;
+  while (*word==' ' || *word=='\t') ++word;
+  char* end=word;
+  while (*end && *end!=' ' && *end!='\t') ++end;
+  char* rest=end;
+  while (*rest==' ' || *rest=='\t') ++rest;
+  if (*rest) return false;
+  const char saved=*end; *end=0;
+  const bool recognized=!PSU_STRCMP(word,"save") || !PSU_STRCMP(word,"load") || !PSU_STRCMP(word,"defaults");
+  if (recognized) { cancelAlertBroadcast(); view_ = View::None; storageCommand(word); }
+  *end=saved; return recognized;
+}
 void SerialConsole::storageCommand(const char* command) {
+    if (memory_.saving()) { storageReply(StorageResult::Busy); return; }
     if (controller_.busy()) { reply(Result::Busy); return; }
     if (!PSU_STRCMP(command, "save")) {
       const auto r = memory_.startSave(controller_.configuration());
@@ -453,6 +454,34 @@ void SerialConsole::storageCommand(const char* command) {
       } else storageReply(r);
     }
     else restoreCommand(!PSU_STRCMP(command, "defaults"));
+}
+// Confirmation can write EEPROM too. Do not retain the general six-argument
+// parser's frame through journal validation and configuration decoding.
+bool SerialConsole::confirmationLine() {
+  char* word=line_;
+  while (*word==' ' || *word=='\t') ++word;
+  if (PSU_STRNCMP(word,"confirm",7) || (word[7] && word[7]!=' ' && word[7]!='\t')) return false;
+  cancelAlertBroadcast(); view_ = View::None;
+  if (memory_.saving()) { storageReply(StorageResult::Busy); return true; }
+  char* context=nullptr;
+  strtok_r(word," \t",&context);
+  char* answer=strtok_r(nullptr," \t",&context);
+  if (!answer || strtok_r(nullptr," \t",&context)) { reply(Result::Invalid); return true; }
+  const bool yes=!PSU_STRCMP(answer,"yes"), no=!PSU_STRCMP(answer,"no");
+  if (profilePending_ && (yes || no)) { profileConfirm(yes); return true; }
+  if (no) { confirmation_ = availabilityConfirmation_ = false; io_.println(F("Cancelled; no settings sent")); return true; }
+  if (yes && availabilityConfirmation_) {
+    availabilityConfirmation_ = false;
+    reply(controller_.confirmAvailability(availabilityPlan_, memory_, now_));
+    if (controller_.availabilitySaving()) io_.println(F("Saving reviewed configuration + decision; continuation waits for verification."));
+    return true;
+  }
+  if (yes && confirmation_) {
+    confirmation_ = false; const auto r=controller_.queue(plan_,true,now_); reply(r);
+    if (r==Result::Ok) wasBusy_=true;
+    return true;
+  }
+  io_.println(F("ERR no valid confirmation pending; preview startup action or apply GROUP partial")); return true;
 }
 void SerialConsole::restoreCommand(bool defaults) {
   Configuration candidate;
@@ -631,6 +660,7 @@ void SerialConsole::tick(uint32_t now) {
     io_.print(F("WARN trace/description frames dropped=")); io_.print(traceDrops_);
     io_.println(F("; CAN processing continues; retry description with raw off")); prompt(); return;
   }
+  if (syncNotification(now)) return;
   if (watch_ && !length_ && !discard_ && view_ == View::None && uint32_t(now - lastWatch_) >= 1000) {
     lastWatch_ = now; startView(View::Telemetry, membersMask(controller_.count()));
   }
@@ -695,6 +725,10 @@ void SerialConsole::printUnit(uint8_t i, uint8_t field, uint32_t now) {
     io_.print(F("  readiness-losses=")); io_.print(controller_.readinessLosses(i));
     io_.print(F(" auto-restart-budget=")); io_.println(control::outputReadyRecoveries);
   } else if (field == 7) {
+    const auto sync = controller_.syncStatus(now);
+    if (sync.members & (1U<<i)) {
+      io_.print(F("  sync=")); io_.print(syncPhaseName(sync.phase)); io_.print(F(" qualified=")); io_.println(bool(sync.qualified & (1U<<i)));
+    }
     const auto ready = controller_.readinessStatus(i, now);
     if (ready.pending) {
       io_.println(ready.acknowledged ? F("  Current accepted; verifying readiness") : F("  Current sent; waiting for ACK"));
@@ -726,6 +760,7 @@ void SerialConsole::printControl(uint32_t now) {
   }
 }
 void SerialConsole::outputRow(uint32_t now) {
+  if (view_ == View::Sync) { syncRow(row_++,now); if (row_ == 4) startView(View::Units); return; }
   if (view_ == View::Fault) { faultRow(row_++); if (row_ == 6) view_ = View::None; return; }
   if (view_ == View::Profiles || view_ == View::Profile) { profileRow(); return; }
   const auto& c = controller_.configuration();
@@ -851,7 +886,8 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" physical=")); io_.print(control::activePin >= 0 && !PSU_UI_DEBUG);
       io_.print(F(" logical=")); io_.println(controller_.psuActive(now) ? F("HIGH") : F("LOW"));
       io_.println(F("HIGH = enable ON and any PSU permitted positive current; not measured output."));
-    } else { startView(View::Units); return; }
+    } else if (row_ == 5) syncRow(0,now);
+    else { startView(View::Units); return; }
     ++row_;
   } else if (view_ == View::DiagnosticHelp) {
     switch (row_++) {
@@ -866,6 +902,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 8: io_.println(F("diag control: enable/zero/fan states; diag fault: retained first-fault evidence; reconcile: explicit retry.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
+      case 12: io_.println(F("diag sync: priming cap, measured-current qualification and session bypass; sync bypass on then sync bypass on confirm")); break;
       case 11: io_.println(F("diag ui [reset]: clocks, render/SPI/phase maxima, scene/change last/max times. Includes interrupts; compare diag bus under load.")); break;
       default: view_ = View::None; break;
     }
@@ -889,6 +926,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 16: io_.println(F("autoresume on/off = LIVE enable/zero-current hold + boot preference; save to persist; diag control; reconcile = stop/recheck/retry")); break;
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
       case 18: io_.println(F("diag startup; startup accept/exclude/include/require GROUP|slots [remember]; confirm yes/no")); break;
+      case 21: io_.println(F("diag sync; sync bypass on = review, on confirm = session bypass, off = require future start synchronization")); break;
       case 20: io_.println(F("alerts; alerts ack ID|all; alerts every [0..3600 seconds]; diag thermal; thermal retry GROUP|slots|all")); break;
       case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;
@@ -1004,10 +1042,9 @@ void SerialConsole::outputRow(uint32_t now) {
     ++row_;
   } else if (view_ == View::Legacy) {
     if (memory_.saving()) { storageReply(StorageResult::Busy); view_ = View::None; return; }
-    LegacyConfiguration old;
-    if (!memory_.legacy(old)) { io_.println(F("No valid legacy record")); view_ = View::None; return; }
-    if (row_ < old.count) {
-      const auto& u = old.units[row_]; io_.print(F("LEGACY PSU ")); io_.print(++row_);
+    LegacyUnit u; uint8_t count;
+    if (!memory_.legacyUnit(row_, u, count)) { io_.println(F("No valid legacy record")); view_ = View::None; return; }
+    if (row_ < count) { io_.print(F("LEGACY PSU ")); io_.print(++row_);
       io_.print(F(" addr=")); io_.print(u.address); io_.print(F(" enabled=")); io_.print(u.enabled);
       io_.print(F(" V/A=")); io_.print(u.voltage / 100.0f); io_.print('/'); io_.print(u.current / 100.0f);
       io_.print(F(" offline V/A=")); io_.print(u.offlineVoltage / 100.0f); io_.print('/'); io_.println(u.offlineCurrent / 100.0f);

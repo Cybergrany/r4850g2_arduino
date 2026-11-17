@@ -154,29 +154,37 @@ void encode(const Configuration& c, uint8_t* b, uint32_t sequence) {
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) b[at + i / 2] |= uint8_t(groupFor(c, i) + 1) << ((i % 2) * 4);
   put16(b + 8, crc(b, MemoryManager::recordSize));
 }
-bool decodeLegacy(const uint8_t* b, uint16_t size, LegacyConfiguration& c) {
+LegacyUnit decodeLegacyUnit(const uint8_t* p) {
+  return {p[0], bool(p[1]), get16(p + 2), get16(p + 4), get16(p + 6), get16(p + 8), get16(p + 10)};
+}
+__attribute__((noinline)) bool validLegacyRecord(const uint8_t* b, uint16_t size) {
   const uint8_t capacity = storedUnits(b, size);
   if (!capacity || capacity > PSU_MAX_UNITS || b[14] || b[15] || b[17] > 1) return false;
-  c = {}; c.count = b[16]; c.applyOnBoot = b[17]; c.pollMs = get16(b + 18);
-  if (!c.count || c.count > capacity || c.pollMs < limits::minPollMs || c.pollMs > limits::maxPollMs) return false;
+  const uint8_t count=b[16]; const uint16_t pollMs=get16(b+18);
+  if (!count || count > capacity || pollMs < limits::minPollMs || pollMs > limits::maxPollMs) return false;
   for (uint8_t i = 0; i < capacity; ++i) {
     const auto* p = b + 20 + 12 * i; if (p[1] > 1) return false;
-    c.units[i] = {p[0], bool(p[1]), get16(p + 2), get16(p + 4), get16(p + 6), get16(p + 8), get16(p + 10)};
-    const auto& u = c.units[i];
+    const auto u = decodeLegacyUnit(p);
     if (!u.address || u.address > 127 || u.voltage < limits::minVoltage || u.voltage > limits::maxVoltage ||
         u.offlineVoltage < limits::minOfflineVoltage || u.offlineVoltage > limits::maxVoltage ||
         !allowedCurrent(u.current, u.ratedCurrent) || !allowedCurrent(u.offlineCurrent, u.ratedCurrent)) return false;
-    for (uint8_t j = 0; j < i && i < c.count; ++j) if (c.units[j].address == u.address) return false;
+    for (uint8_t j = 0; j < i && i < count; ++j) if (b[20 + 12 * j] == u.address) return false;
   }
+  return true;
+}
+bool decodeLegacy(const uint8_t* b, uint16_t size, LegacyConfiguration& c) {
+  // Validate rows directly in the existing record buffer, rather than creating
+  // another full legacy configuration inside record selection.
+  if (!validLegacyRecord(b,size)) return false;
+  const uint8_t capacity=storedUnits(b,size);
+  c = {}; c.count=b[16]; c.applyOnBoot=b[17]; c.pollMs=get16(b+18);
+  for (uint8_t i=0; i<capacity; ++i) c.units[i]=decodeLegacyUnit(b+20+12*i);
   for (uint8_t i = capacity; i < PSU_MAX_UNITS; ++i) c.units[i].ratedCurrent = limits::defaultRatedCurrent;
   return true;
 }
 // Keep mutually exclusive validation frames off the record-selection stack.
 __attribute__((noinline)) bool validCurrentRecord(const uint8_t* b, uint16_t size) {
   Configuration candidate; return decode(b, size, candidate);
-}
-__attribute__((noinline)) bool validLegacyRecord(const uint8_t* b, uint16_t size) {
-  LegacyConfiguration candidate; return decodeLegacy(b, size, candidate);
 }
 
 }
@@ -226,16 +234,20 @@ StorageResult MemoryManager::loadImpl(Configuration& c, bool temporary, int16_t*
   return loadLegacy(c, size);
 }
 StorageResult MemoryManager::loadLegacy(Configuration& c, uint16_t size) const {
-  LegacyConfiguration old; decodeLegacy(pending_, size, old);
-  for (uint8_t i = 0; i < old.count; ++i) if (!old.units[i].enabled || old.units[i].voltage != old.units[0].voltage ||
-      old.units[i].current != old.units[0].current || old.units[i].offlineVoltage != old.units[0].offlineVoltage ||
-      old.units[i].offlineCurrent != old.units[0].offlineCurrent) return StorageResult::LegacyNeedsReview;
-  defaultConfiguration(c); c.count = old.count; c.pollMs = old.pollMs; c.offlineVoltage = old.units[0].offlineVoltage;
-  strcpy(c.groups[0].name, "GROUP1"); c.groups[0].members = membersMask(old.count);
-  c.groups[0].offlineCurrent = old.units[0].offlineCurrent * old.count;
+  if (!validLegacyRecord(pending_,size)) return StorageResult::NoValidRecord;
+  const auto first=decodeLegacyUnit(pending_+20);
+  const uint8_t count=pending_[16], capacity=storedUnits(pending_,size);
+  for (uint8_t i=0; i<count; ++i) {
+    const auto unit=decodeLegacyUnit(pending_+20+12*i);
+    if (!unit.enabled || unit.voltage!=first.voltage || unit.current!=first.current ||
+        unit.offlineVoltage!=first.offlineVoltage || unit.offlineCurrent!=first.offlineCurrent) return StorageResult::LegacyNeedsReview;
+  }
+  defaultConfiguration(c); c.count = count; c.pollMs = get16(pending_+18); c.offlineVoltage = first.offlineVoltage;
+  strcpy(c.groups[0].name, "GROUP1"); c.groups[0].members = membersMask(count);
+  c.groups[0].offlineCurrent = first.offlineCurrent * count;
   for (uint8_t i = 0; i < PSU_MAX_UNITS; ++i) {
-    c.units[i].ratedCurrent = old.units[i].ratedCurrent;
-    c.voltage[i] = old.units[0].voltage; c.current[i] = i < old.count ? old.units[0].current : 0;
+    c.units[i].ratedCurrent = i < capacity ? get16(pending_+30+12*i) : limits::defaultRatedCurrent;
+    c.voltage[i] = first.voltage; c.current[i] = i < count ? first.current : 0;
   }
   return StorageResult::Migrated;
 }
@@ -244,6 +256,16 @@ bool MemoryManager::legacy(LegacyConfiguration& c) const {
   const auto at = newestConfig(); if (at < 0) return false;
   uint16_t size; uint32_t seq;
   return readRecord(at, size, seq) && pending_[1] == 1 && decodeLegacy(pending_, size, c);
+}
+bool MemoryManager::legacyUnit(uint8_t slot, LegacyUnit& unit, uint8_t& count) const {
+  if (saving() || !storage_.ready()) return false;
+  const auto at = newestConfig(); if (at < 0) return false;
+  uint16_t size; uint32_t seq;
+  if (!readRecord(at, size, seq) || pending_[1] != 1) return false;
+  // newestConfig already validated the complete record. No nested candidate.
+  count = pending_[16];
+  if (slot < count) unit = decodeLegacyUnit(pending_ + 20 + 12 * slot);
+  return true;
 }
 void MemoryManager::startWrite(uint16_t address, uint16_t length, uint32_t sequence, bool profile) {
   saveBase_ = address; saveLength_ = length; saveSequence_ = sequence; saveAt_ = 0;

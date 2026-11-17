@@ -62,7 +62,7 @@ class PsuController {
   void busReceiveStats(BusReceiveStats& stats) const { transport_.busReceiveStats(stats); }
 #endif
   bool begin();
-  void tick(uint32_t now);
+  __attribute__((noinline)) void tick(uint32_t now);
   // Bounded RX/protection service between drawing slices. No new setting or
   // read requests are dispatched; the normal tick owns command scheduling.
   uint8_t serviceReceive(uint32_t now);
@@ -150,13 +150,18 @@ class PsuController {
   Result queue(const ApplyPlan& plan, bool confirmed, uint32_t now);
   ProfileReview previewProfile(MemoryManager& memory, uint8_t slot, bool inclusion, uint32_t now) const;
   Result loadProfile(MemoryManager& memory, const ProfileReview& review, uint32_t now);
-  void profileTick(MemoryManager& memory);
+  __attribute__((noinline)) void profileTick(MemoryManager& memory);
   const ProfileLoadStatus& profileLoad() const { return profileLoad_; }
   const OperationReport& report() const { return report_; }
   bool voltageSynchronized(uint8_t slot) const { return slot < count() && (voltageSynced_ & (1U << slot)); }
   bool currentSynchronized(uint8_t slot) const { return slot < count() && (currentSynced_ & (1U << slot)); }
   const Discovery& discovery() const { return discovery_; }
   bool busy() const { return report_.active; }
+  CurrentSyncStatus syncStatus(uint32_t now) const;
+  SyncReview reviewSync(uint32_t now) const;
+  Result bypassSync(const SyncReview& review, uint32_t now);
+  void requireSync();
+  bool syncBypassed() const { return sync_.bypass; }
   bool ready() const { return ready_; }
   AlertManager& alerts() { return alerts_; }
   const AlertManager& alerts() const { return alerts_; }
@@ -243,6 +248,8 @@ class PsuController {
   bool hotPrevious_ = false, cool_ = false, protectionDirty_ = false, protectionFailed_ = false, resumePending_ = false;
   bool controlCorrection_ = false;
   Result change(Configuration& candidate, UnitMask invalidate = 0);
+  __attribute__((noinline)) void fillPlan(ApplyPlan& plan, Operation operation, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
+      const uint16_t* voltage, const uint16_t* current) const;
   ApplyPlan buildPlan(Operation operation, SettingScope scope, SettingFields fields, uint32_t now, bool partial,
       const uint16_t* voltage = nullptr, const uint16_t* current = nullptr) const;
   enum class TxPurpose : uint8_t { Background, Job, ManualRead, Control };
@@ -256,8 +263,17 @@ class PsuController {
   void runJob(uint32_t now);
   void restore(uint32_t now);
   void refreshSettings(uint32_t now);
+  void beginSync();
+  void cancelSync();
+  void checkSync(uint32_t now);
+  void syncReceive(uint8_t slot, const CanFrame& frame, uint32_t now, bool gap);
+  void jobPhase(JobPhase phase);
+  bool syncWaiting() const { return sync_.members && jobPhase_ == JobPhase::SyncWait; }
+  uint16_t commandCurrent(uint8_t slot, uint16_t authorized) const;
+  uint16_t syncHoldRaw(uint8_t slot, uint16_t target) const;
   void availabilityTick(uint32_t now);
   void startupTick(uint32_t now);
+  __attribute__((noinline)) Result validateAvailability(const AvailabilityPlan& plan, uint32_t now) const;
   void finishAvailability(uint32_t now);
   void applyAvailability(const AvailabilityPlan& plan);
   void applyParticipation(UnitMask members, UnitMask excluded, bool remember, bool releaseHot, uint32_t now);
@@ -325,7 +341,14 @@ class PsuController {
   uint8_t requestedDescription_ = 0, txJobSlot_ = 0;
   bool txPending_ = false, sentThisTick_ = false;
   TxPurpose txPurpose_ = TxPurpose::Background;
-  bool ready_ = false, waiting_ = false, secondPhase_ = false;
+  bool ready_ = false, waiting_ = false;
+  JobPhase jobPhase_ = JobPhase::Voltage;
+  struct SyncState {
+    uint32_t since = 0, goodSince[PSU_MAX_UNITS] = {};
+    UnitMask members = 0, observed = 0, qualified = 0;
+    bool bypass = false, started = false, blocked = false;
+  } sync_;
+  uint16_t syncGeneration_ = 0;
   bool jobStarted_ = false;
   bool verifying_ = false, identityChecked_ = false;
   uint32_t verificationStarted_ = 0;

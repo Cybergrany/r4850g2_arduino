@@ -13,7 +13,7 @@ void pendingReadiness(const Rig& r, uint32_t since, uint8_t slot = 0) {
   CHECK(r.c.unitControl(slot).fault == CommandState::Idle);
   CHECK(r.c.unitControl(slot).outputDemand == OutputDemand::Starting);
   CHECK(r.c.unitControl(slot).outputSince == since);
-  CHECK(r.c.controlStatus(r.now).activity == Activity::Starting);
+  CHECK(r.c.controlStatus(r.now).activity == (r.c.syncStatus(r.now).members ? Activity::Synchronizing : Activity::Starting));
   CHECK(!(r.c.excluded() & (1U<<slot)));
   CHECK(r.c.readinessLosses(slot)==0);
 }
@@ -219,13 +219,13 @@ void readinessMultiUnitAndWrap() {
   std::strcpy(config.groups[1].name,"GROUP2"); config.groups[1].members = 2; draftGroupCurrent(config, 1, 1000);
   Rig r(config); r.reportAc = true; r.notReady = 2; r.step();
   CHECK(r.c.queue(r.c.preview(Operation::All,-1,r.now),false,r.now) == Result::Ok);
-  for (unsigned n=0; n<60 && (r.c.busy() || r.c.unitControl(0).outputDemand!=OutputDemand::Active); ++n) r.step();
+  for (unsigned n=0; n<60 && (r.c.unitControl(1).outputDemand!=OutputDemand::Starting || r.c.unitControl(0).outputDemand!=OutputDemand::Active); ++n) r.step();
   CHECK(r.c.unitControl(0).outputDemand == OutputDemand::Active);
   const auto since = r.c.unitControl(1).outputSince;
   pendingReadiness(r,since,1); CHECK(r.c.participants() == 3 && r.c.configuration().operating.current[1] == 1000);
-  CHECK(r.c.preview(Operation::GroupCurrent,0,r.now).blocker == Issue::None);
-  CHECK(r.c.preview(Operation::GroupCurrent,1,r.now).blocker == Issue::ReadinessPending);
-  r.notReady = 0; r.step(2250); CHECK(r.c.unitControl(1).outputDemand == OutputDemand::Active);
+  CHECK(r.c.preview(Operation::GroupCurrent,0,r.now).blocker == Issue::Busy);
+  CHECK(r.c.preview(Operation::GroupCurrent,1,r.now).blocker == Issue::Busy);
+  r.notReady = 0; r.step(2250); r.finish(); CHECK(r.c.unitControl(1).outputDemand == OutputDemand::Active);
   CHECK(r.c.controlStatus(r.now).activity == Activity::Running);
   Rig wrap(zeroHoldConfiguration(),false,true,UINT32_MAX-12000);
   startOutput(wrap); wrap.step(); const auto start = wrap.c.unitControl(0).outputSince;

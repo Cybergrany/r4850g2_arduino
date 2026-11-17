@@ -1,13 +1,28 @@
 #pragma once
 #include "Psu.h"
 #include "EnableControl.h"
+#include "../config/CurrentSyncConfig.h"
 namespace psu {
 enum class ControlPhase : uint8_t { AwaitIdentity, Zero, Stopping, Fan, Voltage, Prepared, Wake, Starting, Held, Online, EmergencyStandby, VerifyStandby, Fault };
 enum class FanMode : uint8_t { Unknown, Auto, Max };
 enum class FanOverride : uint8_t { Policy, Auto, Max };
 enum class FanReason : uint8_t { Startup, Temperature, RequestedCurrent, MeasuredCurrent, InvalidTelemetry, Cooling, Cool, ManualAuto, ManualMax };
 enum class OutputDemand : uint8_t { Unknown, Zero, Starting, Active, Stopping };
-enum class Activity : uint8_t { Reconciling, Stopping, Holding, Starting, Running, StartBlocked, StopUnconfirmed };
+enum class Activity : uint8_t { Reconciling, Stopping, Holding, Starting, Running, StartBlocked, StopUnconfirmed, Synchronizing };
+enum class JobPhase : uint8_t { Voltage, Prime, SyncWait, Current };
+enum class SyncPhase : uint8_t { Idle, Preparing, Priming, Waiting, Releasing, Blocked };
+struct CurrentSyncStatus {
+  UnitMask members = 0, qualified = 0;
+  uint32_t elapsedMs = 0;
+  SyncPhase phase = SyncPhase::Idle;
+  bool bypass = false, timedOut = false;
+};
+// Uses existing bounded review storage in UI/serial; no configuration snapshot.
+struct SyncReview {
+  uint32_t revision, topology, availability, operation, created;
+  UnitMask members;
+  uint16_t generation;
+};
 struct ExternalFanStatus {
   float maximumTemperature = 0;
   uint8_t duty = 255, slot = 0;

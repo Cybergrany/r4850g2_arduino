@@ -1,5 +1,12 @@
 # Serial lifecycle on the Mega 2560
 
+## Low-current startup synchronization
+
+See [CURRENT_SYNC.md](CURRENT_SYNC.md) for priming/qualification, the session-only
+bypass review, diagnostics and the nine-unit bench sequence. Multi-unit starts
+now wait for measured current; ordinary positive-current adjustments remain direct.
+
+
 See [scoped settings and profiles](PROFILES.md) for `set`, `preview`, `apply`,
 `profiles`, `profile save/load/show`, optional participation and `diag memory`.
 

@@ -55,6 +55,7 @@ void PsuController::cancelJob() {
     report_.active = false;
   }
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
+  cancelSync();
 }
 void PsuController::reconcile(bool explicitRetry) {
 #if PSU_BUS_PROFILE
@@ -108,6 +109,7 @@ void PsuController::enableChanged(bool wasEnabled) {
       if (control_[i].fanOverride == FanOverride::Auto) clearFanOverride(i);
     running_ = config_.operating.voltageMask;
     restorePending_ |= running_;
+    currentSynced_ = 0; // The accepted OFF limit is not the new positive target.
   }
 }
 Result PsuController::setAutoResume(bool on) {
@@ -436,7 +438,8 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
   } else if (s.blocker != Issue::None) s.activity = Activity::StartBlocked;
   else if ((config_.operating.voltageMask & requiredMembers()) != requiredMembers()) {
     s.activity = Activity::StartBlocked; s.blocker = Issue::NoProfile;
-  } else if (online && !starting) s.activity = Activity::Running;
+  } else if (sync_.members) s.activity = sync_.blocked ? Activity::StartBlocked : Activity::Synchronizing;
+  else if (online && !starting) s.activity = Activity::Running;
   else s.activity = starting ? Activity::Starting : Activity::Reconciling;
   return s;
 }
@@ -643,8 +646,7 @@ void PsuController::controlTick(uint32_t now) {
     if (!controlWaiting_ && controlVerified_ && !txPending_ && uint32_t(now - lastSend_) >= limits::commandGapMs) {
       if (controlRefresh_) {
         const uint16_t desired = controlRegister_ == protocol::OnlineVoltage ? protocol::encodeVoltage(reconciliationVoltage(controlSlot_)) :
-            protocol::encodeCurrent(control_[controlSlot_].phase == ControlPhase::Online ? effectiveCurrent(controlSlot_) : 0,
-                config_.units[controlSlot_].ratedCurrent);
+            control_[controlSlot_].phase == ControlPhase::Online ? effectiveRaw(controlSlot_) : 0;
         if (desired != controlValue_ || !powerAvailable() || (control_[controlSlot_].phase != ControlPhase::Online && control_[controlSlot_].phase != ControlPhase::Held)) {
           controlActive_ = controlRefresh_ = refreshCurrent_ = false; control_[controlSlot_].attempts = 0; return;
         }
@@ -705,7 +707,7 @@ void PsuController::controlTick(uint32_t now) {
   }
 }
 void PsuController::refreshSettings(uint32_t now) {
-  if (!powerAvailable() || busy() || controlActive_ || txPending_ || sentThisTick_ || discovery_.negotiating() ||
+  if (!powerAvailable() || (busy() && !syncWaiting()) || controlActive_ || txPending_ || sentThisTick_ || discovery_.negotiating() ||
       uint32_t(now - lastSend_) < limits::commandGapMs) return;
   for (uint8_t n = 0; n < count(); ++n) {
     const uint8_t i = refreshCurrent_ ? refreshSlot_ : uint8_t((refreshIndex_ + n) % count());
@@ -723,7 +725,7 @@ void PsuController::refreshSettings(uint32_t now) {
     if (refreshCurrent_ && (config_.operating.voltageMask & (1U << i)) && !(voltageSynced_ & (1U << i))) { refreshCurrent_ = false; return; }
     if (!refreshCurrent_) { refreshEpoch_ = d->epoch; refreshSlot_ = i; }
     controlCommand(i, refreshCurrent_ ? protocol::OnlineCurrent : protocol::OnlineVoltage,
-        refreshCurrent_ ? protocol::encodeCurrent(current, config_.units[i].ratedCurrent) : protocol::encodeVoltage(reconciliationVoltage(i)), now);
+        refreshCurrent_ ? (u.phase == ControlPhase::Online ? effectiveRaw(i) : 0) : protocol::encodeVoltage(reconciliationVoltage(i)), now);
     controlRefresh_ = controlActive_; return;
   }
 }

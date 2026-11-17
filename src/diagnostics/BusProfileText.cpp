@@ -7,6 +7,7 @@ namespace psu {
 namespace {
 const __FlashStringHelper* eventName(BusEvent kind) {
   switch (kind) {
+    case BusEvent::Sync: return F("current-sync");
     case BusEvent::Boot: return F("boot");
     case BusEvent::Negotiation: return F("negotiation");
     case BusEvent::Quiet: return F("negotiation-end");

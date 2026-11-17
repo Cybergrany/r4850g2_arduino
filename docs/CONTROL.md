@@ -1,6 +1,6 @@
 # Enable control, reconciliation and fans
 
-This firmware controls one parallel DC bus. Normal OFF means **zero-current hold
+This firmware controls grouped PSUs with per-unit voltage/current targets. Normal OFF means **zero-current hold
 with the PSU awake for cooling**, not hardware standby. Managed units reconcile
 this way at boot, on explicit retry, after an observed AC/identity change, and
 after readiness loss while delivering current.
@@ -15,12 +15,15 @@ devices receive no setting writes.
 2. Run `diag control` and `diag group GROUP1`. Wait for `held-at-zero-awake`,
    `zero-confirmed=1 awake=1` and fresh telemetry. `broadcast-ready=0` can be
    normal while `current-state=zero`; output readiness is a separate check.
-3. Stage `set voltage 54` and `set current GROUP1 55` (example values only).
-4. Run `autoresume on`, `preview all`, then `apply all`. With no authorized
-   profile yet, ON stays blocked until apply authorizes one. If an older profile
-   exists, ON can restore it immediately: inspect it first and allow that restore
-   to finish before applying new drafts. Use an unloaded output for initial tests.
-5. Wait for the complete accepted result. Check `diag control`,
+3. Keep `autoresume off`; stage `set voltage 54` and `set current GROUP1 3`
+   (example values only; current is **per PSU**).
+4. Run `preview all`, then `apply all` while OFF to prepare the selected targets
+   for the next ON. Inspect the authorized profile before `autoresume on`;
+   ON can restore authorized settings immediately. Without a load, multi-unit
+   synchronization may keep waiting: use its explicit reviewed bypass only when
+   appropriate for that test.
+5. Multi-unit zero starts first [synchronize at low current](CURRENT_SYNC.md).
+   Wait for the complete accepted result. Check `diag control`,
    `diag group GROUP1`, and measured `telemetry GROUP1`, then `save` if this
    configuration and enable preference should survive a reboot.
 
@@ -32,9 +35,9 @@ settings and elapsed cooldown survive the edge. Repeating OFF does not reset
 faults or restart reconciliation. Authorized charging currents remain intact.
 
 `autoresume on` permits the authorized profile after the installation-wide
-release checks; it never applies uncommitted drafts. Online apply while OFF is
-blocked; offline defaults are an explicit, separate operation. Enable events
-invalidate pending UI edits and serial confirmations.
+release checks; it never applies uncommitted drafts. Online apply while OFF
+prepares targets for the next ON; offline defaults are an explicit, separate
+operation. Enable events invalidate pending UI edits and serial confirmations.
 
 ## Optional PSU_ACTIVE output
 
@@ -59,6 +62,7 @@ The current limit is evaluated after thermal reductions and CAN encoding.
 | Only zero-current allocations (including a positive value that encodes as zero) | LOW |
 | At least one released PSU has a positive permitted limit | HIGH |
 | Current ACK/readiness qualification pending after release | HIGH |
+| Low-current synchronization permits at least one priming current | HIGH |
 | Thermal reduction leaves at least one positive permitted limit | HIGH |
 | A peer fails or is excluded, but another PSU remains permitted | HIGH |
 

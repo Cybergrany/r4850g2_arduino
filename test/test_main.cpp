@@ -324,6 +324,10 @@ struct Rig {
       if(!pending) break;
       step();
     }
+    if (c.busy()) {
+      std::cerr << "unfinished sync phase=" << unsigned(c.syncStatus(now).phase) << " members=" << c.syncStatus(now).members << " qualified=" << c.syncStatus(now).qualified << " failed=" << c.report().failed << "\n";
+      for (uint8_t i=0;i<c.count();++i) std::cerr << " slot="<<unsigned(i)<<" phase="<<unsigned(c.unitControl(i).phase)<<" issue="<<unsigned(c.issue(i,now))<<" rawA="<<current[i]<<"\n";
+    }
     CHECK(!c.busy());
   }
   void apply(Operation operation = Operation::All, int8_t group = -1) {
@@ -776,22 +780,22 @@ void orderedApplyAndDraftIsolation() {
   Rig r;
   CHECK(r.c.preview(Operation::GroupCurrent, 0, r.now).blocker == Issue::None);
   r.apply();
-  const auto w = r.can.writes(); CHECK(w.size() == 4);
+  const auto w = r.can.writes(); CHECK(w.size() == 6);
   CHECK(w[0].data[1] == protocol::OnlineVoltage && w[1].data[1] == protocol::OnlineVoltage);
   CHECK(w[2].data[1] == protocol::OnlineCurrent && w[3].data[1] == protocol::OnlineCurrent);
-  CHECK(protocol::readBigEndian(w[2].data + 4) == protocol::encodeCurrent(2750, 5000));
+  CHECK(protocol::readBigEndian(w[2].data + 4) == protocol::encodeCurrent(100, 5000) && protocol::readBigEndian(w[4].data+4)==protocol::encodeCurrent(2750,5000));
   CHECK(r.c.configuration().operating.current[0] == 2750 && r.c.configuration().operating.currentMask == 3);
   CHECK(r.c.voltageSynchronized(0) && r.c.voltageSynchronized(1));
   CHECK(r.c.setVoltage(5650) == Result::Ok && r.c.setCurrent(0, 3000) == Result::Ok);
   const auto p = r.c.preview(Operation::GroupCurrent, 0, r.now);
   CHECK(p.voltage[0] == 5400 && p.current[0] == 3000); // Unapplied voltage remains a draft.
   r.apply(Operation::GroupCurrent, 0);
-  CHECK(r.can.writes().size() == 6 && r.can.writes()[4].data[1] == protocol::OnlineCurrent);
+  CHECK(r.can.writes().size() == 8 && r.can.writes()[6].data[1] == protocol::OnlineCurrent);
   CHECK(r.c.configuration().voltage[0] == 5650 && r.c.configuration().operating.voltage[0] == 5400);
   CHECK(r.c.setCurrent(0, 2000, true) == Result::Ok);
   r.apply(Operation::Offline);
-  const auto offline = r.can.writes(); CHECK(offline.size() == 10);
-  CHECK(offline[6].data[1] == protocol::OfflineVoltage && offline[8].data[1] == protocol::OfflineCurrent);
+  const auto offline = r.can.writes(); CHECK(offline.size() == 12);
+  CHECK(offline[8].data[1] == protocol::OfflineVoltage && offline[10].data[1] == protocol::OfflineCurrent);
   CHECK(r.c.configuration().operating.current[0] == 3000); // Offline defaults never replace online authorization.
 }
 void missingMembersAndConfirmations() {
@@ -833,7 +837,7 @@ void missingMembersAndConfirmations() {
 void acknowledgementsAndFailures() {
   // Losing an already-ACKed voltage recipient before the phase boundary must
   // block every current write. Its genuine return permits one recovery attempt.
-  Rig phase;
+  Rig phase; CHECK(phase.c.bypassSync(phase.c.reviewSync(phase.now),phase.now)==Result::Ok);
   CHECK(phase.c.queue(phase.c.preview(Operation::All, -1, phase.now), false, phase.now) == Result::Ok);
   phase.step(); phase.step(); CHECK(phase.can.writes().size() == 2);
   phase.can.incoming.push_back(broadcast(1, false));
@@ -842,7 +846,7 @@ void acknowledgementsAndFailures() {
   CHECK(phase.c.report().units[1].state == CommandState::Incomplete && phase.can.writes().size() == 2);
   phase.acknowledged = phase.can.sent.size(); phase.step(); phase.finish();
   CHECK(phase.c.report().operation == Operation::Restore && phase.c.report().succeeded == 1);
-  Rig r;
+  Rig r; CHECK(r.c.bypassSync(r.c.reviewSync(r.now),r.now)==Result::Ok);
   CHECK(r.c.queue(r.c.preview(Operation::All, -1, r.now), false, r.now) == Result::Ok);
   r.step(250, false); CHECK(r.can.writes().size() == 1);
   const auto sent = r.can.writes().front();
@@ -948,14 +952,14 @@ void restorationAndDeployment() {
   groups.live = 0; groups.step(16000); groups.live = 3; groups.step(200); groups.step(200);
   groups.finish();
   const auto regrouped=groups.can.writes();
-  for(size_t n=4;n<regrouped.size();++n) CHECK(regrouped[n].data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(regrouped[n].data+4)==0); // No redistribution.
+  for(size_t n=6;n<regrouped.size();++n) CHECK(regrouped[n].data[1]!=protocol::OnlineCurrent || protocol::readBigEndian(regrouped[n].data+4)==0); // No redistribution.
 }
 void schedulerAndBounds() {
   Rig full(installation(PSU_MAX_UNITS));
   CHECK(full.c.queue(full.c.preview(Operation::All,-1,full.now),false,full.now)==Result::Ok);
   for(unsigned n=0;n<300 && full.c.busy();++n) full.step();
   CHECK(!full.c.busy() && full.c.report().succeeded==membersMask(PSU_MAX_UNITS));
-  CHECK(full.can.writes().size() == PSU_MAX_UNITS * 2);
+  CHECK(full.can.writes().size() >= PSU_MAX_UNITS * 3);
   full.finish(); // Qualifying the last unit may overlap a healthy peer's periodic refresh.
   for(uint8_t i=0;i<PSU_MAX_UNITS;++i) CHECK(full.c.unitControl(i).outputDemand==OutputDemand::Active);
   // Cached identity/telemetry alone cannot authorize a setting at a reused address.
@@ -1284,6 +1288,12 @@ void eepromAndMigration() {
   CHECK(out.groups[0].members == 3 && !out.autoResume && !(out.operating.voltageMask != 0));
   CHECK(!identified(out.units[0].identity) && legacy.bytes == preserved);
   LegacyConfiguration details; CHECK(old.legacy(details) && details.units[1].address == 2 && details.applyOnBoot);
+  LegacyUnit row; uint8_t legacyCount=0;
+  for(uint8_t i=0;i<details.count;++i) {
+    CHECK(old.legacyUnit(i,row,legacyCount) && legacyCount==details.count);
+    CHECK(row.address==details.units[i].address && row.current==details.units[i].current && row.voltage==details.units[i].voltage);
+  }
+  CHECK(old.legacyUnit(details.count,row,legacyCount) && legacyCount==details.count);
   const auto migrated = out;
   for (int cut = 0; cut <= MemoryManager::recordSize + 1; ++cut) {
     legacy.bytes = preserved; legacy.calls = 0; legacy.stopAfter = cut;
@@ -1441,6 +1451,22 @@ void serialLifecycleAndParity() {
     terminal.input("apply all", false); idle.now += console::inputIdleTimeoutMs;
     CHECK(terminal.input("\r\n").find("Input expired") != std::string::npos && idle.can.writes().empty());
   }
+}
+void serialStorageDispatch() {
+  Rig r; Terminal t(r);
+  CHECK(t.input(" \t save \t\n",false).find("save started")!=std::string::npos);
+  CHECK(t.memory.saving()); const auto revision=r.c.configurationRevision();
+  for (const auto command : {"defaults\n"," \tload \t\n","save\n","confirm yes\n"}) {
+    CHECK(t.input(command,false).find("ERR EEPROM save in progress")!=std::string::npos);
+    CHECK(r.c.configurationRevision()==revision && r.c.count()==2);
+  }
+  t.drain(); Configuration saved; CHECK(t.memory.load(saved)==StorageResult::Ok && saved.count==2);
+  for (const auto command : {"defaults extra\n","load extra\n","save extra\n","confirm no extra\n"}) {
+    CHECK(t.input(command).find("ERR")!=std::string::npos);
+    CHECK(r.c.configurationRevision()==revision);
+  }
+  CHECK(t.input(" \tconfirm \tno \t\n").find("Cancelled")!=std::string::npos);
+  CHECK(t.input(" \tload \t\n").find("EEPROM OK")!=std::string::npos);
 }
 void cooperativeSerialAndStorage() {
   Rig r(installation(8)); Terminal t(r);
@@ -1870,6 +1896,7 @@ void uiLayouts() {
 #include "test_bus_profile.inc"
 #include "test_enable_boot.inc"
 #include "test_control_fault.inc"
+#include "test_current_sync.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1888,6 +1915,7 @@ int main() {
     run("routeCacheLifecycle", routeCacheLifecycle); run("drawingReceiveService", drawingReceiveService); run("exactGroupRange", exactGroupRange); run("idleSerialStatusCadence", idleSerialStatusCadence);
     run("nineUnitMigration", nineUnitMigration); run("ninthProtectionAndControl", ninthProtectionAndControl); run("ninthAvailabilityAndRouting", ninthAvailabilityAndRouting); run("ninthSerialAndUi", ninthSerialAndUi);
     run("decimalFormatting", decimalFormatting); run("uiRecoveryAvailability", uiRecoveryAvailability); run("uiRecoveryGuards", uiRecoveryGuards); run("uiRecoverySave", uiRecoverySave); run("uiRecoveryResultsAndThermal", uiRecoveryResultsAndThermal);
+    run("currentSyncProfileOwnership",currentSyncProfileOwnership); run("currentSyncAckAndThermalRaces",currentSyncAckAndThermalRaces); run("currentSyncUi",currentSyncUi); run("currentSyncMembershipAndSources",currentSyncMembershipAndSources); run("currentSyncStages",currentSyncStages); run("currentSyncEvidence",currentSyncEvidence); run("currentSyncTimeoutAndBypass",currentSyncTimeoutAndBypass); run("currentSyncSafety",currentSyncSafety); run("currentSyncFastBatch",currentSyncFastBatch);
     run("psuActiveLifecycle", psuActiveLifecycle); run("psuActiveProtection", psuActiveProtection); run("psuActiveAbsences", psuActiveAbsences);
     run("serialQuietRefresh", serialQuietRefresh); run("serialRefreshTraceAndFaults", serialRefreshTraceAndFaults);
     run("serialAlertCadence", serialAlertCadence); run("serialAlertStorm", serialAlertStorm);
@@ -1898,7 +1926,7 @@ int main() {
     run("availabilityProtocol", availabilityProtocol); run("startupPowerPolicy", startupPowerPolicy); run("acceptedAbsences", acceptedAbsences); run("availabilityDecisionsAndStorage", availabilityDecisionsAndStorage); run("availabilityRefreshAndSoak", availabilityRefreshAndSoak); run("availabilityInterfaces", availabilityInterfaces);
     run("controlLifecycle", controlLifecycle); run("zeroHoldEdges", zeroHoldEdges); run("fanControl", fanControl); run("manualFanControl", manualFanControl); run("externalFanControl", externalFanControl); run("controlPresentation", controlPresentation); run("boundedCanTransmit", boundedCanTransmit); run("cooperativeCan", cooperativeCan); run("protocolAndConfiguration", protocolAndConfiguration); run("discoveryAndTelemetry", discoveryAndTelemetry); run("orderedApplyAndDraftIsolation", orderedApplyAndDraftIsolation);
     run("missingMembersAndConfirmations", missingMembersAndConfirmations); run("acknowledgementsAndFailures", acknowledgementsAndFailures); run("restorationAndDeployment", restorationAndDeployment); run("schedulerAndBounds", schedulerAndBounds); run("receiveScheduling", receiveScheduling);
-    run("eepromAndMigration", eepromAndMigration); run("serialFanControl", serialFanControl); run("serialWorkflow", serialWorkflow); run("serialLifecycleAndParity", serialLifecycleAndParity); run("cooperativeSerialAndStorage", cooperativeSerialAndStorage); run("boundedFrameChanges", boundedFrameChanges);
+    run("eepromAndMigration", eepromAndMigration); run("serialFanControl", serialFanControl); run("serialWorkflow", serialWorkflow); run("serialLifecycleAndParity", serialLifecycleAndParity); run("serialStorageDispatch", serialStorageDispatch); run("cooperativeSerialAndStorage", cooperativeSerialAndStorage); run("boundedFrameChanges", boundedFrameChanges);
     run("uiWorkflows", uiWorkflows); run("uiPartialAndFailures", uiPartialAndFailures); run("presentationAndSessions", presentationAndSessions); run("uiLayouts", uiLayouts); run("voltageHeader", voltageHeader);
     if (failures) { std::cerr << failures << " suites failed\n"; return 1; }
     std::cout << "PASS: " << checks << " checks (identity/group/recovery/serial and every EEPROM write interruption)\n";

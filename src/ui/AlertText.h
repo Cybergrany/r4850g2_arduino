@@ -9,6 +9,7 @@ inline const __FlashStringHelper* alertCause(AlertCode c, CommandState fault = C
   if (readinessRecoveryAlert(c, fault))
     return F("Output readiness restart limit reached");
   switch (c) {
+    case AlertCode::SyncTimeout: return F("Current sync taking too long");
     case AlertCode::None: return F("No active condition");
     case AlertCode::Missing: return F("Members unavailable");
     case AlertCode::Excluded: return F("Reduced capacity accepted");
@@ -41,6 +42,7 @@ inline const __FlashStringHelper* alertAction(AlertCode c, CommandState fault = 
   switch (c) {
     case AlertCode::TemperatureWarning: case AlertCode::TemperatureError:
       return F("All active limits reduced; maximum cooling.");
+    case AlertCode::SyncTimeout: return F("Holding priming limits; waiting for measured current.");
     case AlertCode::ThermalStop: return F("Charger OFF; cooling continues.");
     case AlertCode::TemperatureSensor: return F("Affected PSU stopped. Other shares unchanged.");
     case AlertCode::ActiveLost: case AlertCode::Identity: return F("Output unknown. Identity/startup gates protect writes.");
@@ -58,6 +60,7 @@ inline const __FlashStringHelper* alertRecovery(AlertCode c, CommandState fault 
   switch (c) {
     case AlertCode::TemperatureWarning: case AlertCode::TemperatureError:
       return F("Inspect cooling. All monitored temperatures must cool.");
+    case AlertCode::SyncTimeout: return F("Wait, stop, or Config: Bypass current sync (session only).");
     case AlertCode::ThermalStop: return F("Cool, verify persistence, then explicit Resume/ON.");
     case AlertCode::TemperatureSensor: return F("Restore both readings, then Retry sensors.");
     case AlertCode::Missing: case AlertCode::Returned: case AlertCode::Unstable:

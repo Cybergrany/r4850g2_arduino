@@ -44,6 +44,8 @@ class MemoryManager {
   uint16_t completedToken() const { return completedToken_; }
   StorageResult completedResult() const { return completedResult_; }
   bool persistedProtection(ThermalStop stop) const;
+  // Row-oriented diagnostics avoid retaining a full legacy configuration.
+  bool legacyUnit(uint8_t slot, LegacyUnit& unit, uint8_t& count) const;
   bool legacy(LegacyConfiguration& config) const;
   StorageResult profileInfo(uint8_t slot, ProfileInfo& info) const;
   StorageResult profileTarget(uint8_t slot, uint8_t entry, uint32_t generation, ProfileTarget& target) const;

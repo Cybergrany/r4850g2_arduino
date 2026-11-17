@@ -82,7 +82,9 @@ void psuActiveProtection() {
   CHECK(!failed.c.begin() && !failed.c.psuActive(failed.now));
   Rig rejected; rejected.c.setCurrent(0, 1000); rejected.rejectRegister = protocol::OnlineCurrent;
   CHECK(rejected.c.queue(rejected.c.preview(Operation::All, -1, rejected.now), false, rejected.now) == Result::Ok);
-  rejected.finish(); CHECK(rejected.c.report().failed && !rejected.c.psuActive(rejected.now));
+  rejected.step(5000); CHECK(rejected.c.report().failed && rejected.current[0]==0 && rejected.c.effectiveCurrent(1)<=100);
+  CHECK(rejected.c.syncStatus(rejected.now).phase==SyncPhase::Blocked);
+  CHECK(!rejected.c.psuActive(rejected.now)); // Unprimed peers remain at zero.
 }
 void psuActiveAbsences() {
   auto config = authorized(); config.acceptedAbsent = 2;

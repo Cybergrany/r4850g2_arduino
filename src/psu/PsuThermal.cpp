@@ -17,10 +17,14 @@ uint16_t PsuController::limitedCurrent(uint8_t i, uint16_t authorized) const {
   return uint32_t(authorized) * percent / 100;
 }
 uint16_t PsuController::effectiveCurrent(uint8_t i) const {
-  return i < count() && (config_.operating.currentMask & (1U << i)) ? limitedCurrent(i, config_.operating.current[i]) : 0;
+  if (i >= count() || !(config_.operating.currentMask & (1U << i))) return 0;
+  const uint16_t target=commandCurrent(i,config_.operating.current[i]);
+  const uint16_t raw=protocol::encodeCurrent(target,config_.units[i].ratedCurrent), held=syncHoldRaw(i,raw);
+  return held==raw ? target : uint32_t(held)*config_.units[i].ratedCurrent/1024;
 }
 uint16_t PsuController::effectiveRaw(uint8_t i) const {
-  return protocol::encodeCurrent(effectiveCurrent(i), config_.units[i].ratedCurrent);
+  if (i >= count() || !(config_.operating.currentMask & (1U << i))) return 0;
+  return syncHoldRaw(i,protocol::encodeCurrent(commandCurrent(i,config_.operating.current[i]),config_.units[i].ratedCurrent));
 }
 bool PsuController::acknowledgedCurrent(uint8_t i, uint16_t& raw) const {
   if (i >= count() || !(acknowledgedMask_ & (1U << i))) return false;

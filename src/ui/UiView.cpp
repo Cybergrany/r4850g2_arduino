@@ -130,7 +130,8 @@ __attribute__((noinline)) void header(UiFrame& f, const UiModel& m, const PsuCon
   }
   char b[8]; PSU_SNPRINTF(b, sizeof(b), "%u/%u", unsigned(pages ? page : 0), unsigned(pages)); f.text(0, 23, 3, b, Muted);
 }
-void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+// A group summary must not retain its temporary values while profile records are decoded.
+__attribute__((noinline)) void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   if (!m.groupCount()) {
     line(f, 3, UI_TEXT("No groups configured"), Warning);
     f.wrap(5, 10, UI_TEXT("Use serial to discover, bind identities and create groups. See the getting-started guide."));
@@ -166,11 +167,15 @@ void groups(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
     if (errors) { PSU_SNPRINTF(b, sizeof(b), "ERR %u/%u", unsigned(errors), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Error); }
     else if (group.members & c.excluded()) { PSU_SNPRINTF(b, sizeof(b), "ACT %u/%u", unsigned(population(group.members & c.participants())), unsigned(population(group.members))); f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, b, bg | Warning); }
     else f.text(PSU_ENABLE_TOUCH ? 10 : 12, col, 8, active ? UI_TEXT("APPLYING") : verifying ? UI_TEXT("VERIFY") : UI_TEXT("OK"), bg | (active || verifying ? Warning : Good));
-    if (pendingSettings(c, group.members)) f.text(PSU_ENABLE_TOUCH ? 11 : 13, col, 8, UI_TEXT("PENDING"), bg | Warning);
+    const auto sync = c.syncStatus(now); const UnitMask syncing = sync.members & group.members;
+    if (syncing) {
+      PSU_SNPRINTF(b,sizeof(b),"SYNC %u/%u",unsigned(population(sync.qualified & syncing) % 10),unsigned(population(syncing) % 10));
+      f.text(PSU_ENABLE_TOUCH ? 11 : 13,col,8,b,bg | Warning);
+    } else if (pendingSettings(c, group.members)) f.text(PSU_ENABLE_TOUCH ? 11 : 13, col, 8, UI_TEXT("PENDING"), bg | Warning);
   }
   line(f, 14, UI_TEXT("Click:PSUs  Hold:Config"), Muted);
 }
-void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+__attribute__((noinline)) void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   f.text(1, 0, 26, c.configuration().groups[m.group()].name, Accent);
   const uint8_t count = population(c.configuration().groups[m.group()].members);
   const uint8_t first = m.unitRank() / ui::unitsPerPage * ui::unitsPerPage;
@@ -200,7 +205,7 @@ void units(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   }
   line(f, 14, UI_TEXT("Click:Info  Hold:Groups"), Muted);
 }
-void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+__attribute__((noinline)) void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const uint8_t slot = m.unit(); const auto* d = c.deviceForSlot(slot, now);
   if (!d) for (uint8_t i = 0; i < Discovery::capacity; ++i) {
     const auto& old = c.discovery().device(i);
@@ -252,7 +257,7 @@ void detail(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) 
   } else line(f, 11, UI_TEXT("No verified live address"), Warning);
   if (!m.recovering()) line(f, 14, UI_TEXT("Click:List  Hold:Groups"), Muted);
 }
-void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
+__attribute__((noinline)) void config(UiFrame& f, const UiModel& m, const PsuController& c, uint32_t now) {
   const auto scope = m.scope(); const UnitMask mask = m.settingsMembers();
   if (scope.kind == ScopeKind::Group) f.text(1,0,8,c.configuration().groups[scope.index].name,Accent);
   else if (scope.kind == ScopeKind::Unit) { char b[12]; PSU_SNPRINTF(b,sizeof(b),"PSU %u",unsigned(scope.index+1)); f.text(1,0,8,b,Accent); }
@@ -299,7 +304,7 @@ void result(UiFrame& f, const UiModel& m) {
     case UiNotice::Changed: title = UI_TEXT("CONFIG / DEVICES CHANGED"); body = UI_TEXT("Edit or confirmation expired. Review current settings before retrying."); break;
     case UiNotice::Busy: title = UI_TEXT("OPERATION BUSY"); body = UI_TEXT("Wait for the current apply or EEPROM save to finish."); break;
     case UiNotice::Blocked: title = UI_TEXT("APPLY BLOCKED"); body = {reinterpret_cast<const char*>(issueName(m.blocker()))}; break;
-    case UiNotice::Applying: title = UI_TEXT("APPLYING - WAIT FOR ACKS"); body = UI_TEXT("You may return to groups. The operation continues in the background."); break;
+    case UiNotice::Applying: title = m.syncing() ? UI_TEXT("CURRENT SYNC") : UI_TEXT("APPLYING - WAIT FOR ACKS"); body = m.syncing() ? UI_TEXT("Holding priming limits. Waiting for measured current. Config opens status, stop and session bypass.") : UI_TEXT("You may return to groups. The operation continues in the background."); break;
     case UiNotice::Saving: title = m.profileOperation() && m.savingProfile() ? UI_TEXT("SAVING NAMED PROFILE") : UI_TEXT("SAVING EEPROM"); body = UI_TEXT("CAN and serial remain active. Wait for verified completion."); break;
     case UiNotice::Saved: title = UI_TEXT("APPLIED AND SAVED"); body = UI_TEXT("PSUs acknowledged settings. Output measurements show actual delivery."); color = Good; break;
     case UiNotice::PartialSaved: title = UI_TEXT("PARTIAL APPLY SAVED"); body = UI_TEXT("Only responding units accepted their configured limits. Missing outputs remain unknown."); break;
@@ -341,6 +346,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   else if (s.activity == Activity::Stopping) text = UI_TEXT("STOPPING...");
   else if (s.activity == Activity::StopUnconfirmed) text = UI_TEXT("STOP UNCONFIRMED");
   else if (s.activity == Activity::Starting) text = UI_TEXT("STARTING / VERIFYING PSU");
+  else if (s.activity == Activity::Synchronizing) text = UI_TEXT("CURRENT SYNC");
   else if (s.activity == Activity::StartBlocked) text = s.blocker == Issue::NoProfile ? UI_TEXT("START: NEEDS PROFILE") : UI_TEXT("START BLOCKED");
   if (s.blocker == Issue::NoParticipants) text = UI_TEXT("NO ACTIVE PSUS");
   if (s.blocker == Issue::Cutoff) text = c.startupStatus().permit == PermitState::Fault ? UI_TEXT("AC CUTOFF: RETRY NEEDED") : UI_TEXT("AC INHIBITED: STARTUP");
@@ -357,7 +363,8 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
     if (m.page() == UiPage::Detail) f.text(1, 0, 26, UI_TEXT("PSU INFO"), Accent);
     const FlashText tag = fault ? UI_TEXT("CONTROL FAULT") : !e.enabled() ?
         (e.source() == EnableSource::Switch ? UI_TEXT("OFF: SWITCH") : e.source() == EnableSource::Serial ? UI_TEXT("OFF: SERIAL") : UI_TEXT("OFF: BOOT")) :
-        s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : s.activity == Activity::Starting ? UI_TEXT("STARTING") : UI_TEXT("RECONCILING");
+        s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : s.activity == Activity::Starting ? UI_TEXT("STARTING") :
+        s.activity == Activity::Synchronizing ? UI_TEXT("SYNC") : UI_TEXT("RECONCILING");
     f.text(1, 9, 14, tag, color);
   }
 }

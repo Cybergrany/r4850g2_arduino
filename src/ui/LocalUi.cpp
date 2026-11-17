@@ -76,7 +76,11 @@ void LocalUi::tick(uint32_t now) {
   (void)wheelAction;
 #if PSU_ENABLE_TOUCH
   if (oldPage!=model_.page()) { gesture_.cancel(); pageReady_=false; }
-  if (!wheelAction) touchTick(now);
+  if (!wheelAction) {
+    // Release touch/calibration sampling temporaries before a setting/save action.
+    const auto selected = touchTick(now);
+    if (selected.kind != ActionKind::None) model_.action(selected, now);
+  }
 #endif
   request(now);
 #if PSU_ENABLE_ENCODER || PSU_ENABLE_TOUCH
@@ -123,10 +127,10 @@ void LocalUi::paint() {
   if (!display_.pending()) pageReady_=true;
 }
 #if PSU_ENABLE_TOUCH
-void LocalUi::touchTick(uint32_t now) {
-  if (!touchInput_.read(raw_,now)) return;
+UiAction LocalUi::touchTick(uint32_t now) {
+  if (!touchInput_.read(raw_,now)) return {};
   if (raw_.down) lastInput_=now;
-  if (dimmed_ && raw_.down) { display_.dim(false); dimmed_=false; gesture_.cancel(); return; }
+  if (dimmed_ && raw_.down) { display_.dim(false); dimmed_=false; gesture_.cancel(); return {}; }
   TouchPoint p; const bool mapped=calibration_.map(raw_.x,raw_.y,p);
   if (raw_.down && mapped) point_=p;
   if (raw_.down && calibration_.valid && !mapped && rejected_!=UINT16_MAX) ++rejected_;
@@ -151,7 +155,7 @@ void LocalUi::touchTick(uint32_t now) {
         if (uint32_t(now-lastDraw_)>=ui::refreshMs) dirty_=true;
       }
     }
-    if (wizard_.state()==CalibrationState::Collecting || calibrationStore_.saving()) { gesture_.cancel(); return; }
+    if (wizard_.state()==CalibrationState::Collecting || calibrationStore_.saving()) { gesture_.cancel(); return {}; }
   }
   UiAction action;
   if (raw_.down && mapped) UiLayout::hit(model_,p.x,p.y,action);
@@ -159,13 +163,14 @@ void LocalUi::touchTick(uint32_t now) {
   if (result) {
     const auto selected = UiLayout::buttonAction(model_, result-1);
     if (selected.kind != ActionKind::None) {
-      if (model_.page()!=UiPage::TouchDebug || selected.kind==ActionKind::Back) model_.action(selected,now);
       // Paging changes targets even if the page enum stays the same. Keep
       // held +/- repeats live, but gate navigation until its new content lands.
       if (selected.kind!=ActionKind::Adjust) { pageReady_=false; gesture_.cancel(); }
       dirty_=true;
+      if (model_.page()!=UiPage::TouchDebug || selected.kind==ActionKind::Back) return selected;
     }
   }
+  return {};
 }
 void LocalUi::drawTouch() {
   if (model_.page()==UiPage::Calibration) {

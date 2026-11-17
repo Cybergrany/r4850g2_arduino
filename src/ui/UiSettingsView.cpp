@@ -11,12 +11,14 @@ uint8_t UiLayout::settingsButtons(const UiModel& m, UiButton* b) {
   };
   switch (m.page()) {
     case UiPage::ConfigMenu:
-      add(2,0,26,2,ActionKind::SettingsChoice,UI_TEXT("Configure global"),0);
-      add(4,0,26,2,ActionKind::SettingsChoice,UI_TEXT("Configure group"),1);
-      add(6,0,26,2,ActionKind::SettingsChoice,UI_TEXT("Configure individual"),2);
-      add(8,0,26,2,ActionKind::SettingsChoice,UI_TEXT("Load Config"),3);
-      add(10,0,26,2,ActionKind::SettingsChoice,UI_TEXT("Save Config"),4);
-      add(12,0,26,3,ActionKind::Back,UI_TEXT("Back")); break;
+      for (uint8_t i=0; i<m.listRows(); ++i) {
+        const uint8_t item = m.listPage()*4+i;
+        add(2+i*2,0,26,2,ActionKind::SettingsChoice,
+            item==0 ? UI_TEXT("Configure global") : item==1 ? UI_TEXT("Configure group") :
+            item==2 ? UI_TEXT("Configure individual") : item==3 ? UI_TEXT("Load Config") :
+            item==4 ? UI_TEXT("Save Config") : UI_TEXT("Bypass current sync"),item);
+      }
+      add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev")); add(12,9,8,3,ActionKind::Back,UI_TEXT("Back")); add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
     case UiPage::GroupSelect: case UiPage::UnitSelect: case UiPage::ProfileList:
       for (uint8_t i = 0; i < m.listRows(); ++i) add(2+i*2,0,26,2,ActionKind::SettingsItem,UI_TEXT(""),m.listPage()*4+i);
       add(12,0,8,3,ActionKind::Previous,UI_TEXT("Prev")); add(12,9,8,3,ActionKind::Back,UI_TEXT("Back")); add(12,18,8,3,ActionKind::Next,UI_TEXT("Next")); break;
@@ -43,7 +45,10 @@ void UiLayout::settingsExtras(UiFrame& f, const UiModel& m, const PsuController&
   f.text(1,0,26,m.page()==UiPage::ConfigMenu ? UI_TEXT("CONFIGURATION") : m.page()==UiPage::GroupSelect ? UI_TEXT("CHOOSE GROUP") :
     m.page()==UiPage::UnitSelect ? UI_TEXT("CHOOSE PSU") : m.page()==UiPage::ScopeConfirm ? UI_TEXT("CONFIRM GLOBAL CHANGE") :
     m.page()==UiPage::ProfileName ? UI_TEXT("PROFILE NAME") : m.savingProfile() ? UI_TEXT("SAVE CONFIG PROFILE") : UI_TEXT("LOAD CONFIG PROFILE"),Accent);
-  if (m.page()==UiPage::GroupSelect || m.page()==UiPage::UnitSelect || m.page()==UiPage::ProfileList) {
+  if (m.page()==UiPage::ConfigMenu) {
+    PSU_SNPRINTF(text,sizeof(text),"Page %u/2",unsigned(m.listPage()+1)); f.text(10,0,26,text,Muted);
+    if (m.listPage()) f.text(7,0,26,c.syncBypassed() ? UI_TEXT("[X] Bypass: session only") : UI_TEXT("[ ] Bypass: OFF"),Warning);
+  } else if (m.page()==UiPage::GroupSelect || m.page()==UiPage::UnitSelect || m.page()==UiPage::ProfileList) {
     for (uint8_t i=0;i<m.listRows();++i) {
       const uint8_t rank=m.listPage()*4+i,row=2+i*2;
       f.outline(row,0,26,2,m.settingsSelection()==i);

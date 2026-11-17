@@ -591,3 +591,13 @@ The application services it before/after the cooperative EEPROM step and checks
 completion tokens. A stale clear-save cannot enable after a newer OFF/hot event.
 The AVR build disables SRAM switch-table conversion to preserve static headroom;
 explanatory text remains in flash.
+
+## Current synchronization
+
+`PsuCurrentSync.cpp` owns a bounded participant mask, qualification mask and one
+stability timestamp per PSU. The existing job carries frozen targets/epochs and
+explicit voltage, prime, wait and final-current phases. `commandCurrent()`
+centralizes thermal/priming limits for job writes, protective corrections and
+periodic refreshes. Presentation consumes `CurrentSyncStatus`; `SyncReview`
+revalidates the session bypass without changing persistent configuration.
+See [CURRENT_SYNC.md](CURRENT_SYNC.md) for operator behavior and bench checks.

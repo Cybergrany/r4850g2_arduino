@@ -165,7 +165,7 @@ void thermalQueuedChanges() {
   CHECK(starting.c.unitControl(0).outputDemand==OutputDemand::Starting);
   const auto since=starting.c.unitControl(0).outputSince;
   starting.temperature=70; starting.step(1500);
-  CHECK(starting.c.unitControl(0).outputSince==since && starting.c.effectiveCurrent(0)==600);
+  CHECK(starting.c.unitControl(0).outputSince==since && starting.c.effectiveCurrent(0)==100);
   starting.step(10000); CHECK(starting.current[0]<=600 && starting.c.unitControl(0).fault==CommandState::Idle);
 }
 void alertUiAndSerial() {

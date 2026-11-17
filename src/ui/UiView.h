@@ -4,6 +4,6 @@
 namespace psu {
 class UiView {
  public:
-  static void compose(UiFrame& frame, const UiModel& model, const PsuController& controller, uint32_t now);
+  __attribute__((noinline)) static void compose(UiFrame& frame, const UiModel& model, const PsuController& controller, uint32_t now);
 };
 }
