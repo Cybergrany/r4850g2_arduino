@@ -185,6 +185,11 @@ void SerialConsole::execute() {
   if ((!PSU_STRCMP(args[0], "config") || !PSU_STRCMP(args[0], "groups")) && argc == 1) { startView(View::Config); return; }
   if (!PSU_STRCMP(args[0], "legacy") && argc == 1) { startView(View::Legacy); return; }
   if (!PSU_STRCMP(args[0], "discover") && argc == 1) { controller_.scan(); io_.println(F("Read-only address sweep started; diag bus shows discoveries")); return; }
+  if (argc == 2 && !PSU_STRCMP(args[0], "diag") && !PSU_STRCMP(args[1], "fault")) {
+    if (!controller_.firstControlFault().slot) io_.println(F("No control fault captured since boot."));
+    else { faultNoticeRow_ = 6; startView(View::Fault); }
+    return;
+  }
   if (!PSU_STRCMP(args[0], "alerts")) {
     if (argc == 1) { startView(View::Alerts); return; }
     if ((argc == 2 || argc == 3) && !PSU_STRCMP(args[1], "every")) {
@@ -590,6 +595,11 @@ void SerialConsole::tick(uint32_t now) {
     wasBusy_ = false; return;
   }
   wasBusy_ = controller_.busy();
+  // One immutable first-fault snapshot, six bounded rows. No CAN writes or
+  // changes to an in-progress diagnostic view, and no repeated storm output.
+  if (controller_.firstControlFault().slot && faultNoticeRow_ < 6 && !length_ && !discard_) {
+    beginOutput(); faultRow(faultNoticeRow_++); prompt(); return;
+  }
   // Command/operation/save results come first. Summaries precede background
   // status and trace traffic, so flapping control states cannot starve them.
   if (broadcastAlerts(now)) return;
@@ -716,6 +726,7 @@ void SerialConsole::printControl(uint32_t now) {
   }
 }
 void SerialConsole::outputRow(uint32_t now) {
+  if (view_ == View::Fault) { faultRow(row_++); if (row_ == 6) view_ = View::None; return; }
   if (view_ == View::Profiles || view_ == View::Profile) { profileRow(); return; }
   const auto& c = controller_.configuration();
   if (view_ == View::Alerts) {
@@ -852,7 +863,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 5: io_.println(F("describe ADDRESS: inspect E-Label/model; raw on/off: brief traffic trace. Verify crystal/wiring/termination for TX errors.")); break;
       case 6: io_.println(F("preview all/NAME: inspect apply blockers; no setting writes. Unknown units require explicit bind/adopt.")); break;
       case 7: io_.println(F("diag bus: loop-max-us, rx-high-water, hw-overflow-events, trace-drops. Counters reset on reboot.")); break;
-      case 8: io_.println(F("diag control: enable/source/switch, zero-current hold, awake state and fan acceptance/failures. reconcile retries latched faults.")); break;
+      case 8: io_.println(F("diag control: enable/zero/fan states; diag fault: retained first-fault evidence; reconcile: explicit retry.")); break;
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
       case 11: io_.println(F("diag ui [reset]: clocks, render/SPI/phase maxima, scene/change last/max times. Includes interrupts; compare diag bus under load.")); break;

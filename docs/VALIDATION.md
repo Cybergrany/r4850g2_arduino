@@ -4,6 +4,65 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Battery-connected startup fault evidence (2026-11-17)
+
+The controller retains its first control fault until reset, and prints the
+snapshot once through bounded serial output. `diag fault` retrieves it again.
+The cause distinguishes a breached zero hold, missing zero/wake observations,
+command failure and readiness failure. Current and voltage retain independent
+sample ages, freshness and original zero/standby/awake proof. The last accepted
+current limit, identity, address, phase, enable source and pre-fault AC permit
+are captured before the stop fallback changes them. Later AC loss, retries,
+binding changes and console reconnects cannot replace the first evidence.
+
+No protection threshold, startup sequence, EEPROM format or CAN command changes.
+The snapshot plus its serial cursor costs **64 bytes of static RAM**. It does
+not allocate one record per PSU or retain a traffic history.
+
+Validation passed:
+
+- Ordinary host **3,392,785 checks**, profiled host **3,521,281**, including
+  nine-unit cutoff, accepted zero followed by nonzero current, the 0.5 A
+  boundary, signed readings, ongoing current at startup, stale observations, rejected/missing ACKs,
+  wake/readiness timeouts and timer rollover. The simulator tests diagnostic
+  behavior, not how a physical battery-connected PSU measures current.
+- Original evidence survives later faults, reconfiguration, retry and serial
+  reconnect. Slow/blocked serial output prints the record once without buffer
+  overruns; manual retrieval issues no CAN commands. Unauthorized targets are
+  labelled `none`, independently of the last acknowledged limit.
+- Touch/simulator **1,353 checks**, AVR-format check; all **21 Mega profiles**
+  build. Physical memory limits, three UI-debug isolation checks and observer
+  isolation pass.
+
+| Build | Flash bytes | Static RAM | Static free | Reachable direct runtime peak | Estimated remaining margin |
+|---|---:|---:|---:|---:|---:|
+| mega2560_wheel_alerts | 208888 | 7258 | 934 | 606 | **256** |
+| mega2560_wheel_profile | 215826 | 7401 | 791 | 608 | **111** |
+
+The direct runtime peaks are unchanged. The estimate includes Mega return
+addresses and the existing 60-byte interrupt / 12-byte argument allowances.
+Production loads pass caller-owned scratch; their unreachable null-scratch
+validation-copy path is excluded, while ordinary-save validation remains.
+Indirect/library calls and physical stack high-water remain bench checks.
+
+Bench capture:
+
+1. Build/flash `mega2560_wheel_alerts`. Start logging before reset, leave
+   ENABLE_IN OFF and reproduce the ordinary AC startup with the battery
+   connection unchanged. No special profiling build is needed.
+2. Use `watch off` and `raw off` to keep the log focused. Capture startup
+   through the fault or stable zero hold. The fault snapshot prints once
+   automatically; voltage alone cannot distinguish battery voltage from PSU
+   regulation, and a zero-limit ACK proves acceptance rather than zero flow.
+3. Before resetting or retrying, run `diag fault`, `diag control`, `diag bus`
+   and `diag memory`, one at a time. Retain the startup and complete snapshot.
+   It reports sample ages at the fault, not at retrieval. A reset loses it.
+4. Compare the triggering current, its freshness, accepted limit and original
+   proof flags. A fresh sample above the threshold still needs physical
+   investigation to distinguish real flow, transients or measurement offset.
+
+Software validation does not establish physical PSU response or timing.
+
 ## ENABLE_IN boot precedence (2026-11-14)
 
 A physical ENABLE_IN now starts the controller OFF and uses the first debounced

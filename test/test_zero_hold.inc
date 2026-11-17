@@ -115,6 +115,7 @@ void zeroHoldFailures() {
     Rig r(zeroHoldConfiguration(),true,false);
     r.notReadyAtZero = true; r.reportAc = unknownAlarm; r.statusFlags = uint32_t(1)<<7;
     r.finish(); CHECK(r.c.unitControl(0).fault == CommandState::ObservationTimeout);
+    CHECK(r.c.firstControlFault().cause == FaultCause::WakeObservation);
     for (const auto& f:r.can.writes()) if(f.data[1] == protocol::OnlineCurrent) CHECK(!protocol::readBigEndian(f.data+4));
   }
   // A nonzero command can be accepted without the power stage becoming ready.
@@ -123,6 +124,7 @@ void zeroHoldFailures() {
   failed.reportAc = true; failed.notReadyUntil = failed.now + 100000;
   failed.step(45000);
   CHECK(failed.c.unitControl(0).fault == CommandState::ReadinessTimeout);
+  CHECK(failed.c.firstControlFault().cause == FaultCause::OutputReadiness);
   CHECK(failed.c.unitControl(0).standbyConfirmed);
   UiRig faultUi(failed); faultUi.click(); faultUi.click(); UiFrame faultFrame;
   UiView::compose(faultFrame,faultUi.ui,failed.c,failed.now);

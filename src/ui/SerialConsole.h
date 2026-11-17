@@ -18,10 +18,12 @@ class SerialConsole {
   void tick(uint32_t now);
   using Extension = bool (*)(void*, uint8_t, char**, Print&, uint32_t);
   void extension(Extension callback, void* context) { extension_ = callback; extensionContext_ = context; }
-  void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; alertNotice_ = previousAlertSources_ = 0; controller_.observeFrames(onFrame,this); }
+  void controllerReset() { resetSession(); wasBusy_ = waitingSave_ = false; alertNotice_ = previousAlertSources_ = 0; faultNoticeRow_ = 0; controller_.observeFrames(onFrame,this); }
 
  private:
-  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile };
+  enum class View : uint8_t { None, Help, DiagnosticHelp, Config, Bus, Units, Telemetry, Plan, Legacy, Control, Startup, AvailabilityPlan, Alerts, Thermal, AlertBroadcast, Profiles, Profile, Fault };
+  __attribute__((noinline)) void faultRow(uint8_t row);
+  uint8_t faultNoticeRow_ = 0;
   __attribute__((noinline)) void storageCommand(const char* command);
   __attribute__((noinline)) void restoreCommand(bool defaults);
   // LTO must not keep mutually exclusive preview/profile temporaries alive

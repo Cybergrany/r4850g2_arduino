@@ -12,7 +12,7 @@ sources = [
     'src/psu/PsuAvailability.cpp', 'src/io/ChargeAllowOutput.cpp', 'src/io/PsuActiveOutput.cpp',
     'src/ui/UiAvailability.cpp',
     'src/config/ChargerConfig.cpp', 'src/protocol/HuaweiProtocol.cpp',
-    'src/psu/PsuControl.cpp', 'src/psu/Psu.cpp', 'src/psu/Discovery.cpp', 'src/psu/PsuController.cpp', 'src/psu/PsuProfiles.cpp',
+    'src/psu/PsuControl.cpp', 'src/psu/PsuFault.cpp', 'src/ui/SerialFault.cpp', 'src/psu/Psu.cpp', 'src/psu/Discovery.cpp', 'src/psu/PsuController.cpp', 'src/psu/PsuProfiles.cpp',
     'src/psu/Presentation.cpp', 'src/storage/MemoryManager.cpp',
     'src/ui/UiModel.cpp', 'src/ui/UiSettings.cpp', 'src/ui/UiFrame.cpp', 'src/ui/UiView.cpp',
     'src/ui/UiLayout.cpp', 'src/ui/UiSettingsView.cpp', 'src/ui/Touch.cpp', 'src/ui/LocalUi.cpp',

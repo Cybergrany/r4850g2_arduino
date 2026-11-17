@@ -2,6 +2,7 @@
 #include "Discovery.h"
 #include "PsuControl.h"
 #include "Availability.h"
+#include "ControlFault.h"
 #include "Alerts.h"
 #include "Thermal.h"
 #include "../diagnostics/BusProfile.h"
@@ -92,6 +93,7 @@ class PsuController {
   void sampleEnableInput(bool active, uint32_t now);
   const EnableControl& enableControl() const { return enable_; }
   const UnitControl& unitControl(uint8_t slot) const { return control_[slot]; }
+  const ControlFault& firstControlFault() const { return firstFault_; }
   ReadinessStatus readinessStatus(uint8_t slot, uint32_t now) const;
   // Immediate, volatile fan test; targets are configured slots, not CAN addresses.
   // AUTO is only allowed while OFF and confirmed awake at zero current.
@@ -266,7 +268,11 @@ class PsuController {
   bool controlReceive(const CanFrame& frame, uint32_t now);
   void controlCommand(uint8_t slot, uint8_t reg, uint16_t value, uint32_t now);
   void controlComplete(CommandState state, uint32_t now);
-  void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now);
+  void latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now,
+      FaultCause cause = FaultCause::Command);
+  __attribute__((noinline)) void captureControlFault(uint8_t slot, CommandState state, uint8_t reg,
+      uint32_t now, FaultCause cause);
+  ControlFault firstFault_;
   void controlPhase(uint8_t slot, ControlPhase phase, uint32_t now);
   void updateFan(uint8_t slot, uint32_t now);
   void clearFanOverride(uint8_t slot);

@@ -14,8 +14,8 @@ sources = [
     "src/psu/PsuAvailability.cpp", "src/psu/Alerts.cpp", "src/psu/PsuThermal.cpp", "src/psu/PsuAlerts.cpp",
     "src/ui/UiAvailability.cpp",
     "src/config/ChargerConfig.cpp", "src/protocol/HuaweiProtocol.cpp",
-    "src/psu/PsuControl.cpp", "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp", "src/psu/PsuProfiles.cpp",
-    "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "src/ui/SerialProfiles.cpp", "src/ui/SerialAlerts.cpp", "src/psu/Presentation.cpp",
+    "src/psu/PsuControl.cpp", "src/psu/PsuFault.cpp", "src/psu/Psu.cpp", "src/psu/Discovery.cpp", "src/psu/PsuController.cpp", "src/psu/PsuProfiles.cpp",
+    "src/storage/MemoryManager.cpp", "src/ui/SerialConsole.cpp", "src/ui/SerialFault.cpp", "src/ui/SerialProfiles.cpp", "src/ui/SerialAlerts.cpp", "src/psu/Presentation.cpp",
     "src/ui/Touch.cpp", "src/ui/UiLayout.cpp", "src/ui/UiSettingsView.cpp", "src/ui/UiModel.cpp", "src/ui/UiSettings.cpp", "src/ui/UiFrame.cpp", "src/ui/UiView.cpp", "test/test_main.cpp",
 ]
 with tempfile.TemporaryDirectory(prefix="r4850-tests-") as directory:

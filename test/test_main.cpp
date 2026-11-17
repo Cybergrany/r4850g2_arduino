@@ -1869,6 +1869,7 @@ void uiLayouts() {
 #include "test_participation.inc"
 #include "test_bus_profile.inc"
 #include "test_enable_boot.inc"
+#include "test_control_fault.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1880,6 +1881,7 @@ int main() {
     run("busProfiling", busProfiling);
 #endif
     run("enableBootPolicy", enableBootPolicy); run("enableBootReboot", enableBootReboot); run("enableBootProtection", enableBootProtection);
+    run("controlFaultEvidence", controlFaultEvidence); run("controlFaultSerial", controlFaultSerial);
     run("participationPersistence", participationPersistence); run("participationAtomicity", participationAtomicity); run("participationProfiles", participationProfiles); run("participationUiViewport", participationUiViewport); run("participationChangedGroup", participationChangedGroup);
     run("scopedMigrationAndProtection", scopedMigrationAndProtection); run("profileEnabledGuards", profileEnabledGuards);
     run("scopedSettings", scopedSettings); run("perPsuCurrentScopes", perPsuCurrentScopes); run("profileRecords", profileRecords); run("profileLoadAndParticipation", profileLoadAndParticipation); run("profileUiAndSerial", profileUiAndSerial);

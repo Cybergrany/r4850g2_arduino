@@ -415,7 +415,7 @@ void PsuController::advance(bool success) {
   if (!success) {
     report_.failed |= bit; restoreBlocked_ |= bit;
     if (thermalLevel_ != ThermalLevel::Normal && report_.units[jobSlot_].reg == protocol::OnlineCurrent)
-      latchControlFault(jobSlot_, report_.units[jobSlot_].state, protocol::OnlineCurrent, now_);
+      latchControlFault(jobSlot_, report_.units[jobSlot_].state, protocol::OnlineCurrent, now_, FaultCause::ProtectiveApply);
   }
   else if (secondPhase_ || job_.operation == Operation::GroupCurrent || job_.operation == Operation::Voltage ||
       (job_.operation == Operation::Restore && !(config_.operating.currentMask & bit))) report_.succeeded |= bit;

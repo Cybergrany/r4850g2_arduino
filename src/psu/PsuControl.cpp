@@ -254,7 +254,8 @@ void PsuController::controlPhase(uint8_t slot, ControlPhase phase, uint32_t now)
 #endif
   auto& u = control_[slot]; u.phase = phase; u.since = now;
 }
-void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now) {
+void PsuController::latchControlFault(uint8_t slot, CommandState state, uint8_t reg, uint32_t now, FaultCause cause) {
+  captureControlFault(slot, state, reg, now, cause);
 #if PSU_BUS_PROFILE
   busProfile_.note(BusEvent::Fault,slot+1,0,(uint16_t(state)<<8)|reg,now);
 #endif
@@ -454,6 +455,10 @@ void PsuController::controlCommand(uint8_t slot, uint8_t reg, uint16_t value, ui
 }
 void PsuController::controlComplete(CommandState state, uint32_t now) {
   const bool refresh = controlRefresh_, correction = controlCorrection_; controlRefresh_ = controlCorrection_ = false;
+  if (state != CommandState::Success && control_[controlSlot_].fault == CommandState::Idle &&
+      (state == CommandState::Rejected || state == CommandState::Changed || control_[controlSlot_].attempts >= control::commandAttempts) &&
+      !(refresh && !correction && state == CommandState::IdentityTimeout))
+    captureControlFault(controlSlot_, state, controlRegister_, now, FaultCause::Command);
   controlActive_ = controlWaiting_ = controlVerified_ = false;
   auto& u = control_[controlSlot_]; u.last = state;
   if (state != CommandState::Success) {
@@ -545,7 +550,7 @@ void PsuController::controlTick(uint32_t now) {
     if (u.phase == ControlPhase::Online && u.outputDemand == OutputDemand::Starting) {
       const auto readiness = readinessStatus(i, now);
       if (!readiness.remainingMs)
-        latchControlFault(i, CommandState::ReadinessTimeout, protocol::OnlineCurrent, now);
+        latchControlFault(i, CommandState::ReadinessTimeout, protocol::OnlineCurrent, now, FaultCause::OutputReadiness);
       else if (readiness.frames >= control::outputReadyFrames && readiness.stableMs >= control::outputReadyStableMs)
         u.outputDemand = OutputDemand::Active;
       else if (!readiness.frames) u.readyFrames = 0;
@@ -556,12 +561,14 @@ void PsuController::controlTick(uint32_t now) {
           after(d->telemetry.updated[protocol::OutputCurrent], u.outputSince, now) &&
           fabsf(amps) <= control::stoppedCurrentAmps) u.zeroConfirmed = true;
       else if (uint32_t(now - u.outputSince) >= observation)
-        latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now);
+        latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now, FaultCause::ZeroObservation);
     }
     // Check a violated zero hold before readiness recovery can clear its proof.
     float heldCurrent;
     if ((u.zeroConfirmed || u.standbyConfirmed) && u.fault == CommandState::Idle && freshMetric(i, protocol::OutputCurrent, heldCurrent, now) &&
         isfinite(heldCurrent) && fabsf(heldCurrent) > control::stoppedCurrentAmps) {
+      // Capture the proof and triggering reading before invalidating the hold.
+      captureControlFault(i, CommandState::Changed, protocol::OnlineCurrent, now, FaultCause::ZeroHoldCurrent);
       u.zeroConfirmed = u.standbyConfirmed = false;
       latchControlFault(i, CommandState::Changed, protocol::OnlineCurrent, now);
     }
@@ -573,7 +580,7 @@ void PsuController::controlTick(uint32_t now) {
       // changes passed readinessAcceptable above and do not consume a retry.
       if (readinessLosses_[i] <= control::outputReadyRecoveries) ++readinessLosses_[i];
       if (readinessLosses_[i] > control::outputReadyRecoveries) {
-        latchControlFault(i, CommandState::ReadinessRecoveryLimit, protocol::OnlineCurrent, now);
+        latchControlFault(i, CommandState::ReadinessRecoveryLimit, protocol::OnlineCurrent, now, FaultCause::ReadinessRecovery);
         updateFan(i, now); continue;
       }
       UnitControl next;
@@ -614,7 +621,9 @@ void PsuController::controlTick(uint32_t now) {
       } else if ((d->acState(now, staleMs()) != AcState::Absent || (observed && !zero)) &&
           uint32_t(now - u.since) >= (u.phase == ControlPhase::Starting && (!observed || zero) ? startupObservation : observation)) {
         if (u.fault != CommandState::Idle) controlPhase(i, ControlPhase::Fault, now);
-        else latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now);
+        else latchControlFault(i, CommandState::ObservationTimeout, protocol::OnlineCurrent, now,
+            u.phase == ControlPhase::Starting ? FaultCause::WakeObservation :
+            u.phase == ControlPhase::VerifyStandby ? FaultCause::StandbyObservation : FaultCause::ZeroObservation);
       }
     }
     if (u.phase == ControlPhase::Held && (config_.operating.voltageMask & (1U << i)) && !(voltageSynced_ & (1U << i)))

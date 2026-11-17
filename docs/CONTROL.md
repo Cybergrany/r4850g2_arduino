@@ -211,6 +211,12 @@ shows `STOP UNCONFIRMED`. A fan/voltage failure while zero is already confirmed
 can remain held in a latched fault without a standby request. Cooling policy
 continues; a fan-command failure itself suppresses further fan writes until retry.
 
+Before retrying, capture **`diag fault`** and `diag control`. The first control
+fault's measured current/voltage, sample ages, last accepted current limit and
+pre-fault proof/permit states remain available until controller reset, even if
+later AC loss or retries change the live diagnostics. See
+[the fault snapshot guide](SERIAL.md#live-enable-and-reconciliation).
+
 Fix the cause, then use **`reconcile`** to cancel an apply and retry from zero
 current while retaining the authorized profile and fan hysteresis. ON alone
 cannot clear a latched fault or wake a unit from the emergency fallback. A genuine

@@ -160,6 +160,36 @@ startup and storage replies identify simulation explicitly.
 
 ## Live enable and reconciliation
 
+`diag fault` shows the **first control fault since Mega boot**. A six-row
+`FAULT SNAPSHOT` is also printed once automatically, through the normal bounded
+serial output. `hello`, Ctrl-X, alert acknowledgement, `load`, binding changes
+and `reconcile` do not erase the record or rearm the automatic print. Only a
+controller reset starts a new capture. Later faults cannot replace it.
+
+The record retains the original slot, stable identity and CAN address, fault
+uptime, exact cause, command result/register, phase and phase age. It includes
+the decoded output current/voltage with independent ages and freshness **at the
+fault**, the last acknowledged current limit, original zero/standby/awake proof,
+output demand, raw status/broadcast readiness and their ages, enable/source,
+AC-permit state before the fault, and a pending control command if present.
+`pending-control=REG:RAW` uses decimal register/value; `waiting-ACK=0` means
+that command was still being verified, not known to have been transmitted.
+`route=0` means the identity route was valid. Unknown/invalid readings are
+labelled rather than presented as zero; address 0 means no resolved route.
+
+For battery-connected outputs, voltage can be supplied by the battery. It does
+not prove the PSU is regulating or supplying current. `ack-limit-A=0` proves
+only command acceptance. A `cause=current-exceeded-zero-hold` snapshot identifies
+the actual sample crossing the existing absolute 0.5 A limit, with the proof
+flags captured before they were cleared. Observation-timeout causes instead
+identify failure to establish the required fresh evidence. A positive reading
+does not by itself establish that a PSU ignored the command; sensor offset,
+transients and physical current flow still need bench investigation.
+
+This is diagnostic only: no extra CAN requests, EEPROM writes, delays or changes
+to current thresholds, fault fallback, or AC cutoff policy. Explicit AC stops
+and other non-control alerts may occur without a control-fault snapshot.
+
 `autoresume on/off` now changes the live enable request as well as its savable
 boot preference. OFF interrupts active apply work; console reset/reconnect does
 not. `diag control` reports the winning serial/switch/boot source, physical
