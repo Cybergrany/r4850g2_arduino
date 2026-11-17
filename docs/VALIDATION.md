@@ -4,6 +4,25 @@ Target: Arduino Mega 2560, nine-slot capacity. Validation covers the scoped PSU
 backend, ILI9341/touch UI, serial, cooperative scheduling, persistence and isolated
 simulation. No firmware upload or physical validation of this patch was performed.
 
+## Non-modal receive-loss warnings (2026-11-17)
+
+Receive loss remains visible in the alert badge/list, serial and WARNING output,
+without an automatic popup, even after clearance or rearming. Manual details,
+diagnostics and acknowledgement remain available. Other warning/error popups,
+charging policy, CAN scheduling, recent-event expiry and EEPROM are unchanged.
+
+Host **3,392,798 checks**, touch/simulator **1,354**, real wheel **19,652**,
+alert GPIO/pin checks and AVR formats pass. Tests cover active/cleared/rearmed
+losses, retained edits, manual details, subsequent warning/error notifications,
+serial visibility, receive pressure and interruption of background saves.
+All **21 Mega profiles** build; memory and debug/observer isolation checks pass.
+Static RAM is unchanged: wheel-alerts **7258 bytes / 934 free**, wheel-profile
+**7401 bytes / 791 free**. Flash is **208894 / 215830 bytes**, respectively.
+
+On the next hardware soak, a receive-loss event should update diagnostics and
+the badge without replacing the current page. Open Alerts to inspect/acknowledge
+it. The patch does not fix or conceal dropped frames; retain `diag bus` evidence.
+
 ## Battery-connected startup fault evidence (2026-11-17)
 
 The controller retains its first control fault until reset, and prints the

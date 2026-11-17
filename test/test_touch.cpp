@@ -226,8 +226,11 @@ void receiveBacklogUi() {
   CHECK(hasText(display.shown,"PSU") && display.compositions>compositions);
   compositions=display.compositions;
   r.controller.alerts().event(AlertManager::Receive,AlertCode::ReceiveLoss,clockNow);
-  tick(); CHECK(display.compositions>compositions && hasText(display.shown,"Acknowledge"));
+  tick(); CHECK(display.compositions==compositions && !hasText(display.shown,"Acknowledge"));
   CHECK(!r.controller.alerts().at(AlertManager::Receive).acknowledged);
+  // Other diagnostic warnings still interrupt even when receive loss is active.
+  r.controller.alerts().event(AlertManager::Discovery,AlertCode::DiscoveryFull,clockNow);
+  tick(); CHECK(display.compositions>compositions && hasText(display.shown,"Acknowledge"));
   // Once pressure clears, a due periodic update is neither lost nor postponed
   // by repeatedly resetting its last-draw timestamp during deferred ticks.
   r.can.replenish=false; r.can.queued=0;
@@ -374,7 +377,7 @@ void scopedProfileTouchWorkflow() {
   snapshot("touch-profile-save-review",display.shown);
   tap(230,216); CHECK(r.memory.saving());
   // An alert arriving during the named save cannot replace its completion owner.
-  r.controller.alerts().set(AlertManager::Receive,AlertCode::ReceiveLoss,clockNow);
+  r.controller.alerts().set(AlertManager::Discovery,AlertCode::DiscoveryFull,clockNow);
   ui.tick(clockNow); tick(8); CHECK(hasText(display.shown,"Acknowledge"));
   tap(75,216); tick(200);
   CHECK(hasText(display.shown,"PROFILE SAVED"));

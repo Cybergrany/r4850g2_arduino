@@ -33,6 +33,14 @@ Command entry and requested reports defer automatic summaries. Backpressure
 delays them without queuing missed periods or producing catch-up bursts. See
 [serial broadcast behaviour](SERIAL.md#periodic-warningerror-broadcasts).
 
+**Recent CAN receive loss is non-modal.** It remains in the alert badge/list,
+serial reports and WARNING output, but never opens an automatic popup, including
+after clearance or recurrence. Open it from Alerts to inspect bus diagnostics
+or acknowledge it. Its active state still clears after 30 seconds without a
+new loss; an unacknowledged cleared incident remains in the list. Successful
+PSU replies do not erase a recorded packet loss. Other warnings and errors,
+including PSU dropouts and command failures, retain their automatic popups.
+
 `diag thermal` shows temperature coverage, highest reading, percentage, hot-time
 countdown, retained hot contributors, sensor latches, explicit absence waivers,
 shutdown/persistence state and logical WARNING/ERROR outputs. Thermal levels are

@@ -20,6 +20,22 @@ void alertEpisodes() {
   a.event(AlertManager::Receive,AlertCode::ReceiveLoss,UINT32_MAX-100);
   a.expire(AlertManager::Receive,100); CHECK(a.at(AlertManager::Receive).active);
   a.expire(AlertManager::Receive,30000); CHECK(!a.at(AlertManager::Receive).active);
+
+  // Receive loss never claims a modal or consumes the ordinary popup interval.
+  AlertManager quiet;
+  quiet.event(AlertManager::Receive,AlertCode::ReceiveLoss,100);
+  const auto lossId=quiet.at(AlertManager::Receive).id;
+  CHECK(!quiet.notification(100) && quiet.warning() && quiet.visible(AlertManager::Receive));
+  CHECK(!quiet.at(AlertManager::Receive).acknowledged);
+  quiet.expire(AlertManager::Receive,30100);
+  CHECK(!quiet.warning() && quiet.visible(AlertManager::Receive) && !quiet.notification(30100));
+  quiet.expire(AlertManager::Receive,90100);
+  quiet.event(AlertManager::Receive,AlertCode::ReceiveLoss,90101);
+  CHECK(quiet.at(AlertManager::Receive).id!=lossId && !quiet.notification(90101));
+  quiet.set(0,AlertCode::Missing,90102);
+  CHECK(quiet.notification(90102)==quiet.at(0).id);
+  quiet.set(1,AlertCode::Command,90103);
+  CHECK(quiet.notification(90103)==quiet.at(1).id && quiet.error());
 }
 void thermalLimitsAndSensors() {
   Rig r; CHECK(r.c.setCurrent(0,2000)==Result::Ok); r.apply();
@@ -173,6 +189,19 @@ void alertUiAndSerial() {
   Rig r; FakeEeprom bytes; MemoryManager memory(bytes); UiModel model(r.c,memory); model.tick(r.now);
   model.action({ActionKind::Configure},r.now); model.input({0,true,false},r.now); model.input({1,false,false},r.now);
   const auto edit=model.editValue(); const auto underlying=model.page();
+  r.c.alerts().acknowledgeAll(); r.can.receiveLoss=true; r.step();
+  model.notifications(r.now);
+  CHECK(model.page()==underlying && model.editValue()==edit);
+  CHECK(r.c.alerts().at(AlertManager::Receive).active && !r.c.alerts().at(AlertManager::Receive).acknowledged);
+  // Operators can still deliberately open the warning and its diagnostics.
+  model.action({ActionKind::Alerts},++r.now);
+  uint8_t lossRank=0; while(lossRank<AlertManager::Count && model.alertSourceAt(lossRank)!=AlertManager::Receive) ++lossRank;
+  CHECK(lossRank<AlertManager::Count);
+  model.action({ActionKind::OpenAlert,lossRank},++r.now);
+  CHECK(model.page()==UiPage::AlertDetail && model.displayedAlert().code==AlertCode::ReceiveLoss);
+  CHECK(model.recoveryLink().kind==RecoveryKind::Bus);
+  model.action({ActionKind::Acknowledge},++r.now);
+  CHECK(model.page()==underlying && model.editValue()==edit && r.c.alerts().warning());
   r.c.alerts().acknowledgeAll(); r.c.alerts().set(AlertManager::Thermal,AlertCode::TemperatureWarning,r.now);
   model.notifications(++r.now); CHECK(model.page()==UiPage::AlertDetail && model.editValue()==edit);
   const auto displayed=model.alertDisplayId(); model.action({ActionKind::Acknowledge},r.now); CHECK(model.alertDisplayId()==displayed);

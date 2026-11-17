@@ -55,6 +55,10 @@ uint16_t AlertManager::notification(uint32_t now) {
   int8_t best = -1;
   for (uint8_t i = 0; i < Count; ++i) {
     const auto& c = cells_[i];
+    // Packet loss is a diagnostic warning, not an operator decision. Keep its
+    // state/list/GPIO/serial visibility without interrupting the current screen,
+    // including when an old unacknowledged incident has already cleared.
+    if (c.code == AlertCode::ReceiveLoss) continue;
     if (!(c.flags & Unacked) || (c.flags & Announced)) continue;
     if (popped_ && uint32_t(now - lastPopup_) < alerts::popupMs && !(c.flags & Urgent)) continue;
     if (best < 0 || alertLevel(c.code) > alertLevel(cells_[best].code) || (c.flags & Urgent)) best = i;
