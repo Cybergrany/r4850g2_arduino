@@ -20,6 +20,12 @@ refreshes retain that exact encoded limit without cumulative rounding.
 The accepted recipients, identities and targets are frozen for the operation.
 Conflicting edits/applies report Busy; they are not queued for later execution.
 OFF, diagnostics and explicit controller reconciliation remain available.
+Before a new positive-current release, the controller also waits for the
+[startup/address qualification gates](STARTUP.md#boot-and-reconciliation).
+Announced address negotiation cancels a healthy sync before obsolete routes can
+be misclassified as failed members. Rediscovery and zero reconciliation precede
+a fresh attempt, with the latest enable request and existing guards respected.
+An already failed sync stays blocked; negotiation does not retry a real fault.
 Targets in RAM and EEPROM remain the operator's requested/authorized values;
 priming is a temporary command limit. Diagnostics distinguish authorized,
 effective and acknowledged current.

@@ -52,6 +52,7 @@ FlashText shortIssue(Issue issue) {
     case Issue::NoAc: return UI_TEXT("WAIT AC");
     case Issue::ApprovalRequired: return UI_TEXT("APPROVAL NEEDED");
     case Issue::Settling: return UI_TEXT("SETTLING");
+    case Issue::AddressSettling: return UI_TEXT("ADDRESS SETTLING");
     case Issue::Cutoff: return UI_TEXT("AC INHIBITED / FAULT");
     case Issue::NoParticipants: return UI_TEXT("NO ACTIVE UNITS");
     case Issue::ReadinessPending: return UI_TEXT("VERIFYING OUTPUT READY");
@@ -349,6 +350,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
   else if (s.activity == Activity::Synchronizing) text = UI_TEXT("CURRENT SYNC");
   else if (s.activity == Activity::StartBlocked) text = s.blocker == Issue::NoProfile ? UI_TEXT("START: NEEDS PROFILE") : UI_TEXT("START BLOCKED");
   if (s.blocker == Issue::NoParticipants) text = UI_TEXT("NO ACTIVE PSUS");
+  if (s.blocker == Issue::AddressSettling) text = UI_TEXT("ADDRESS SETTLING");
   if (s.blocker == Issue::Cutoff) text = c.startupStatus().permit == PermitState::Fault ? UI_TEXT("AC CUTOFF: RETRY NEEDED") : UI_TEXT("AC INHIBITED: STARTUP");
   if (full) {
     f.text(1, 0, PSU_UI_DEBUG ? 22 : 26, text, color);
@@ -363,6 +365,7 @@ void controlBanner(UiFrame& f, const UiModel& m, const PsuController& c, uint32_
     if (m.page() == UiPage::Detail) f.text(1, 0, 26, UI_TEXT("PSU INFO"), Accent);
     const FlashText tag = fault ? UI_TEXT("CONTROL FAULT") : !e.enabled() ?
         (e.source() == EnableSource::Switch ? UI_TEXT("OFF: SWITCH") : e.source() == EnableSource::Serial ? UI_TEXT("OFF: SERIAL") : UI_TEXT("OFF: BOOT")) :
+        s.blocker == Issue::AddressSettling ? UI_TEXT("ADDR SETTLING") :
         s.blocker == Issue::NoProfile ? UI_TEXT("NEEDS PROFILE") : s.activity == Activity::Starting ? UI_TEXT("STARTING") :
         s.activity == Activity::Synchronizing ? UI_TEXT("SYNC") : UI_TEXT("RECONCILING");
     f.text(1, 9, 14, tag, color);

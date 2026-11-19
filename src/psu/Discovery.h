@@ -18,12 +18,18 @@ class Discovery {
   bool takeOverflow() { const bool event = overflowEvent_; overflowEvent_ = false; return event; }
   uint32_t ignored() const { return ignored_; }
   bool negotiating() const { return negotiating_; }
-  void invalidate();
+  bool settled() const { return settled_; }
+  uint32_t settleRemaining(uint32_t now) const;
+  uint32_t quietRemaining(uint32_t now) const;
+  void invalidate(uint32_t now);
  private:
+  uint32_t changed(uint32_t now);
   Psu devices_[capacity] = {};
   uint32_t revision_ = 1, ignored_ = 0;
   uint16_t overflow_ = 0;
-  uint32_t lastNegotiation_ = 0;
+  // While negotiating: last announcement. Afterwards: last route change.
+  uint32_t changedAt_ = 0;
+  bool settled_ = false;
   bool negotiating_ = false;
   bool overflowEvent_ = false;
 };

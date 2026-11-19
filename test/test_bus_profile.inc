@@ -47,7 +47,7 @@ void busProfiling() {
   CHECK(r.c.busProfile().duringNegotiation==negBefore);
   CHECK(r.c.busProfile().negotiationRx==1);
   CHECK(t.io.output.find("negotiation addr=1")!=std::string::npos);
-  r.step(control::availabilitySettleMs+1000);
+  r.step(control::negotiationQuietMs+1000);
   CHECK(!r.c.discovery().negotiating() && r.c.busProfile().infoTx>infoBefore);
   // Event storms and slow UARTs do not suppress command processing once the
   // ordinary bounded reply buffer drains. Alert/status output still gets turns.

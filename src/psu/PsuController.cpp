@@ -24,7 +24,7 @@ Result PsuController::configure(const Configuration& c, bool resume, bool useSwi
   if (config_.thermalStop != ThermalStop::None) for (uint8_t i=0; i<c.count; ++i)
     if (identified(c.units[i].identity)) hotContributors_ |= 1U << i;
   cancelSync();
-  ++revision_; voltageSynced_ = restoreBlocked_ = 0;
+  ++revision_; voltageSynced_ = restoreBlocked_ = negotiationFaults_ = 0;
   excluded_ = c.acceptedAbsent | c.disabled; sessionAccepted_ = sessionRequired_ = 0;
   ++availabilityRevision_;
   memset(groupChanged_, 0, sizeof(groupChanged_)); memset(groupEpisode_, 0, sizeof(groupEpisode_));
@@ -462,6 +462,9 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
     const auto* old = discovery_.address(protocol::address(f.id));
     syncGap = !old || uint32_t(now - old->telemetry.updated[protocol::OutputCurrent]) > staleMs();
   }
+  if (protocol::isNegotiation(f) && !discovery_.negotiating())
+    for (uint8_t i = 0; i < count(); ++i)
+      if (control_[i].fault != CommandState::Idle) negotiationFaults_ |= 1U << i;
   discovery_.receive(f, now);
   int8_t slot = -1;
   for (uint8_t i = 0; i < count(); ++i) {
@@ -509,9 +512,18 @@ void PsuController::receive(const CanFrame& f, uint32_t now) {
   if (observer_) observer_(context_, slot, f, refreshAccepted);
 }
 void PsuController::runJob(uint32_t now) {
+  // Announced renegotiation invalidates every temporary address. Retire an
+  // otherwise healthy job BEFORE checkSync can mistake that for device failure.
+  // A previously failed sync remains blocked; negotiation is not fault retry.
+  if (discovery_.negotiating()) {
+    if (sync_.members && (sync_.blocked || report_.failed)) {
+      sync_.blocked = true; waiting_ = verifying_ = identityChecked_ = false;
+      jobPhase(JobPhase::SyncWait);
+    } else cancelJob(true);
+    return;
+  }
   checkSync(now);
   if (sync_.members && sync_.blocked) { waiting_ = verifying_ = identityChecked_ = false; jobPhase(JobPhase::SyncWait); return; }
-  if (discovery_.negotiating()) { cancelJob(); return; }
   if (!powerAvailable() && job_.operation != Operation::Offline) { cancelJob(); return; }
   if (job_.operation != Operation::Offline && !enable_.enabled()) { cancelJob(); return; }
   if (job_.operation != Operation::Offline && !controlsOnline(job_.recipients)) {
@@ -532,9 +544,10 @@ void PsuController::runJob(uint32_t now) {
       }
     }
     const auto state = controlStatus(now);
-    if (state.blocker != Issue::None) { cancelJob(); return; }
+    if (state.blocker != Issue::None && state.blocker != Issue::AddressSettling) { cancelJob(); return; }
     return; // Reconciliation owns zero/fan/voltage/wake; user jobs cannot bypass it.
   }
+  if (!jobStarted_ && job_.operation != Operation::Offline && !startQualified()) return;
   if (waiting_) {
     const auto* d = deviceForSlot(jobSlot_, now);
     if (!d || d->epoch != jobEpochs_[jobSlot_] || issue(jobSlot_, now) != Issue::None) {

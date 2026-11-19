@@ -319,7 +319,8 @@ struct Rig {
         pending |= c.unitControl(i).outputDemand==OutputDemand::Starting;
         pending |= phase!=ControlPhase::Held && phase!=ControlPhase::Online && phase!=ControlPhase::Fault && phase!=ControlPhase::AwaitIdentity;
         pending |= phase==ControlPhase::Fault && !c.unitControl(i).fanFailed && c.unitControl(i).fanAcknowledged!=c.unitControl(i).fanRequested && c.deviceForSlot(i,now);
-        pending |= c.enableControl().enabled() && phase==ControlPhase::Held && c.configuration().operating.voltageMask==membersMask(c.count()) && c.controlStatus(now).blocker==Issue::None;
+        pending |= c.enableControl().enabled() && phase==ControlPhase::Held && c.configuration().operating.voltageMask==membersMask(c.count()) &&
+            (c.controlStatus(now).blocker==Issue::None || c.controlStatus(now).blocker==Issue::AddressSettling);
       }
       if(!pending) break;
       step();
@@ -1897,6 +1898,7 @@ void uiLayouts() {
 #include "test_enable_boot.inc"
 #include "test_control_fault.inc"
 #include "test_current_sync.inc"
+#include "test_startup_negotiation.inc"
 }
 int main() {
   unsigned failures = 0;
@@ -1904,6 +1906,8 @@ int main() {
     try { test(); } catch (const std::exception& e) { ++failures; std::cerr << name << ": " << e.what() << '\n'; }
   };
   try {
+    run("addressQualification", addressQualification); run("startupQualification", startupQualification);
+    run("negotiationDuringSync", negotiationDuringSync); run("negotiationFaultGuards", negotiationFaultGuards);
 #if PSU_BUS_PROFILE
     run("busProfiling", busProfiling);
 #endif

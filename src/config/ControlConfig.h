@@ -45,6 +45,10 @@ constexpr int8_t chargeAllowPin = PSU_CHG_ALLOW_PIN;
 constexpr int8_t activePin = PSU_ACTIVE_PIN;
 constexpr uint32_t inhibitMs = 2000, availabilityGraceMs = 15000;
 constexpr uint32_t startupReadyMs = 15000, availabilitySettleMs = 3000;
+// Positive-current release waits after AC permit, and after the last route
+// change. Negotiation silence is measured from the LAST 30 01/30 02 frame.
+constexpr uint32_t startupQualificationMs = 15000;
+constexpr uint32_t addressStableMs = 5000, negotiationQuietMs = 5000;
 // Qualify actual output-ready broadcasts after the nonzero-current ACK. A
 // candidate must span this duration; rereading one frame never advances it.
 constexpr uint16_t outputReadyStableMs = 2000, outputReadyMaxGapMs = 1000;

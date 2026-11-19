@@ -42,7 +42,7 @@ RecoveryLink UiModel::recoveryLink() const {
         case Issue::ControlFault: case Issue::NotReady: case Issue::Reconciling: code = AlertCode::Control; break;
         case Issue::Conflict: case Issue::IdentityPending: code = AlertCode::Identity; break;
         case Issue::Cutoff: code = AlertCode::Cutoff; break;
-        case Issue::Busy: return link;
+        case Issue::Busy: case Issue::AddressSettling: return link;
         default: link.kind = RecoveryKind::Help; break;
       }
       for (uint8_t i = 0; i < c_.count(); ++i)

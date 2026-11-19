@@ -756,7 +756,8 @@ void SerialConsole::printControl(uint32_t now) {
   io_.print(activityName(s.activity)); io_.print(F(" enable=")); io_.print(e.enabled() ? F("ON") : F("OFF"));
   io_.print(F(" source=")); io_.println(enableSourceName(e.source()));
   if (s.blocker != Issue::None) {
-    io_.print(F("PSU ")); io_.print(s.slot + 1); io_.print(F(": ")); io_.println(issueName(s.blocker));
+    if (s.blocker != Issue::AddressSettling) { io_.print(F("PSU ")); io_.print(s.slot + 1); io_.print(F(": ")); }
+    io_.println(issueName(s.blocker));
   }
 }
 void SerialConsole::outputRow(uint32_t now) {
@@ -809,8 +810,13 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(F(" effective-waivers=")); printMembers(controller_.acceptedAbsences());
       io_.print(F(" excluded=")); printMembers(controller_.excluded());
       io_.print(F(" participants=")); printMembers(controller_.participants()); io_.println();
-    } else if (row_ < 3 + c.count) {
-      const uint8_t i = row_ - 3; const auto* d = controller_.deviceForSlot(i, now);
+    } else if (row_ == 3) {
+      io_.print(F("start-qualified=")); io_.print(controller_.startQualified());
+      io_.print(F(" startup-left-ms=")); io_.print(controller_.startupRemaining(now));
+      io_.print(F(" quiet-left-ms=")); io_.print(controller_.discovery().quietRemaining(now));
+      io_.print(F(" address-stable-left-ms=")); io_.println(controller_.discovery().settleRemaining(now));
+    } else if (row_ < 4 + c.count) {
+      const uint8_t i = row_ - 4; const auto* d = controller_.deviceForSlot(i, now);
       io_.print(F("PSU ")); io_.print(i + 1); io_.print(F(" id=")); printIdentity(c.units[i].identity);
       io_.print(' '); io_.println(availabilityName(controller_.availabilityReason(i, now)));
       io_.print(F("  AC=")); const auto ac = d ? d->acState(now, controller_.staleMs()) : AcState::Unknown;
@@ -819,8 +825,8 @@ void SerialConsole::outputRow(uint32_t now) {
       io_.print(participation.excluded ? F(" EXCLUDED") : F(" INCLUDED/REQUIRED"));
       io_.print(participation.legacy ? F(" legacy permission; review intent") : participation.remembered ? F(" remembered") : F(" session only"));
       io_.print(F(" authorized-A=")); io_.println(c.operating.current[i] / 100.0f);
-    } else if (row_ < 3 + c.count + limits::maxGroups) {
-      const uint8_t g = row_ - 3 - c.count; const auto& group = c.groups[g];
+    } else if (row_ < 4 + c.count + limits::maxGroups) {
+      const uint8_t g = row_ - 4 - c.count; const auto& group = c.groups[g];
       if (group.members) {
         io_.print(group.name); io_.print(' ');
         io_.print(controller_.availabilitySettled(g, now) ? F("SETTLED") : controller_.availabilityUnstable(g, now) ? F("UNSTABLE") : F("SETTLING"));

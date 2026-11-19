@@ -2,24 +2,32 @@
 #include "../config/Deployment.h"
 namespace psu {
 void PsuController::configureStartup(bool installed, bool trusted, uint32_t now) {
-  startupConfigured_ = true; now_ = acReleased_ = now;
+  startupConfigured_ = true; startupQualified_ = false; now_ = acReleased_ = now;
   startup_.permit = installed ? PermitState::Inhibited : PermitState::NotFitted;
   startup_.configurationReady = trusted; startup_.commissioning = false; startup_.since = now;
 #if PSU_BUS_PROFILE
   busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),trusted,now);
 #endif
 }
+uint32_t PsuController::startupRemaining(uint32_t now) const {
+  if (!startupConfigured_ || startupQualified_) return 0;
+  if (!powerAvailable()) return control::startupQualificationMs;
+  const uint32_t elapsed = uint32_t(now - acReleased_);
+  return elapsed < control::startupQualificationMs ? control::startupQualificationMs - elapsed : 0;
+}
 void PsuController::startupTick(uint32_t now) {
   if (startup_.permit == PermitState::Allowed && config_.deploymentId != deployment::id) hardStop();
   if (startup_.permit == PermitState::Inhibited && ready_ && startup_.configurationReady &&
       config_.deploymentId == deployment::id && uint32_t(now - startup_.since) >= control::inhibitMs) {
     startup_.permit = PermitState::Allowed; startup_.since = acReleased_ = now;
+    startupQualified_ = false;
 #if PSU_BUS_PROFILE
     busProfile_.note(BusEvent::Permit,0,uint8_t(startup_.permit),0,now);
 #endif
     // AC return is a new hardware state even when DC keeps CAN alive.
     reconcile(false);
   }
+  if (startupConfigured_ && powerAvailable() && !startupRemaining(now)) startupQualified_ = true;
 }
 Result PsuController::hardStop() {
   if (startup_.permit == PermitState::NotFitted) return Result::Invalid;

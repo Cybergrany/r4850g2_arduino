@@ -38,7 +38,9 @@ The sequence runs cooperatively; CAN, serial, UI and cooling keep being serviced
 2. With a trusted deployment and initialized CAN, allow AC after at least
    **2 seconds**. Builds without the output report `not fitted`.
 3. Discover bound identities. Observed `30 01` / `30 02` negotiation suspends
-   addressed writes and invalidates old routes. After negotiation settles,
+   addressed writes and invalidates old routes. Remain silent for **5 seconds
+   after the last announcement**; each further announcement restarts that wait.
+   After negotiation settles,
    require two fresh INFO samples again. Addresses are neither assigned nor
    persisted by the Mega.
 4. For each reachable bound unit, send zero online current, require its ACK
@@ -56,7 +58,68 @@ The sequence runs cooperatively; CAN, serial, UI and cooling keep being serviced
    cannot release charging. Zero-limit readiness changes do not repeat wake.
 7. Restore the authorized profile only with enable ON and all required
    participants reconciled. Drafts are not charging authorization. Excluded
-   identities remain held at zero even when ready.
+   identities remain held at zero even when ready. Positive current also waits
+   until **15 seconds after AC permit HIGH**, and **5 seconds with no discovery
+   route changes**. Without a fitted cutoff, the first interval starts when the
+   controller initializes startup policy. Reconciliation at zero can run during
+   these intervals, outside negotiation silence. A late new route, conflict,
+   loss or AC transition restarts address stability; ordinary fresh telemetry
+   and matching INFO refreshes do not. These gates do not replace identity,
+   temperature, readiness or participation checks.
+
+`ADDRESS SETTLING` is an informational UI/serial state while an enabled start
+waits for qualification. `diag startup` reports `start-qualified`,
+`startup-left-ms`, `quiet-left-ms` and `address-stable-left-ms`. The last two
+intervals are sequential during negotiation: rediscovery and its stable-route
+window follow the silence. These values are not a promise that missing or
+faulted PSUs will become ready. Actual missing/conflicting identities and faults
+remain visible in per-unit diagnostics.
+
+If announced negotiation interrupts an apply or current sync, the controller
+retires the obsolete operation as incomplete, discards its address/ACK proofs,
+then reconciles the same bound identities at zero on their new addresses. It
+can restore the **authorized** profile after qualification if enable is still
+ON and existing guards permit it. No absence is accepted, binding changed, or
+staged edit authorized by this recovery. A previously blocked sync or a fault
+already present when negotiation began remains protected; negotiation is not an
+explicit retry. Unannounced identity changes retain the existing fault checks.
+
+The timings are named in `src/config/ControlConfig.h`:
+`startupQualificationMs`, `negotiationQuietMs` and `addressStableMs`. They are
+independent of the existing group-availability settling interval and the output
+readiness deadline. The [documented address negotiation sequence](https://github.com/patagonaa/huawei-r48xx#software-address-negotiation)
+includes repeated announcements and subsequent silence; a longer wait is
+additional margin, not proof that an unobserved hardware transition completed.
+
+### Bench check: simultaneous AC and controller startup
+
+Use the normal saved bindings/profile and known participation settings. With
+ENABLE_IN held ON, cold-start the controller and PSUs together. Capture:
+
+```text
+watch off
+raw off
+diag startup
+diag sync
+diag control
+diag bus
+diag memory
+```
+
+Expect permit HIGH after its existing two-second inhibit, then startup/address
+qualification before any positive-current request. `ADDRESS SETTLING` may be
+interleaved with ordinary reconciliation status. Expect zero/wake reconciliation,
+qualification and the existing low-current sync before full targets.
+Repeat with delayed AC and, where practical, a later-powering configured unit.
+A new negotiation should show silence, fresh routes and zero reconciliation,
+without manufacturing a blocked `DEVICE CHANGED` sync. Turning ENABLE_IN OFF
+during any wait must prevent automatic current release. Capture `diag fault`
+and `diag sync` if it remains blocked: rejected commands, unexpected held
+current, missing participants and genuine readiness failures still need review.
+
+Host tests cover two/nine-unit starts, announcements during jobs, stale ACKs,
+timer rollover and fault/OFF priority. They do not establish physical startup
+timing, contactor operation, electrical isolation or PSU response.
 
 On a nonzero current write, require a matching ACK followed by at least three
 ready broadcasts spanning two seconds, with no inter-frame gap over one second,

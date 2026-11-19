@@ -349,15 +349,19 @@ not interpret arbitrary nonzero status words as faults. A fan that stays fast
 with fresh AUTO status may be following internal PSU logic or a retained PSU
 setting; the observer itself does not change that setting.
 
-The current controller invalidates routes during observed negotiation and gates
-setting writes, but its background/manual read scheduling is not universally
-silent. The profiler deliberately preserves that behaviour and counts attempted
-TX during the known negotiation interval. It also leaves the existing startup
-AC release and enable policy unchanged. `negotiation-end` means the existing
-three-second **observed-message quiet interval** elapsed; it is not independent
+The controller invalidates routes during observed negotiation and suspends
+scheduled setting writes and background/manual read requests. Profiling uses
+the same control policy and counts attempted TX during that interval; it does
+not introduce a separate startup policy. `negotiation-end` now means the
+five-second **observed-message quiet interval** elapsed since the last
+announcement (older logs used three seconds); it is not independent
 proof that every PSU finished booting. A dropped negotiation frame can prevent
 the controller from knowing negotiation is active. Compare ISR negotiation
 counts, processed counts and RX losses before drawing conclusions.
+The production controller also requires the [startup/address qualification](STARTUP.md#boot-and-reconciliation)
+before positive-current release: 15 seconds after AC permit and 5 seconds of
+stable discovery routes. The listen-only observer does not run those control
+gates, but uses the same quiet interval for its diagnostic end marker.
 
 Protocol context: [software address negotiation](https://github.com/patagonaa/huawei-r48xx#software-address-negotiation)
 and [register setting](https://github.com/patagonaa/huawei-r48xx#80-register-set-request).

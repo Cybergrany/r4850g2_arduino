@@ -47,11 +47,13 @@ Issue PsuController::routingIssue(uint8_t i, uint32_t now) const {
   if (!d.fresh(now, staleMs())) return Issue::Missing;
   return validSources_ & (1U << i) ? Issue::None : Issue::IdentityPending;
 }
-void PsuController::cancelJob() {
+void PsuController::cancelJob(bool superseded) {
   if (busy()) {
-    const UnitMask unfinished = report_.recipients & UnitMask(~report_.succeeded);
-    report_.failed |= unfinished;
-    for (uint8_t i = 0; i < count(); ++i) if (unfinished & (1U << i)) report_.units[i].state = CommandState::Changed;
+    const UnitMask unfinished = report_.recipients & UnitMask(~(report_.succeeded | report_.failed));
+    if (superseded) report_.skipped |= unfinished;
+    else report_.failed |= unfinished;
+    for (uint8_t i = 0; i < count(); ++i) if (unfinished & (1U << i))
+      report_.units[i].state = superseded ? CommandState::Incomplete : CommandState::Changed;
     report_.active = false;
   }
   pending_ = 0; waiting_ = verifying_ = identityChecked_ = false;
@@ -72,14 +74,15 @@ void PsuController::reconcile(bool explicitRetry) {
   cancelJob(); controlActive_ = controlWaiting_ = controlVerified_ = false;
   voltageSynced_ = currentSynced_ = restoreBlocked_ = 0;
   restorePending_ = running_;
-  if (explicitRetry) memset(readinessLosses_, 0, sizeof(readinessLosses_));
+  if (explicitRetry) { memset(readinessLosses_, 0, sizeof(readinessLosses_)); negotiationFaults_ = 0; }
   for (uint8_t i = 0; i < count(); ++i) {
     auto& u = control_[i];
     clearFanOverride(i);
     UnitControl next;
     preserveCooling(next, u, i == uncertainFan);
-    if (readinessLosses_[i] > control::outputReadyRecoveries) {
-      next.fault = CommandState::ReadinessRecoveryLimit; next.faultRegister = protocol::OnlineCurrent;
+    if (readinessLosses_[i] > control::outputReadyRecoveries || (negotiationFaults_ & (1U << i))) {
+      next.fault = readinessLosses_[i] > control::outputReadyRecoveries ? CommandState::ReadinessRecoveryLimit : u.fault;
+      next.faultRegister = readinessLosses_[i] > control::outputReadyRecoveries ? uint8_t(protocol::OnlineCurrent) : u.faultRegister;
       next.phase = powerAvailable() ? ControlPhase::EmergencyStandby : ControlPhase::Fault;
       restoreBlocked_ |= 1U << i;
     }
@@ -360,7 +363,7 @@ bool PsuController::wakeAllowed(uint8_t i, uint32_t now) const {
       freshMetric(i, protocol::OutputCurrent, amps, now) && isfinite(amps) && fabsf(amps) <= control::stoppedCurrentAmps;
 }
 bool PsuController::releaseAllowed(uint32_t now) const {
-  if (!powerAvailable() || availabilitySaving() || !participants() || !enable_.enabled() || (config_.operating.voltageMask & requiredMembers()) != requiredMembers()) return false;
+  if (!powerAvailable() || !startQualified() || availabilitySaving() || !participants() || !enable_.enabled() || (config_.operating.voltageMask & requiredMembers()) != requiredMembers()) return false;
   for (uint8_t i = 0; i < count(); ++i) {
     if (sensorFaults_ & (1U << i)) {
       if (!control_[i].zeroConfirmed && !control_[i].standbyConfirmed) return false;
@@ -400,10 +403,11 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
   if (!powerAvailable()) return {Activity::StartBlocked, Issue::Cutoff, 0};
   if (!ready_) return {enable_.enabled() ? Activity::StartBlocked : Activity::StopUnconfirmed, Issue::Invalid, 0};
   ControlStatus s = {Activity::Reconciling, Issue::None, 0};
-  bool stopped = true, held = true, online = true, starting = false;
+  bool stopped = true, held = true, online = true, starting = false, faulted = false;
   for (uint8_t i = 0; i < count(); ++i) {
     if (!(requiredMembers() & (1U << i)) && availabilityReason(i, now) != AvailabilityReason::Fault) continue;
     const auto& u = control_[i]; const Issue route = routingIssue(i, now);
+    faulted |= u.fault != CommandState::Idle || (sensorFaults_ & (1U << i));
     if ((excluded_ & (1U << i)) && s.blocker == Issue::None) { s.blocker = Issue::ApprovalRequired; s.slot = i; }
     const auto* device = deviceForSlot(i, now);
     if (device && device->acState(now, staleMs()) == AcState::Absent && s.blocker == Issue::None) { s.blocker = Issue::NoAc; s.slot = i; }
@@ -432,6 +436,9 @@ ControlStatus PsuController::controlStatus(uint32_t now) const {
   }
   if (!participants() && requiredMembers() == 0 && s.blocker == Issue::None)
     return {Activity::Holding, Issue::NoParticipants, 0};
+  if (enable_.enabled() && !online && !faulted && !startQualified() &&
+      (s.blocker == Issue::None || s.blocker == Issue::Missing || s.blocker == Issue::IdentityPending))
+    return {Activity::Reconciling, Issue::AddressSettling, 0};
   if (!enable_.enabled()) {
     s.activity = s.blocker != Issue::None ? (stopped ? Activity::StartBlocked : Activity::StopUnconfirmed) :
         stopped && held ? Activity::Holding : Activity::Stopping;
@@ -533,8 +540,10 @@ void PsuController::controlTick(uint32_t now) {
 #if PSU_BUS_PROFILE
       busProfile_.note(BusEvent::Route,i+1,epoch,(uint16_t(routingIssue(i,now))<<8)|(d ? d->address : 0),now);
 #endif
+      // Negotiation is not an explicit retry of an already failed command.
+      // Keep ordinary absent-unit recovery unchanged outside that episode.
       const CommandState latched = readinessLosses_[i] > control::outputReadyRecoveries ? CommandState::ReadinessRecoveryLimit :
-          startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout ? u.fault : CommandState::Idle;
+          startup_.permit == PermitState::Fault || u.fault == CommandState::ReadinessTimeout || (negotiationFaults_ & (1U << i)) ? u.fault : CommandState::Idle;
       const uint8_t faultReg = u.faultRegister;
       u = {}; acknowledgedMask_ &= UnitMask(~(1U << i)); voltageSynced_ &= UnitMask(~(1U << i)); currentSynced_ &= UnitMask(~(1U << i));
       if (latched != CommandState::Idle) {

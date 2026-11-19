@@ -111,6 +111,8 @@ class PsuController {
   uint8_t readinessLosses(uint8_t slot) const { return slot < count() ? readinessLosses_[slot] : 0; }
   void configureStartup(bool installed, bool configurationReady, uint32_t now);
   const StartupStatus& startupStatus() const { return startup_; }
+  uint32_t startupRemaining(uint32_t now) const;
+  bool startQualified() const { return powerAvailable() && (!startupConfigured_ || startupQualified_) && discovery_.settled(); }
   bool chargeAllowed() const { return startup_.permit == PermitState::Allowed; }
   bool powerAvailable() const { return startup_.permit == PermitState::NotFitted || chargeAllowed(); }
   Result hardStop();
@@ -279,7 +281,7 @@ class PsuController {
   void applyParticipation(UnitMask members, UnitMask excluded, bool remember, bool releaseHot, uint32_t now);
   Issue routingIssue(uint8_t slot, uint32_t now) const;
   void enableChanged(bool wasEnabled);
-  void cancelJob();
+  void cancelJob(bool superseded = false);
   void controlTick(uint32_t now);
   bool controlReceive(const CanFrame& frame, uint32_t now);
   void controlCommand(uint8_t slot, uint8_t reg, uint16_t value, uint32_t now);
@@ -314,6 +316,8 @@ class PsuController {
   StartupStatus startup_;
   uint32_t now_ = 0, acReleased_ = 0;
   bool startupConfigured_ = false;
+  bool startupQualified_ = false;
+  UnitMask negotiationFaults_ = 0;
   UnitMask excluded_ = 0, sessionAccepted_ = 0, sessionRequired_ = 0;
   uint32_t availabilityRevision_ = 1;
   AvailabilityReason availabilityReasons_[PSU_MAX_UNITS] = {};

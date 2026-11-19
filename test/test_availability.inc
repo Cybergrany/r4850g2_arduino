@@ -16,7 +16,8 @@ void availabilityProtocol() {
   CHECK(protocol::isNegotiation(negotiation)); d.receive(negotiation,6100);
   CHECK(d.negotiating() && !d.identity(identity(1),6100));
   negotiation.data[1]=2; d.receive(negotiation,7000);
-  d.tick(9999,5000); CHECK(d.negotiating()); d.tick(10000,5000); CHECK(!d.negotiating());
+  d.tick(7000+control::negotiationQuietMs-1,5000); CHECK(d.negotiating());
+  d.tick(7000+control::negotiationQuietMs,5000); CHECK(!d.negotiating());
   negotiation.extended=false; CHECK(!protocol::isNegotiation(negotiation));
 }
 void startupPowerPolicy() {

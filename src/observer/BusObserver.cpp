@@ -94,7 +94,7 @@ void BusObserver::tick(uint32_t now) {
   if (ready_) can_.service(now);
   CanFrame frame;
   for (uint8_t n=0;ready_ && n<32 && can_.receive(frame);++n) receive(frame,now);
-  if (negotiating_ && uint32_t(now-lastNegotiation_)>=control::availabilitySettleMs) {
+  if (negotiating_ && uint32_t(now-lastNegotiation_)>=control::negotiationQuietMs) {
     negotiating_=false; profile_.note(BusEvent::Quiet,0,0,0,now);
   }
   if (review_ && uint32_t(now-reviewAt_)>=busprofile::confirmationMs) review_=false;

@@ -47,7 +47,7 @@ void routeCacheLifecycle() {
     deliver(negotiation);
     CHECK(!c.deviceForSlot(0, now) && c.issue(0, now) == Issue::IdentityPending);
     deliver(info(37, identity(9))); CHECK(!c.deviceForSlot(0, now));
-    now += control::availabilitySettleMs; c.tick(now);
+    now += control::negotiationQuietMs; c.tick(now);
     deliver(info(42, identity(9)));
     CHECK(c.deviceForSlot(0, now) && c.deviceForSlot(0, now)->address == 42);
     CHECK(c.configuration().thermalStop == ThermalStop::Temperature && !c.enableControl().enabled());
@@ -112,7 +112,7 @@ void exactGroupRange() {
 }
 
 void idleSerialStatusCadence() {
-  Rig r(installation(1), false, false); r.finish(); Terminal t(r);
+  Rig r(installation(1), false, false); r.finish(); r.step(control::addressStableMs); Terminal t(r);
   CHECK(t.input("alerts every 0\n").find("every 0 s") != std::string::npos); t.drain();
   // Direct command replies stay immediate. Unsolicited status waits at most
   // the presentation interval, regardless of how many idle loops run.

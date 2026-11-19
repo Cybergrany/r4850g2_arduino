@@ -1717,3 +1717,75 @@ Then request OFF and confirm zero hold. The fan policy was not changed.
    loss/overflow, command timeout and read-failure counters should not grow.
    Confirm telemetry/identity freshness and observe actual display response.
    Software tests do not replace this physical bus/load check.
+
+## Startup/address qualification — 2026-11-19
+
+Fixed a reproduced ordering failure: `runJob()` checked current-sync membership
+after negotiation had invalidated discovery routes, before checking negotiation
+itself. Two- and nine-PSU host reproductions became permanently blocked with
+`Changed` results even after verified identities returned. Healthy interrupted
+jobs are now retired as incomplete before that check. Already failed syncs and
+faults present at the announcement remain protected.
+
+Positive release now needs 15 seconds after AC permit (startup-policy
+initialization without a fitted cutoff), plus five seconds of stable routes.
+Negotiation silence lasts five seconds after the final announcement. These are
+cooperative gates; zero reconciliation and normal event processing continue
+outside silence. [STARTUP.md](STARTUP.md#boot-and-reconciliation) documents the
+operator status, countdown diagnostics and physical bench sequence.
+
+Passed on the combined manual-display-recovery/startup patch:
+
+- Host ASan/UBSan suite: 3,426,367 checks with production UI frame exports;
+  profiling enabled: 3,559,182 checks. New cases cover two/nine PSUs, ENABLE_IN
+  already ON, fitted/unfitted cutoff, millis rollover, repeated announcements,
+  unchanged INFO refreshes, new routes, interrupted identity verification,
+  priming ACK waits, sync wait/final release, stale ACKs, OFF priority, real
+  rejection/conflict and required missing members.
+- Touch/debug simulation: 1,459 checks with preview exports; production renderer
+  at all five clocks; actual ClickEncoder guard tests (248,171 checks).
+- CAN profiling/observer, production receive ISR, charge-permit/status outputs,
+  compact simulation storage and route-search-budget tests.
+- All 21 configured Mega builds, AVR format check, memory-size check and
+  debug/observer hardware-isolation checks.
+
+Selected final ELF sizes:
+
+| Build | Flash bytes | Static RAM | Static free |
+|---|---:|---:|---:|
+| `mega2560_wheel_alerts` | 221088 | 7371 | 821 |
+| `mega2560_wheel_profile` | 228448 | 7514 | 678 |
+| `mega2560_serial_profile` | 143298 | 5617 | 2575 |
+| `mega2560_can_observer` | 17308 | 1902 | 6290 |
+
+Relative to the manual-reset baseline, the bench wheel build adds **4 bytes
+static RAM and 1498 bytes flash**. No EEPROM layout or saved settings change.
+The linked AVR stack audit still finds the existing 745-byte direct path from
+`main` through serial configuration loading. That excludes indirect calls,
+dynamic arguments and interrupt overlap; 821 bytes static free is not a proven
+stack margin, and the other low-headroom profiles retain their existing caveat.
+
+The actual wheel ELF was reprofiled in simavr with nine synthetic CAN peers for
+baseline, switch-OFF during display reset, pending ACK during reset and the
+ten-second wheel hold. All four passed; verified EEPROM remained unchanged.
+The two non-stop reset cases emitted no zero/standby commands and no AC-permit
+or PSU_ACTIVE falling edges. The wheel case produced one reset and no release
+action. OFF reached all-nine zero in 2.442 seconds (first zero write at 126 ms).
+Observed stack-to-static separation was at least 309 bytes in these cases.
+The full init/clear/repaint remained cooperative; recovery receive gaps were
+at most 12.325 ms, with no simulated hardware overflow or simultaneous chip
+selects. These are observed simulated cases, not worst-case hardware bounds.
+
+Reproduce the combined reset checks with:
+
+```sh
+python3 tools/profile_display_reset.py --simavr-prefix /tmp/psu-simavr-1119/root/usr --output /tmp/psu-startup-display-reset --cases 0 2 4 7
+python3 tools/analyze_avr_stack.py .pio/build/mega2560_wheel_alerts/firmware.elf
+```
+
+No hardware log was available from the reported boot. The code path is
+reproduced and regression-tested, but simultaneous-power and delayed-AC bench
+runs are still required to establish whether it explains that installation's
+`DEVICE CHANGED` incident. New timers do not prove a PSU has finished booting;
+fresh identity, zero-current, readiness, temperature and participation checks
+remain necessary.

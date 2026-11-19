@@ -59,6 +59,7 @@ inline const __FlashStringHelper* issueName(Issue s) {
     case Issue::NoAc: return F("WAIT AC; fresh PSU input-power-failure flag");
     case Issue::ApprovalRequired: return F("returned/excluded PSU needs inclusion approval; diag startup");
     case Issue::Settling: return F("startup/group availability settling; diag startup");
+    case Issue::AddressSettling: return F("ADDRESS SETTLING; waiting for startup/address qualification; diag startup");
     case Issue::Cutoff: return F("AC permit inhibited/faulted or addresses negotiating; diag startup");
     case Issue::NoParticipants: return F("no active units; accepted absences retained");
     case Issue::ReadinessPending: return F("verifying output readiness; wait or stop with autoresume off / zero group current; diag control");
