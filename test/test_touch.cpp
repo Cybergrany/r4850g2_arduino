@@ -15,6 +15,7 @@ unsigned checks=0;
 uint32_t clockNow=100;
 TouchSample input={};
 UiInput wheel={};
+bool wheelReset=false;
 UiFrame appFrame;
 uint8_t appDrawCells=255, appPaintDelay=0;
 uint16_t appPaintCalls=0;
@@ -27,6 +28,7 @@ Ili9341Display::Ili9341Display() {}
 bool Ili9341Display::begin() { available_=true; return true; }
 bool Ili9341Display::canDim() const { return false; }
 void Ili9341Display::dim(bool) {}
+bool Ili9341Display::requestReset() { return false; } // This suite uses an inert display.
 void Ili9341Display::invalidate(bool) { changes_.invalidate(); }
 void Ili9341Display::service(const UiFrame& frame) {
   ++appPaintCalls; clockNow+=appPaintDelay;
@@ -36,7 +38,7 @@ void Ili9341Display::service(const UiFrame& frame) {
 void Xpt2046Input::begin() {}
 bool Xpt2046Input::read(TouchSample& s,uint32_t) { s=input; return true; }
 void WheelInput::begin() {}
-UiInput WheelInput::read() { auto e=wheel; wheel={}; return e; }
+UiInput WheelInput::read() { auto e=wheel; wheel={}; resetPending_=wheelReset; wheelReset=false; return e; }
 }
 namespace {
 TouchCalibration knownCalibration() { TouchCalibration c; c.valid=true; c.coefficient[0]=c.coefficient[4]=8192; return c; }
@@ -59,6 +61,25 @@ void wizardTests() {
   w.begin(0); w.sample({0,0,0,false},0);
   for (uint8_t i=0;i<40;++i) w.sample({int16_t(i%2 ? 2000 : 1000),1000,1000,true},i*20);
   CHECK(w.targetIndex()==0);
+  // Display recovery retains completed targets but discards partial contact.
+  w.begin(0); uint32_t now=0;
+  for(uint8_t i=0;i<5;++i) {
+    const auto target=CalibrationWizard::target(i);
+    const TouchSample contact={int16_t(target.x*8),int16_t(target.y*8),1000,true};
+    for(uint8_t j=0;j<3;++j) w.sample({},now+=20);
+    if(i==2) {
+      for(uint8_t j=0;j<3;++j) w.sample(contact,now+=20);
+      w.cancelContact();
+      for(uint8_t j=0;j<16;++j) w.sample(contact,now+=20);
+      CHECK(w.targetIndex()==i && w.state()==CalibrationState::Collecting);
+      for(uint8_t j=0;j<3;++j) w.sample({},now+=20);
+    }
+    for(uint8_t j=0;j<8;++j) w.sample(contact,now+=20);
+    CHECK(w.targetIndex()==i+1);
+  }
+  for(uint8_t j=0;j<3;++j) w.sample({},now+=20);
+  CHECK(w.state()==CalibrationState::Ready && w.result().map(800,1200,p));
+  CHECK(p.x==100 && p.y==150);
 }
 struct CutStorage : RamStorage {
   int remaining=-1; unsigned writes=0;
@@ -168,17 +189,67 @@ void snapshot(const char* name,const UiFrame& frame) {
 }
 struct FakeDisplay : Display {
   UiFrame shown; uint8_t remaining=0; bool dimmed=false;
+  uint8_t recoveryTicks=0; unsigned resets=0;
+  bool requestReset() override { if(recoveryTicks) return false; recoveryTicks=20; ++resets; return true; }
+  bool recovering() const override { return recoveryTicks!=0; }
   unsigned compositions=0;
   DisplayStats timers;
   bool begin() override { return true; }
   void invalidate(bool = false) override { remaining=3; ++compositions; }
-  bool pending() const override { return remaining!=0; }
-  void service(const UiFrame& f) override { shown=f; if(remaining) --remaining; }
+  bool pending() const override { return remaining!=0 || recovering(); }
+  void service(const UiFrame& f) override { shown=f; if(recoveryTicks) --recoveryTicks; else if(remaining) --remaining; }
   bool canDim() const override { return true; }
   void dim(bool value) override { dimmed=value; }
   DisplayStats statistics() const override { return timers; }
   void resetStatistics() override { timers={}; }
 };
+bool hasText(const UiFrame& frame,const char* text);
+void manualDisplayReset() {
+  Rig r; r.ready();
+  CHECK(r.memory.save(r.controller.configuration())==StorageResult::Ok);
+  CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok);
+  while(cal.saving()) cal.step();
+  FakeDisplay display; LocalUi ui(r.controller,r.memory,display,r.bytes); input={}; wheel={}; wheelReset=false; ui.begin();
+  auto tick=[&](unsigned n=1) { while(n--) { r.step(); ui.storageTick(); ui.tick(clockNow); } };
+  auto tap=[&](int16_t x,int16_t y) { input={int16_t(x*8),int16_t(y*8),1000,true}; tick(5); input={}; tick(14); };
+  tick(20); tap(40,80); tap(112,216); tap(80,80); tap(40,48); tap(80,128);
+  CHECK(ui.editing()); const auto original=r.controller.configuration().current[0];
+  tap(280,100); // Unsaved edit: 0.5 A more per PSU.
+  CHECK(r.controller.configuration().current[0]==original);
+  CHECK(r.memory.startSave(r.controller.configuration())==StorageResult::Ok);
+  const auto token=r.memory.saveToken();
+  input={230*8,216*8,1000,true}; tick(); // Captured Apply before reset.
+  wheelReset=true; tick(); CHECK(display.recovering() && display.resets==1);
+  wheel={8,true,true}; tick(); // Recovery consumes every ordinary UI input.
+  while(display.recovering()) tick();
+  tick(15); CHECK(ui.editing() && !r.controller.busy());
+  input={}; tick(25); CHECK(ui.editing() && r.controller.configuration().current[0]==original);
+  tick(350); CHECK(r.memory.completedToken()==token && r.memory.completedResult()==StorageResult::Ok);
+  Configuration saved; CHECK(r.memory.load(saved)==StorageResult::Ok && saved.current[0]==original);
+
+  // The serial entry point has the same input guards and no duplicate reset.
+  char command[]="display", reset[]="reset"; char* args[]={command,reset};
+  Serial.output.clear(); CHECK(ui.command(2,args,Serial,clockNow));
+  CHECK(ui.command(2,args,Serial,clockNow) && display.resets==2);
+  CHECK(Serial.output.find("unavailable/busy")!=std::string::npos);
+  while(display.recovering()) tick();
+  tick(15);
+  CHECK(ui.editing() && r.controller.configuration().current[0]==original);
+  tap(230,216); tick(400); // Only a fresh explicit Apply sends the preserved edit.
+  CHECK(r.controller.configuration().current[0]==original+50);
+  CHECK(r.memory.load(saved)==StorageResult::Ok && saved.current[0]==original+50);
+
+  // A reset cannot acknowledge an incident or turn a captured touch into Ack.
+  r.can.temperatures(30,70); tick(150);
+  const auto incident=r.controller.alerts().at(AlertManager::Thermal);
+  CHECK(incident.active && !incident.acknowledged && hasText(display.shown,"Acknowledge"));
+  input={75*8,216*8,1000,true}; tick(); wheelReset=true; tick();
+  while(display.recovering()) tick();
+  tick(15); input={}; tick(15);
+  const auto after=r.controller.alerts().at(AlertManager::Thermal);
+  CHECK(after.id==incident.id && !after.acknowledged);
+  tap(75,216); CHECK(r.controller.alerts().at(AlertManager::Thermal).acknowledged);
+}
 void drawingPriority() {
   Rig r; r.ready(); r.controller.alerts().acknowledgeAll();
   CalibrationStore cal(r.bytes,r.memory); CHECK(cal.start(knownCalibration())==StorageResult::Ok); while(cal.saving()) cal.step();
@@ -688,6 +759,6 @@ void applicationScenarios() {
 }
 
 }
-int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); drawingPriority(); receiveBacklogUi(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); syncTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
+int main() { try { wizardTests(); calibrationStorage(); gestures(); simulationTests(); manualDisplayReset(); drawingPriority(); receiveBacklogUi(); layoutAndLocalUi(); localCalibrationAndDiagnostics(); scopedProfileTouchWorkflow(); syncTouchWorkflow(); thermalTouchWorkflow(); touchRecoveryWorkflow(); ninthTouchSelection(); applicationScenarios();
   std::cout<<"PASS touch/simulator: "<<checks<<" checks\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

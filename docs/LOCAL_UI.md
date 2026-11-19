@@ -72,7 +72,9 @@ Replace the port for your machine. Startup reports `ILI9341 ready`, or
 not prevent CAN or serial operation. The ID check expects ILI9341 ID `0x9341`;
 connect SDO/MISO. Disable `displayVerifyId` only after verifying a write-only
 module and its wiring: that removes automatic detection of an absent display.
-Display detection happens at boot; reset after connecting/replacing the display.
+Display detection happens at boot; restart the Mega after connecting/replacing a
+display that failed boot detection. The manual display recovery below is for a
+display that was detected successfully.
 The check reads command `0xD3`, byte indices 2/3. Adafruit ILI9341 1.6.3's
 `ILI9341_RDID4` macro is `0xDD`, so it must not be used for this device-code read.
 Reads temporarily use the lower of `displaySpiHz` and `displayReadMaxSpiHz`
@@ -102,7 +104,7 @@ Field-only edits do not activate other drafts. See [scoped settings](PROFILES.md
 
 ## Controls
 
-| Screen | Turn | Short press | Hold (about 1.2 seconds) |
+| Screen | Turn | Short press | Hold about 1.2 seconds, then release |
 | --- | --- | --- | --- |
 | Groups | Select group, paging after three | Open its chargers | Five-choice configuration menu |
 | Chargers | Select PSU, paging after two | Details / error explanation | Return to groups |
@@ -116,8 +118,11 @@ Field-only edits do not activate other drafts. See [scoped settings](PROFILES.md
 | Missing-member warning | Select No / Yes | Confirm choice | Cancel and return to groups |
 | Operation/result | No action | Return to configuration when finished | Return to groups; submitted work continues |
 
-The original group selection is retained when returning. Holding does not also
-emit a short-click action. Edit steps default to 0.1 V and 0.5 A; wheel adjustment
+The original group selection is retained when returning. Ordinary long-press
+actions now happen on release, so a longer recovery hold cannot first open a
+menu or cancel an edit. Holding does not also emit a short-click action, and
+turning while the button is pressed does not adjust values. Edit steps default
+to 0.1 V and 0.5 A; wheel adjustment
 stops at backend limits, including the lowest per-PSU current limit among the
 selected members. Values are revalidated before applying.
 When no groups exist yet, the menu still opens; the group selector explains
@@ -127,6 +132,40 @@ overview for startup diagnostics and commissioning power.
 Serial remains available throughout navigation. A configuration change during
 an edit invalidates it, rather than applying an obsolete value. A confirmation
 also expires after 15 seconds or a topology/configuration change.
+
+## Manual display recovery
+
+If the image becomes corrupted, **hold the wheel button for ten seconds**, until
+the display begins resetting, then release. This requests one TFT hardware reset,
+restores its boot register settings and configured rotation, clears its memory
+and repaints the current UI. Keeping the button held longer cannot repeat the
+reset. The hold, any rotation while pressed, and its release are consumed:
+they cannot apply an edit, confirm a review, change enable or acknowledge an
+alert. After recovery, release the button before starting a fresh press.
+
+Serial provides the same action on display-enabled builds:
+
+```text
+display reset
+```
+
+The TFT's RESET connection must be fitted (D24 by default). The Mega is not
+reset: CAN reception, command replies, ENABLE_IN, protection and EEPROM saves
+continue through cooperative display recovery. No CAN errors or deadlines are
+suppressed. A genuine fault or OFF request still takes its normal action.
+Allow several seconds for the blank/clear/repaint sequence under load.
+
+Unsaved edits and background operations are preserved; the gesture does not
+submit them. Reviews retain their normal expiry and configuration checks, so
+an old review may require refreshing afterwards. Touch builds discard a contact
+already in progress; calibration retains completed targets and requires a fresh
+contact for the current target. This restores display-controller state, not the
+panel's power supply, and does not establish the cause of corruption.
+
+`diag ui` reports `recovering=1` while reset/clear/repaint is in progress. Its
+`UI=1` field means the display passed boot detection. `diag ui reset` only clears
+timing statistics; it does **not** reset the screen. See the
+[reset profiling results and bench checks](DISPLAY_RESET_PROFILE.md).
 
 ## Reading the screens
 
@@ -274,7 +313,8 @@ restart when a slow pass exceeds the 500 ms refresh interval.
 
 Use `diag ui` to inspect:
 
-- `render-max-us` / `SPI-max-us`: maximum render-call / transaction duration.
+- `render-max-us` / `SPI-max-us`: maximum render-call / transaction duration,
+  including manual recovery's initialization and clear work.
 - `scene-ms(last/max)`: latest and maximum completed-scene duration.
 - `change-ms`: latest/maximum completed nonperiodic change (input, navigation,
   alerts or results). Periodic telemetry refreshes do not overwrite this pair.

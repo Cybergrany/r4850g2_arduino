@@ -7,6 +7,7 @@ class Adafruit_ILI9341 {
   Adafruit_ILI9341(int8_t,int8_t,int8_t) {}
   void begin(uint32_t) {}
   void setRotation(uint8_t) {}
+  void sendCommand(uint8_t,const uint8_t*,uint8_t n) { _delay_loop_2(uint16_t(n+1)*4); }
   void setSPISpeed(uint32_t) {}
   uint8_t readcommand8(uint8_t,uint8_t index) { return index==2?0x93:0x41; }
   void fillScreen(uint16_t) {}

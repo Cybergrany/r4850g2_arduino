@@ -10,12 +10,22 @@ class Ili9341Display : public Display {
   bool begin() override;
   void invalidate(bool change = false) override;
   void service(const UiFrame& frame) override;
-  bool pending() const override { return changes_.pending() || scanRow_ != ui::cellHeight || outlineRemaining_ || outlineStage_ || outlinesAfterText_; }
+  bool pending() const override { return recovering() || changes_.pending() || scanRow_ != ui::cellHeight || outlineRemaining_ || outlineStage_ || outlinesAfterText_; }
+  bool requestReset() override;
+  bool recovering() const override { return resetPhase_ != ResetPhase::Idle; }
+  bool waiting() const override { return recovering() && resetPhase_ != ResetPhase::Clear && resetPhase_ != ResetPhase::Paint; }
   bool canDim() const override;
   void dim(bool dimmed) override;
   DisplayStats statistics() const override { return stats_; }
   void resetStatistics() override { stats_ = {}; }
  private:
+  enum class ResetPhase : uint8_t { Idle, High, Low, Release, Commands, WaitCommand, Orient, Clear, Paint };
+  bool resetStep();
+  void resetDrawing();
+  ResetPhase resetPhase_ = ResetPhase::Idle;
+  uint32_t resetSince_ = 0;
+  uint16_t resetClear_ = 0;
+  uint8_t resetCommand_ = 0;
   class Glyph {
    public:
     void prepare(char c, uint8_t firstRow = 0, uint8_t endRow = ui::cellHeight);

@@ -17,6 +17,10 @@ class Display {
   virtual void invalidate(bool change = false) = 0;
   virtual void service(const UiFrame& frame) = 0;
   virtual bool pending() const = 0; // True until the submitted scene is fully painted.
+  // Runtime recovery is cooperative and must not reinitialize shared buses.
+  virtual bool requestReset() { return false; }
+  virtual bool recovering() const { return false; }
+  virtual bool waiting() const { return false; }
   virtual bool canDim() const = 0;
   virtual void dim(bool dimmed) = 0;
   virtual DisplayStats statistics() const { return {}; }

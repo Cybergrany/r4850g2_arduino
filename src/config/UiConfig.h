@@ -2,6 +2,7 @@
 #include <stdint.h>
 namespace psu { namespace ui {
 constexpr uint16_t refreshMs = 500, blinkMs = 500;
+constexpr uint16_t displayResetHoldMs = 10000, wheelReleaseMs = 50;
 // Display agreement only: every fresh voltage must be within this of its mean.
 // Authorized targets still require exact agreement; protection is independent.
 constexpr float voltageTolerance = 0.25f;

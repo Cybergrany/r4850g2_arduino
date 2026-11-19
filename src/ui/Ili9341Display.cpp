@@ -9,6 +9,36 @@ namespace psu {
 namespace {
 // Datasheet section 8.3.23: ID4 is 0xD3. Adafruit's ILI9341_RDID4 names 0xDD.
 constexpr uint8_t readId4Command = 0xd3;
+// Same init commands as pinned Adafruit ILI9341 1.6.3
+// (Adafruit/Limor Fried, BSD). Runtime waits are advanced by the main loop;
+// never invoke initSPI()/begin() again on the CAN-shared SPI instance.
+const uint8_t resetCommands[]
+#ifdef __AVR__
+PROGMEM
+#endif
+= {
+  0xef,3,0x03,0x80,0x02, 0xcf,3,0x00,0xc1,0x30,
+  0xed,4,0x64,0x03,0x12,0x81, 0xe8,3,0x85,0x00,0x78,
+  0xcb,5,0x39,0x2c,0x00,0x34,0x02, 0xf7,1,0x20, 0xea,2,0x00,0x00,
+  0xc0,1,0x23, 0xc1,1,0x10, 0xc5,2,0x3e,0x28, 0xc7,1,0x86,
+  0x36,1,0x48, 0x37,1,0x00, 0x3a,1,0x55, 0xb1,2,0x00,0x18,
+  0xb6,3,0x08,0x82,0x27, 0xf2,1,0x00, 0x26,1,0x01,
+  0xe0,15,0x0f,0x31,0x2b,0x0c,0x0e,0x08,0x4e,0xf1,0x37,0x07,0x10,0x03,0x0e,0x09,0x00,
+  0xe1,15,0x00,0x0e,0x14,0x03,0x11,0x07,0x31,0xc1,0x48,0x08,0x0f,0x0c,0x31,0x36,0x0f,
+  0x11,0x80, 0x29,0x80, 0
+};
+static_assert(sizeof(resetCommands)<256,"Display init command index overflow");
+void recordDuration(uint32_t& maximum,uint32_t started) {
+  const uint32_t elapsed=timing::elapsed(started,micros());
+  if(elapsed!=timing::invalid && elapsed>maximum) maximum=elapsed;
+}
+uint8_t resetByte(uint8_t at) {
+#ifdef __AVR__
+  return pgm_read_byte(resetCommands + at);
+#else
+  return resetCommands[at];
+#endif
+}
 uint16_t color(uint8_t style) {
   switch (style & 7) {
     case Muted: return 0xadf5;
@@ -51,6 +81,78 @@ void Ili9341Display::invalidate(bool change) {
   // painting keeps the original timer and cannot erase its input provenance.
   if (change || !pending()) { sceneStarted_ = millis(); changeScene_ = change; }
   changes_.invalidate(); outlineRemaining_ = UiFrame::maxOutlines; outlineNext_ = 0; sceneCheck_=true;
+}
+void Ili9341Display::resetDrawing() {
+  previous_.clear(); changes_ = FrameChanges{}; active_ = {' ',0}; activeIndex_=0;
+  dirtyRows_=0; memset(dirtyColumns_,0,sizeof(dirtyColumns_)); scanRow_=ui::cellHeight;
+  outlineTarget_={}; outlineOffset_=0; outlineNext_=outlineRemaining_=outlineStage_=outlineEdge_=0;
+  activeBorder_=sceneCheck_=outlinesAfterText_=changeScene_=false;
+}
+bool Ili9341Display::requestReset() {
+  if (!available_ || recovering() || board::displayReset < 0) return false;
+  // Requests occur only between service calls, when no SPI transaction is open.
+  resetDrawing(); resetCommand_=0; resetClear_=0; resetSince_=millis();
+  digitalWrite(board::displayReset,HIGH); resetPhase_=ResetPhase::High;
+  return true;
+}
+bool Ili9341Display::resetStep() {
+  const uint32_t now=millis();
+  switch (resetPhase_) {
+    case ResetPhase::Idle: case ResetPhase::Paint: return false;
+    case ResetPhase::High:
+      if (uint32_t(now-resetSince_)>=100) { digitalWrite(board::displayReset,LOW); resetPhase_=ResetPhase::Low; resetSince_=now; }
+      return true;
+    case ResetPhase::Low:
+      if (uint32_t(now-resetSince_)>=100) { digitalWrite(board::displayReset,HIGH); resetPhase_=ResetPhase::Release; resetSince_=now; }
+      return true;
+    case ResetPhase::Release:
+      if (uint32_t(now-resetSince_)>=200) resetPhase_=ResetPhase::Commands;
+      return true;
+    case ResetPhase::WaitCommand:
+      if (uint32_t(now-resetSince_)>=150) resetPhase_=ResetPhase::Commands;
+      return true;
+    case ResetPhase::Commands: {
+      const auto cmd=resetByte(resetCommand_++);
+      if (!cmd) { resetPhase_=ResetPhase::Orient; return true; }
+      const auto size=resetByte(resetCommand_++);
+      const uint32_t started=micros();
+      tft_.sendCommand(cmd,resetCommands+resetCommand_,size&0x7f);
+      recordDuration(stats_.transactionMaxUs,started);
+      resetCommand_+=size&0x7f;
+      if (size&0x80) { resetSince_=millis(); resetPhase_=ResetPhase::WaitCommand; }
+      return true;
+    }
+    case ResetPhase::Orient: {
+      uint32_t started=micros();
+      tft_.setRotation(board::displayRotation);
+      recordDuration(stats_.transactionMaxUs,started);
+      // Force both axes on the first clear strip despite Adafruit's function-
+      // static address cache surviving the TFT hardware reset. No pixels here.
+      started=micros();
+      tft_.startWrite(); tft_.setAddrWindow(1,1,1,1); tft_.endWrite();
+      recordDuration(stats_.transactionMaxUs,started);
+      resetPhase_=ResetPhase::Clear; return true;
+    }
+    case ResetPhase::Clear: {
+      constexpr uint8_t width=ui::cellWidth*ui::burstRows(board::displaySpiHz)>=32 ? 32 :
+          ui::cellWidth*ui::burstRows(board::displaySpiHz)>=16 ? 16 : 8;
+      constexpr uint8_t across=320/width;
+      const uint32_t started=micros();
+      for(uint8_t n=0;n<ui::burstsPerTick(board::displaySpiHz);++n) {
+        const uint32_t transactionStarted=micros();
+        tft_.startWrite();
+        tft_.setAddrWindow((resetClear_%across)*width,resetClear_/across,width,1);
+        tft_.writeColor(ui::backgroundColor,width); tft_.endWrite();
+        recordDuration(stats_.transactionMaxUs,transactionStarted);
+        if (++resetClear_==uint16_t(across)*240) {
+          resetPhase_=ResetPhase::Paint; invalidate(true); break;
+        }
+        if(timing::elapsed(started,micros())>=ui::renderBudgetUs) break;
+      }
+      return true;
+    }
+  }
+  return true;
 }
 void Ili9341Display::Glyph::prepare(char c, uint8_t firstRow, uint8_t endRow) {
   memset(rows, 0, sizeof(rows));
@@ -179,8 +281,7 @@ void Ili9341Display::transfer(Rect r, uint16_t* pixels) {
   tft_.startWrite(); tft_.setAddrWindow(r.x,r.y,r.w,r.h);
   if (solid) tft_.writeColor(pixels[0],count); else tft_.writePixels(pixels,count);
   tft_.endWrite();
-  const uint32_t elapsed=timing::elapsed(started,micros());
-  if (elapsed!=timing::invalid && elapsed>stats_.transactionMaxUs) stats_.transactionMaxUs=elapsed;
+  recordDuration(stats_.transactionMaxUs,started);
 }
 bool Ili9341Display::outlineStep(const UiFrame& frame, bool eraseOnly) {
   if (!outlineStage_) {
@@ -223,6 +324,7 @@ bool Ili9341Display::outlineStep(const UiFrame& frame, bool eraseOnly) {
 void Ili9341Display::service(const UiFrame& frame) {
   if (!available_ || !pending()) return;
   const uint32_t started=micros(); uint8_t transfers=0;
+  if (resetStep()) { recordDuration(stats_.renderMaxUs,started); return; }
   while (transfers<ui::burstsPerTick(board::displaySpiHz) && timing::elapsed(started,micros())<ui::renderBudgetUs) {
     if (scanRow_==ui::cellHeight) {
       if (sceneCheck_ && !outlineStage_) {
@@ -298,8 +400,9 @@ void Ili9341Display::service(const UiFrame& frame) {
     while (scanRow_<ui::cellHeight && !(dirtyRows_ & (1U<<scanRow_))) ++scanRow_;
     if (scanRow_==ui::cellHeight) previous_.cell(activeIndex_,active_);
   }
-  const uint32_t elapsed = timing::elapsed(started, micros());
-  if (elapsed != timing::invalid && elapsed > stats_.renderMaxUs) stats_.renderMaxUs = elapsed;
+  if (resetPhase_==ResetPhase::Paint && !changes_.pending() && scanRow_==ui::cellHeight &&
+      !outlineRemaining_ && !outlineStage_ && !outlinesAfterText_) resetPhase_=ResetPhase::Idle;
+  recordDuration(stats_.renderMaxUs,started);
   if (!pending()) {
     stats_.sceneMs = millis() - sceneStarted_;
     if (stats_.sceneMs > stats_.sceneMaxMs) stats_.sceneMaxMs = stats_.sceneMs;

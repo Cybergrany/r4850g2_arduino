@@ -194,6 +194,30 @@ void run() {
   raster::cpuCost=250; frame.text(0,0,26,"Prepared work",Good);
   display.invalidate(true); finish(display,frame); raster::cpuCost=1;
 }
+void manualReset() {
+  for(unsigned rollover=0;rollover<2;++rollover) {
+    Ili9341Display d; UiFrame f; f.clear(); CHECK(d.begin());
+    f.text(2,0,26,"54.00V  10.0A",Good); f.largeNumber(6,"54.0",Accent);
+    CHECK(f.outline(2,0,8,11,true)); d.invalidate(); finish(d,f);
+    // Partial scene, corrupt every pixel (including gutters), then request.
+    f.text(2,0,26,"56.00V  15.0A",Warning);d.invalidate();step(d,f);
+    raster::pixels.fill(0xffff);
+    if(rollover)raster::clockUs=(uint64_t(UINT32_MAX)-120)*1000;
+    const auto started=raster::clockUs;
+    CHECK(d.requestReset()&&d.recovering()&&!d.requestReset());
+    unsigned calls=0;
+    while(d.pending()&&calls++<30000) {
+      if(calls==250) { f.text(2,0,26,"57.00V  12.0A",Error);d.invalidate(); }
+      step(d,f); raster::clockUs+=1000;
+    }
+    CHECK(!d.pending()&&!d.recovering());imageMatches(f);
+    CHECK(raster::clockUs-started>=700000);
+    CHECK(d.requestReset()); // A completed reset can be requested again.
+    while(d.pending()) {step(d,f);raster::clockUs+=1000;}
+    imageMatches(f);
+  }
+  std::cout<<"PASS manual reset: corrupted pixels, interrupted drawing, changing scene, repeated request and millis rollover\n";
+}
 void snapshots(int argc,char** argv) {
   Ili9341Display display; CHECK(display.begin());
   for (int file=1;file<argc;++file) {
@@ -213,4 +237,4 @@ void snapshots(int argc,char** argv) {
   }
   if(argc>1) std::cout<<"PASS production snapshots: "<<argc-1<<" screens at "<<board::displaySpiHz<<" Hz\n";
 }
-int main(int argc,char** argv) { try { packing(); run(); highlightMovement(); snapshots(argc,argv); } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }
+int main(int argc,char** argv) { try { packing(); run(); highlightMovement(); manualReset(); snapshots(argc,argv); } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }

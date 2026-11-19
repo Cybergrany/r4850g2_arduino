@@ -96,6 +96,11 @@ outputs disabled. Touch remains an explicit choice in the `*_touch*` profiles.
 When leaving the panel's touch controller unused, hold T_CS HIGH on its 3.3 V
 side so it cannot interfere with shared SPI. See [display wiring](docs/LOCAL_UI.md).
 
+For display corruption, hold the wheel button for **ten seconds** or send
+`display reset`. Recovery reinitializes only the TFT while control continues;
+the hold and release cannot apply an edit. Ordinary shorter long-press actions
+now happen on release. See [manual display recovery](docs/LOCAL_UI.md#manual-display-recovery).
+
 For a blank screen, the [standalone ILI9341 bench sketch](examples/ili9341_bench/README.md)
 uses the same pins and 8 MHz clock, cycles test patterns and reports display ID
 over serial without loading the charger application or changing EEPROM.

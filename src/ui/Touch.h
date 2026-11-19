@@ -32,6 +32,8 @@ class CalibrationWizard {
   // dispatches a profile/save action from LocalUi::touchTick.
   __attribute__((noinline)) void sample(TouchSample sample, uint32_t now);
   void cancel() { state_ = CalibrationState::Idle; }
+  // Retain completed targets; discard partial contact after display recovery.
+  void cancelContact() { release_=true; releaseSeen_=false; samples_=0; sumX_=sumY_=0; }
   CalibrationState state() const { return state_; }
   uint8_t targetIndex() const { return target_; }
   static TouchPoint target(uint8_t index);

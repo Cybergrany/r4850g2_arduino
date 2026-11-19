@@ -18,7 +18,7 @@ class LocalUi {
   void begin();
   __attribute__((noinline)) void tick(uint32_t now);
   void paint();
-  bool priorityDrawing() const { return available_ && !pageReady_ && display_.pending(); }
+  bool priorityDrawing() const { return available_ && !pageReady_ && display_.pending() && !display_.waiting(); }
   __attribute__((noinline)) void storageTick();
   bool command(uint8_t count, char** args, Print& output, uint32_t now);
   UiAction takeRequest() { const auto r=request_; request_={}; return r; }
@@ -27,6 +27,8 @@ class LocalUi {
   bool available() const { return available_; }
  private:
   void request(uint32_t now);
+  bool resetDisplay(uint32_t now);
+  void cancelInput();
 #if PSU_ENABLE_TOUCH
   __attribute__((noinline)) UiAction touchTick(uint32_t now);
   __attribute__((noinline)) void drawTouch();
@@ -53,7 +55,7 @@ class LocalUi {
 #endif
   UiAction request_;
   uint32_t lastDraw_ = 0, lastInput_ = 0, lastPage_ = 0;
-  bool available_ = false, dirty_ = true, dimmed_ = false, pageReady_ = false;
+  bool available_ = false, dirty_ = true, dimmed_ = false, pageReady_ = false, resetActive_ = false;
 };
 }
 #endif

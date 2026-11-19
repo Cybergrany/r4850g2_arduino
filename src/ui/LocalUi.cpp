@@ -7,6 +7,7 @@
 #include <stdio.h>
 namespace psu {
 void LocalUi::begin() {
+  resetActive_=false;
   lastInput_ = millis(); // A runtime UI restart begins a new inactivity period.
   available_ = display_.begin(); frame_.clear(); model_.tick(millis());
 #if PSU_ENABLE_ENCODER
@@ -23,6 +24,24 @@ void LocalUi::begin() {
     model_.action({ActionKind::Calibrate},millis()); request(millis());
   }
 #endif
+}
+void LocalUi::cancelInput() {
+#if PSU_ENABLE_ENCODER
+  wheel_.cancelGesture();
+#endif
+#if PSU_ENABLE_TOUCH
+  gesture_.cancel(); retryArmed_=false;
+  wizard_.cancelContact();
+#endif
+}
+bool LocalUi::resetDisplay(uint32_t now) {
+  if(!display_.requestReset()) return false;
+  cancelInput(); resetActive_=true; pageReady_=false;
+#if PSU_ENABLE_ENCODER
+  wheel_.consumeResetGesture(); // Also consumes a hold interrupted by serial reset.
+#endif
+  lastInput_=now; dimmed_=false; display_.dim(false);
+  return true;
 }
 void LocalUi::request(uint32_t now) {
   const auto r=model_.takeRequest(); (void)now;
@@ -46,6 +65,23 @@ void LocalUi::storageTick() {
 }
 void LocalUi::tick(uint32_t now) {
   if (!available_) return;
+  if (display_.recovering()) {
+    // UI recovery owns drawing only. Keep operation/save completion progressing;
+    // the application still services CAN, protection and ENABLE_IN normally.
+    model_.tick(now);
+#if PSU_ENABLE_ENCODER
+    wheel_.read(); // Discard UI gestures until a fresh release after recovery.
+    wheel_.takeResetRequest();
+#endif
+    cancelInput();
+    paint();
+    return;
+  }
+  if(resetActive_) {
+    // Recovery may have completed in Application's extra drawing slices.
+    // Refresh from the current model, preserving drafts and operation owners.
+    resetActive_=false; dirty_=true; pageReady_=false; cancelInput();
+  }
   controller_.receiveWork(ReceiveWork::UiInput);
   const auto oldPage=model_.page(); const auto oldNotice=model_.notice();
   const auto oldAlert=model_.alertDisplayId();
@@ -63,6 +99,7 @@ void LocalUi::tick(uint32_t now) {
   bool wheelAction=false;
 #if PSU_ENABLE_ENCODER
   const auto event=wheel_.read();
+  if(wheel_.takeResetRequest() && resetDisplay(now)) { paint(); return; }
   if (event.delta || event.clicked || event.held) {
     wheelAction=true; lastInput_=now; dirty_=true;
     if (dimmed_) { dimmed_=false; display_.dim(false); }
@@ -212,13 +249,20 @@ void LocalUi::drawTouch() {
 }
 #endif
 bool LocalUi::command(uint8_t n,char** a,Print& out,uint32_t now) {
+  if (n == 2 && !PSU_STRCMP(a[0], "display") && !PSU_STRCMP(a[1], "reset")) {
+    if (resetDisplay(now)) {
+      out.println(F("Display recovery requested; controller remains active"));
+    } else out.println(F("Display recovery unavailable/busy"));
+    return true;
+  }
   if (n == 3 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui") && !PSU_STRCMP(a[2], "reset")) {
     display_.resetStatistics(); out.println(F("UI timing maxima reset; pending drawing continues.")); return true;
   }
   if (n == 2 && !PSU_STRCMP(a[0], "diag") && !PSU_STRCMP(a[1], "ui")) {
     const auto s = display_.statistics();
-    out.print(F("UI available=")); out.print(available_); out.print(F(" draw-Hz=")); out.print(board::displaySpiHz);
-    out.print(F(" read-Hz<=")); out.println(board::displayReadMaxSpiHz);
+    out.print(F("UI=")); out.print(available_); out.print(F(" draw-Hz=")); out.print(board::displaySpiHz);
+    out.print(F(" read-Hz<=")); out.print(board::displayReadMaxSpiHz);
+    out.print(F(" recovering=")); out.println(display_.recovering());
     out.print(F("render-max-us=")); out.print(s.renderMaxUs); out.print(F(" SPI-max-us=")); out.print(s.transactionMaxUs);
     out.println();
     out.print(F("scene-ms(last/max)=")); out.print(s.sceneMs); out.print('/'); out.print(s.sceneMaxMs);

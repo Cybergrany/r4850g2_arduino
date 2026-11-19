@@ -24,6 +24,10 @@ class Adafruit_ILI9341 {
   void setSPISpeed(uint32_t hz) { raster::spiHz=hz; }
   uint8_t readcommand8(uint8_t command,uint8_t i) { assert(command==0xd3); return i==2?0x93:0x41; }
   void setRotation(uint8_t) {}
+  void sendCommand(uint8_t,const uint8_t*,uint8_t n) {
+    assert(!raster::open);
+    raster::clockUs+=(uint64_t(n)+1)*8000000/raster::spiHz;
+  }
   void fillScreen(uint16_t color) { raster::pixels.fill(color); }
   void startWrite() { assert(!raster::open); raster::open=true; }
   void setAddrWindow(uint16_t x,uint16_t y,uint16_t w,uint16_t h) { assert(raster::open); current_={x,y,w,h,0}; }

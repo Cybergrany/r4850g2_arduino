@@ -903,6 +903,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 9: io_.println(F("diag startup: commanded cutoff, AC freshness, accepted absences, returned units and group settling.")); break;
       case 10: io_.println(F("alerts: causes/actions/recovery; alerts every SECONDS (0=off); diag thermal: reductions, sensors, shutdown persistence and GPIO levels.")); break;
       case 12: io_.println(F("diag sync: priming cap, measured-current qualification and session bypass; sync bypass on then sync bypass on confirm")); break;
+      case 13: io_.println(F("display reset: manual TFT recovery; CAN/control continue. Wheel: hold 10s, then release; no edit/apply.")); break;
       case 11: io_.println(F("diag ui [reset]: clocks, render/SPI/phase maxima, scene/change last/max times. Includes interrupts; compare diag bus under load.")); break;
       default: view_ = View::None; break;
     }
@@ -927,6 +928,7 @@ void SerialConsole::outputRow(uint32_t now) {
       case 17: io_.println(F("fan <all|GROUP|slots> <auto|max|policy>: immediate fan test; AUTO requires OFF/zero hold; policy restores normal control")); break;
       case 18: io_.println(F("diag startup; startup accept/exclude/include/require GROUP|slots [remember]; confirm yes/no")); break;
       case 21: io_.println(F("diag sync; sync bypass on = review, on confirm = session bypass, off = require future start synchronization")); break;
+      case 22: io_.println(F("display reset = TFT recovery; wheel hold 10s does the same. Shorter long-press actions happen on release.")); break;
       case 20: io_.println(F("alerts; alerts ack ID|all; alerts every [0..3600 seconds]; diag thermal; thermal retry GROUP|slots|all")); break;
       case 19: io_.println(F("startup probe: confirm AC for commissioning with enable OFF; startup stop: immediate latched AC cutoff; reconcile: explicit retry")); break;
       case 13: io_.println(F("echo on/off; hello; Ctrl-X/C resets console; Ctrl-U clears line")); break;

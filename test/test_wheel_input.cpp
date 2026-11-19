@@ -17,7 +17,7 @@ void check(bool ok, const char* expression, unsigned line) {
   if (!ok) throw std::runtime_error("wheel:" + std::to_string(line) + " " + expression);
 }
 #define CHECK(v) check((v), #v, __LINE__)
-struct Events { int movement = 0; unsigned clicks = 0, holds = 0; };
+struct Events { int movement = 0; unsigned clicks = 0, holds = 0, resets = 0; };
 void advance(psu::WheelInput& wheel, unsigned milliseconds, Events& events, bool read = true) {
   for (unsigned i = 0; i < milliseconds; ++i) {
     ++timeNow;
@@ -27,6 +27,7 @@ void advance(psu::WheelInput& wheel, unsigned milliseconds, Events& events, bool
     events.movement += event.delta;
     events.clicks += event.clicked;
     events.holds += event.held;
+    events.resets += wheel.takeResetRequest();
   }
 }
 void click(psu::WheelInput& wheel, Events& events) {
@@ -62,7 +63,7 @@ int main() {
 
     Events hold;
     pins[5] = LOW; advance(wheel, 1400, hold); advance(wheel, 1000, hold);
-    CHECK(hold.holds == 1 && !hold.clicks);
+    CHECK(hold.holds == 0 && !hold.clicks);
     pins[5] = HIGH; advance(wheel, 60, hold);
     CHECK(hold.holds == 1 && !hold.clicks);
     Events forward, backward;
@@ -99,6 +100,41 @@ int main() {
     Events rollover;
     timeNow = UINT32_MAX - 20; wheel.cancelGesture(); advance(wheel, 70, rollover);
     click(wheel, rollover); CHECK(rollover.clicks == 1 && !rollover.holds);
+    // The recovery hold performs no shorter hold action and consumes rotation.
+    Events recovery; pins[5]=LOW; advance(wheel,9999,recovery);
+    CHECK(!recovery.holds && !recovery.clicks && !recovery.resets);
+    advance(wheel,2,recovery); CHECK(recovery.resets==1);
+    advance(wheel,12000,recovery); rotate(wheel,false,recovery);
+    CHECK(recovery.resets==1 && !recovery.holds && !recovery.clicks && !recovery.movement);
+    // Release bounce and queued Held/Released events cannot become clicks.
+    pins[5]=HIGH; advance(wheel,20,recovery); pins[5]=LOW; advance(wheel,30,recovery);
+    pins[5]=HIGH; advance(wheel,100,recovery);
+    CHECK(recovery.resets==1 && !recovery.holds && !recovery.clicks && !recovery.movement);
+    click(wheel,recovery); CHECK(recovery.clicks==1 && !recovery.holds && recovery.resets==1);
+
+    Events shorter; pins[5]=LOW; advance(wheel,9900,shorter);
+    CHECK(!shorter.clicks && !shorter.holds && !shorter.resets);
+    pins[5]=HIGH; advance(wheel,100,shorter);
+    CHECK(shorter.holds==1 && !shorter.clicks && !shorter.resets);
+
+    // A popup cancels ordinary input, but cannot make display recovery
+    // unreachable by continually resetting its independent physical timer.
+    Events interrupted; pins[5]=LOW; advance(wheel,2000,interrupted);
+    wheel.cancelGesture(); advance(wheel,8002,interrupted);
+    CHECK(interrupted.resets==1 && !interrupted.clicks && !interrupted.holds);
+    pins[5]=HIGH; advance(wheel,100,interrupted);
+    CHECK(!interrupted.clicks && !interrupted.holds);
+
+    Events wrapReset; timeNow=UINT32_MAX-5000; pins[5]=LOW;
+    advance(wheel,10002,wrapReset); CHECK(wrapReset.resets==1 && !wrapReset.holds && !wrapReset.clicks);
+    pins[5]=HIGH; advance(wheel,100,wrapReset);
+    CHECK(!wrapReset.holds && !wrapReset.clicks);
+    click(wheel,wrapReset); CHECK(wrapReset.clicks==1 && wrapReset.resets==1);
+    Events serialReset; pins[5]=LOW; advance(wheel,2000,serialReset);
+    wheel.consumeResetGesture(); advance(wheel,15000,serialReset);
+    pins[5]=HIGH; advance(wheel,100,serialReset);
+    CHECK(!serialReset.resets && !serialReset.holds && !serialReset.clicks);
+    click(wheel,serialReset); CHECK(serialReset.clicks==1);
     std::cout << "PASS: real ClickEncoder single/repeated clicks, hold/release, rotation, popup guard, queued click, bounce and rollover ("
               << checks << " checks)\n";
   } catch (const std::exception& error) {
